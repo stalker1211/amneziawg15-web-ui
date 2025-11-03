@@ -1,0 +1,92 @@
+/* AmneziaWG Web UI Custom Styles */
+
+/* Loading animations */
+.loading {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+}
+
+/* Smooth transitions */
+.smooth-transition {
+    transition: all 0.3s ease-in-out;
+}
+
+/* Focus styles for better accessibility */
+input:focus, button:focus {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+}
+
+/* Print styles */
+@media print {
+    .no-print {
+        display: none !important;
+    }
+}
+
+/* Modal styles */
+.modal-backdrop {
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+.modal-container {
+    animation: modalFadeIn 0.3s ease-out;
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Custom scrollbar for config preview */
+.config-preview {
+    scrollbar-width: thin;
+    scrollbar-color: #4B5563 #1F2937;
+}
+
+.config-preview::-webkit-scrollbar {
+    width: 8px;
+}
+
+.config-preview::-webkit-scrollbar-track {
+    background: #1F2937;
+    border-radius: 4px;
+}
+
+.config-preview::-webkit-scrollbar-thumb {
+    background: #4B5563;
+    border-radius: 4px;
+}
+
+.config-preview::-webkit-scrollbar-thumb:hover {
+    background: #6B7280;
+}
