@@ -167,6 +167,8 @@ Content-Type: application/json
 
 ## 🐳 Docker Deployment
 
+Official docker image repository: https://hub.docker.com/r/alexishw/amneziawg-web-ui
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -183,30 +185,31 @@ Content-Type: application/json
 ```yaml
 version: '3.8'
 services:
- amnezia-web-ui:
-   image: amneziavpn/amneziawg-go:latest
-   build: .
-   container_name: amnezia-web-ui
-   ports:
-     - "80:80"
-     - "51820:51820/udp"
-     - "1194:1194/udp"
-     - "443:443"
-   environment:
-     - WEB_UI_PORT=5000
-     - NGINX_PORT=80
-     - AUTO_START_SERVERS=true
-     - DEFAULT_MTU=1280
-   volumes:
-     - amnezia-data:/etc/amnezia
-   cap_add:
-     - NET_ADMIN
-   devices:
-     - /dev/net/tun
-   sysctls:
-     - net.ipv4.ip_forward=1
-     - net.ipv6.conf.all.forwarding=1
-   restart: unless-stopped
+  amnezia-web-ui:
+    image: alexishw/amneziawg-web-ui:master
+    build: .
+    container_name: amnezia-web-ui
+    ports:
+      - "80:80/tcp"
+      - "51820:51820/udp"
+    environment:
+      - NGINX_PORT=8080
+      - AUTO_START_SERVERS=true
+      - DEFAULT_MTU=1280
+    volumes:
+      - amnezia-data:/etc/amnezia
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv6.conf.all.forwarding=1
+      - net.ipv6.conf.default.forwarding=1
+    restart: unless-stopped
 volumes:
  amnezia-data:
 ```
@@ -217,7 +220,14 @@ volumes:
 docker run -d \
   --name amnezia-web-ui \
   --cap-add=NET_ADMIN \
+  --cap-add SYS_MODULE \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+  --sysctl net.ipv6.conf.all.disable_ipv6=0 \
+  --sysctl net.ipv6.conf.all.forwarding=1 \
+  --sysctl net.ipv6.conf.default.forwarding=1 \
   --device /dev/net/tun \
+  --restart unless-stopped \
   -p 9090:9090 \
   -p 51821:51821/udp \
   -e NGINX_PORT=9090 \
@@ -227,7 +237,7 @@ docker run -d \
   -e DEFAULT_PORT=51821 \
   -e DEFAULT_DNS="8.8.8.8,8.8.4.4" \
   -v amnezia-data:/etc/amnezia \
-  amnezia-web-ui
+  alexishw/amneziawg-web-ui:master
 ```
 
 ## 📊 Obfuscation Parameters
