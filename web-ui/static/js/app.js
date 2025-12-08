@@ -573,11 +573,11 @@ class AmneziaApp {
                             <span class="text-sm text-gray-600 ml-2">${client.client_ip}</span>
                         </div>
                         <div class="space-x-2">
-                            <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${client.id}')" 
+                            <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${client.id}')"
                                     class="text-blue-500 hover:text-blue-700 text-sm">
                                 Download Config
                             </button>
-                            <button onclick="amneziaApp.deleteClient('${serverId}', '${client.id}')" 
+                            <button onclick="amneziaApp.deleteClient('${serverId}', '${client.id}')"
                                     class="text-red-500 hover:text-red-700 text-sm">
                                 Delete
                             </button>
@@ -727,7 +727,6 @@ class AmneziaApp {
                                     <div><span class="font-medium">Subnet:</span> ${serverInfo.subnet}</div>
                                     <div><span class="font-medium">Server IP:</span> ${serverInfo.server_ip}</div>
                                     <div><span class="font-medium">Public IP:</span> ${serverInfo.public_ip}</div>
-                                    <div><span class="font-medium">MTU:</span> ${serverInfo.mtu }</div>
                                     <div><span class="font-medium">Status:</span>
                                         <span class="px-2 py-1 rounded-full text-xs ${
                                             serverInfo.status === 'running' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
