@@ -243,7 +243,7 @@ class AmneziaManager:
         enable_obfuscation = server_data.get('obfuscation', ENABLE_OBFUSCATION)
         auto_start = server_data.get('auto_start', AUTO_START_SERVERS)
 
-        server_id = str(uuid.uuid4())[:8]
+        server_id = str(uuid.uuid4())[:6]
         interface_name = f"wg-{server_id}"
         config_path = os.path.join(WIREGUARD_CONFIG_DIR, f"{interface_name}.conf")
 
@@ -319,6 +319,22 @@ H4 = {obfuscation_params['H4']}
             self.start_server(server_id)
 
         return server_config
+    
+    def apply_live_config(self, interface):
+        """Apply the latest config to the running WireGuard interface using wg syncconf."""
+        try:
+            # Use bash -c to support process substitution
+            command = f"bash -c 'awg syncconf {interface} <(awg-quick strip {interface})'"
+            result = self.execute_command(command)
+            if result is not None:
+                print(f"Live config applied to {interface}")
+                return True
+            else:
+                print(f"Failed to apply live config to {interface}")
+                return False
+        except Exception as e:
+            print(f"Error applying live config to {interface}: {e}")
+            return False
 
     def get_server_ip(self, network):
         """Get server IP from network (first usable IP)"""
@@ -363,7 +379,7 @@ H4 = {obfuscation_params['H4']}
         if not server:
             return None
 
-        client_id = str(uuid.uuid4())[:8]
+        client_id = str(uuid.uuid4())[:6]
 
         # Generate client keys
         client_keys = self.generate_wireguard_keys()
@@ -389,6 +405,7 @@ H4 = {obfuscation_params['H4']}
 
         # Add client to server config
         client_peer_config = f"""
+# Client: {client_config['name']}
 [Peer]
 PublicKey = {client_keys['public_key']}
 PresharedKey = {preshared_key}
@@ -404,13 +421,19 @@ AllowedIPs = {client_ip}/32
         # Store in global clients dict
         self.config["clients"][client_id] = client_config
         self.save_config()
+        
+        # Apply live config if server is running
+        if server['status'] == 'running':
+            self.apply_live_config(server['interface'])
+            
+        print(f"Client {client_config['name']} added")
 
         # Generate client config file content
         config_content = self.generate_wireguard_client_config(server, client_config)
         return client_config, config_content
 
     def delete_client(self, server_id, client_id):
-        """Delete a client from a server"""
+        """Delete a client from a server and update the config file"""
         server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
         if not server:
             return False
@@ -419,16 +442,63 @@ AllowedIPs = {client_ip}/32
         if not client:
             return False
 
-        # Remove client from server config file (this is complex - we'd need to rewrite the file)
-        # For now, we'll just remove from our management but note the config file still has the client
+        # Remove client from server's client list
         server["clients"] = [c for c in server["clients"] if c["id"] != client_id]
 
         # Remove from global clients dict
         if client_id in self.config["clients"]:
             del self.config["clients"][client_id]
 
+        # Rewrite the config file without the deleted client's [Peer] block
+        self.rewrite_server_conf_without_client(server, client)
+
         self.save_config()
+
+        # Apply live config if server is running
+        if server['status'] == 'running':
+            self.apply_live_config(server['interface'])
+            
+        print(f"Client {server['name']}:{client['name']} removed")
+
         return True
+    
+    def rewrite_server_conf_without_client(self, server, client):
+        """Rewrite the server conf file without the specified client's [Peer] block"""
+        if not os.path.exists(server['config_path']):
+            return
+
+        with open(server['config_path'], 'r') as f:
+            lines = f.readlines()
+
+        new_lines = []
+        skip = False
+        client_marker = f"# Client: {client['name']}"
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Start skipping when we find the client marker line
+            if stripped == client_marker:
+                skip = True
+                continue
+
+            # Stop skipping when we hit the next client marker line
+            if skip and stripped.startswith("# Client:"):
+                skip = False
+
+            # If skipping, skip all lines until next client marker
+            if skip:
+                continue
+
+            # Otherwise, keep the line
+            new_lines.append(line)
+
+        # Remove trailing blank lines if any
+        while new_lines and new_lines[-1].strip() == '':
+            new_lines.pop()
+
+        with open(server['config_path'], 'w') as f:
+            f.writelines(new_lines)
 
     def generate_wireguard_client_config(self, server, client_config):
         """Generate WireGuard client configuration with obfuscation"""
