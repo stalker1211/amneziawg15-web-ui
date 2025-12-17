@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## Version 1.3.0 - Client traffic
+
+### New Features
+Enables monitoring of per-client traffic statistics on a given server and displays the current traffic usage in the UI. After server is stopped the data on the network adapters is reset.
+
+- Backend: Added `get_traffic_for_server` method to parse `awg show <interface>` output and map traffic to clients by public key.
+- Backend: Added `/api/servers/<server_id>/traffic` endpoint returning traffic info JSON.
+- Frontend: Modified `loadServerClients` to fetch traffic and pass it to renderServerClients.
+- Frontend: Updated `renderServerClients` to display received and sent traffic per client below client IP.
+
+### API Endpoints Added
+
+#### `/api/servers/<server_id>/traffic`
+**Method**: GET<br>
+**Description**: This endpoint returns traffic statistics for all clients connected to a specified server.<br>
+**Response Format**:
+```json
+{
+  "clientA": {
+    "received": "2.45 MiB",
+    "sent": "5.12 MiB"
+  },
+  "clientB": {
+    "received": "0 B",
+    "sent": "0 B"
+  }
+}
+```
+If the server is not found or no traffic data is available, the endpoint returns:
+```json
+{
+  "error": "Server not found or no traffic data"
+}
+```
+with HTTP status code 404.
+
+
 ## Version 1.2.0 - QR Code Feature Release
 
 ### New Features
@@ -13,8 +50,8 @@
 ### API Endpoints Added
 
 #### 1. `/api/servers/<server_id>/clients/<client_id>/config-both`
-**Method**: GET
-**Description**: Returns both clean (without comments) and full (with comments) client configurations in a single request
+**Method**: GET<br>
+**Description**: Returns both clean (without comments) and full (with comments) client configurations in a single request<br>
 **Response Format**:
 ```json
 {
@@ -30,9 +67,9 @@
 **Purpose**: Optimized endpoint for QR code generation that returns both versions to reduce API calls
 
 #### 2. Enhanced `/api/servers/<server_id>/clients/<client_id>/config`
-**Method**: GET
-**Description**: Now serves clean configuration (without comments) for direct download
-**Response**: `text/plain` WireGuard configuration file
+**Method**: GET<br>
+**Description**: Now serves clean configuration (without comments) for direct download<br>
+**Response**: `text/plain` WireGuard configuration file<br>
 **Changes**: Updated to use the unified `generate_wireguard_client_config()` function with `include_comments=True` parameter
 
 ### Client Configuration Endpoints
