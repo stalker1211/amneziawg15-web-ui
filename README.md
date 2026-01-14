@@ -1,12 +1,9 @@
 # AmneziaWG Web UI
 
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
-All server configuration is done via web interface or via API endpoints. Providing env variables at docker startup is supported but doesn't make much sense: all settings can be overridden via web interface except for NGINX_PORT.
+All server configuration is done via web interface or via API endpoints. Providing env variables at docker startup is supported but doesn't make much sense: all settings can be overridden via web interface except for NGINX_PORT and ENABLE_NAT.
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
-
-> [!TIP]
-> For project description in **Russian** please refer to [author blog page](https://itprospb.ru/2025/11/web-ui-dlya-upravleniya-serverom-amneziawg/).
 
 ## 🚀 Features
 
@@ -17,8 +14,9 @@ All server configuration is done via web interface or via API endpoints. Providi
 *   **Auto-start**: Automatic server startup on container restart
 *   **IPTables Automation**: Automatic firewall configuration
 *   **Custom values**: MTU and other connection settings can be customized
-*   **QR code**: Client can be viewed, copied and downloaded via text, file or QR code
+*   **QR code**: Client can be viewed, copied and downloaded via text, file or QR code (with size limits)
 *   **Config view**: Both servers' and clients' configs can be viewed directly from UI
+*   **Client-only I1–I5**: I1–I5 are stored and applied to client configs only (server has defaults; each client can override)
 
 ## 🏗️ Architecture
 
@@ -31,11 +29,49 @@ All server configuration is done via web interface or via API endpoints. Providi
 *   AmneziaWG configuration generation
 *   Client config management
 
-**Vue.js Frontend** (`static/js/app.js`)
+**Frontend** (`static/js/app.js`)
 
-*   Responsive web interface
+*   Responsive web interface (vanilla JS)
 *   Real-time status updates
 *   Form validation and error handling
+
+## 🧩 I1–I5 (Client-only) behavior
+
+In AmneziaWG 1.5, `I1`–`I5` are *signature-chain* packets used for protocol imitation (“CPS” / Custom Protocol Signature). Before initiating a **special handshake** (periodic; see official docs), the client may send up to five user-described UDP packets:
+
+- `I1` is the primary packet (typically a hex snapshot of a real protocol, e.g. QUIC Initial; can include randomization).
+- `I2`–`I5` are optional and increase entropy (counters, timestamps, random bytes).
+
+Official reference: https://docs.amnezia.org/documentation/amnezia-wg/
+
+This Web UI treats AmneziaWG “I1–I5” as **client-only** parameters:
+
+- Server has **default** I1–I5 values (used only when creating *new* clients).
+- Each client can override I1–I5 independently (different clients on the same server may have different values).
+- Existing clients are **not** modified when server defaults change.
+- If an I value is empty, the corresponding `I* = ...` line is **omitted** from generated client configs.
+
+### CPS format (quick summary)
+
+I-values are CPS strings composed of tags like:
+
+- `b` — static bytes (hex blob)
+- `c` — packet counter (32-bit, network byte order)
+- `t` — unix timestamp (32-bit, network byte order)
+- `r` — cryptographically secure random bytes (with length)
+
+Example (from docs): `i1 = <b 0xf6ab3267fa><c><b 0xf6ab><t><r 10>`
+
+Important compatibility note (from docs): if `I1` is missing, the whole `I2`–`I5` chain is skipped and AmneziaWG behaves like **AmneziaWG 1.0**.
+
+In the UI:
+
+- **Server → Show Config**: edit I1–I5 defaults for new clients.
+- **Client row → I1–I5**: edit I1–I5 for that specific client.
+
+## 📷 QR code notes
+
+WireGuard configs can become too large to fit into a single QR code (especially with long I1–I5 values). When this happens, the UI will show an error in the QR modal and you should use **Download Config File (.conf)** instead.
 
 **Nginx** (`config/nginx.conf`)
 
@@ -90,6 +126,11 @@ Content-Type: application/json
     "H2": 2000,
     "H3": 3000,
     "H4": 4000,
+    "I1": "",
+    "I2": "",
+    "I3": "",
+    "I4": "",
+    "I5": "",
     "MTU": 1280
   }
 }
@@ -123,6 +164,16 @@ Content-Type: application/json
 
 `GET /api/servers/{server_id}/info`
 
+#### Update server default I1–I5 (new clients only)
+
+`POST /api/servers/{server_id}/i-params`
+
+Body example:
+
+```json
+{ "I1": "...", "I2": "...", "I3": "...", "I4": "...", "I5": "..." }
+```
+
 ### Client Management
 
 #### Add Client
@@ -132,6 +183,15 @@ POST /api/servers/{server_id}/clients
 Content-Type: application/json
 {
 "name": "Alice's Phone"
+}
+```
+
+Optional per-client I1–I5 overrides at creation time:
+
+```json
+{
+  "name": "Alice's Phone",
+  "i_params": { "I1": "...", "I2": "...", "I3": "...", "I4": "...", "I5": "..." }
 }
 ```
 
@@ -150,6 +210,10 @@ Content-Type: application/json
 #### Download Client Config in JSON format
 
 `GET /api/servers/{server_id}/clients/{client_id}/config-both`
+
+#### Update a specific client's I1–I5
+
+`POST /api/servers/{server_id}/clients/{client_id}/i-params`
 
 #### List All Clients
 
@@ -175,7 +239,7 @@ Content-Type: application/json
 
 ## 🐳 Docker Deployment
 
-Official docker image repository: https://hub.docker.com/r/alexishw/amneziawg-web-ui
+Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg15-web-ui
 
 ### Environment Variables
 
@@ -189,6 +253,17 @@ Official docker image repository: https://hub.docker.com/r/alexishw/amneziawg-we
 | `DEFAULT_SUBNET` | `10.0.0.0/24` | Default subnet for new servers. Effective only for api requests. For UI management set via UI. |
 | `DEFAULT_PORT` | `51820` | Default port for new servers. Effective only for api requests. For UI management set via UI. |
 | `DEFAULT_DNS` | `8.8.8.8,1.1.1.1` | Default DNS servers for clients. Effective only for api requests. For UI management set via UI. |
+| `ENABLE_NAT` | `1` | Enable NAT/MASQUERADE for VPN subnet (set `0` to disable). |
+
+## 🧪 Local build/run (dev)
+
+This repo includes a convenience script that builds and runs a local container:
+
+- `./run.sh` (idempotent; replaces existing container; builds image by default)
+- Common overrides:
+  - `BUILD=0 ./run.sh` (skip build)
+  - `INTERACTIVE=1 ./run.sh` (run interactively)
+  - `ENTRYPOINT=/bin/sh INTERACTIVE=1 ./run.sh` (debug shell)
 
 ### Docker Compose Example
 
@@ -196,8 +271,7 @@ Official docker image repository: https://hub.docker.com/r/alexishw/amneziawg-we
 version: '3.8'
 services:
   amnezia-web-ui:
-    image: alexishw/amneziawg-web-ui:master
-    build: .
+    image: stalker1211/amneziawg15-web-ui:latest
     container_name: amnezia-web-ui
     ports:
       - "8080:8080/tcp"
@@ -230,7 +304,7 @@ volumes:
 docker run -d \
   --name amnezia-web-ui \
   --cap-add=NET_ADMIN \
-  --cap-add SYS_MODULE \
+  --cap-add=SYS_MODULE \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   --sysctl net.ipv6.conf.all.disable_ipv6=0 \
@@ -241,14 +315,14 @@ docker run -d \
   -p 9090:9090 \
   -p 51821:51821/udp \
   -e NGINX_PORT=9090 \
-  -e NGINX_PASSWORD=1234
+  -e NGINX_PASSWORD=1234 \
   -e AUTO_START_SERVERS=false \
   -e DEFAULT_MTU=1420 \
   -e DEFAULT_SUBNET=10.8.0.0/24 \
   -e DEFAULT_PORT=51821 \
   -e DEFAULT_DNS="8.8.8.8,8.8.4.4" \
   -v amnezia-data:/etc/amnezia \
-  alexishw/amneziawg-web-ui:master
+  stalker1211/amneziawg15-web-ui:latest
 ```
 
 ## 📊 Obfuscation Parameters

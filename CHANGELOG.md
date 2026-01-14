@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## Version 1.4.0 - AmneziaWG 1.5 protocol (I1–I5)
+
+### New Features
+- Added support for AmneziaWG 1.5 obfuscation parameters `I1`–`I5`.
+- I1–I5 are treated as **client-only** parameters:
+  - Server stores I1–I5 as defaults for **new** clients.
+  - Each client can have its own I1–I5 values.
+  - Existing clients are not modified when server defaults change.
+  - Empty I values are omitted from generated client configs.
+
+### API
+- Added `POST /api/servers/<server_id>/i-params` to update server-level default I1–I5 (new clients only).
+- Added `POST /api/servers/<server_id>/clients/<client_id>/i-params` to update a specific client’s I1–I5.
+- Client creation (`POST /api/servers/<server_id>/clients`) accepts optional I1–I5 overrides via `i_params` (or `obfuscation_params`).
+
+### UI/UX Improvements
+- Servers list moved to a dedicated top section; server creation moved into a modal dialog.
+- Added port/subnet conflict warnings when creating a server.
+- Improved config modals rendering (HTML-escaping + better wrapping) to avoid broken layout on values containing `<...>`.
+- QR generation hardened (use raw config text, escape modal title, try multiple error correction levels, show a clear error when payload is too large).
+- I1–I5 editors use auto-growing textareas for long values.
+
+### Networking
+- IPTables: added a DROP rule for traffic from VPN subnet to `192.168.0.0/16` (isolate VPN clients from internal network).
+- IPTables: NAT/MASQUERADE is now controlled by `ENABLE_NAT` (enabled by default when unset or `1`).
+
+### Repository / Dev workflow
+- Added `.gitignore` for editor/OS artifacts and Python bytecode.
+- Added `run.sh` helper for repeatable local Docker build/run (idempotent container replacement).
+
 ## Version 1.3.2 - obfuscation adjustment
 
 ### Fix

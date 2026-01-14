@@ -26,10 +26,36 @@
             </div>
         </div>
 
-        <!-- Server Creation Form -->
+        <!-- Servers -->
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-            <h2 class="text-xl font-semibold mb-4">Create New VPN Server</h2>
-            <form id="serverForm" class="space-y-4">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold">Servers</h2>
+                <button id="showCreateServerBtn" type="button" class="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition duration-200">
+                    Create new server
+                </button>
+            </div>
+
+            <div id="serversList" class="space-y-4">
+                <div class="text-center py-8 text-gray-500">
+                    Loading servers...
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Server Modal -->
+        <div id="createServerModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 hidden">
+            <div class="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
+                <div class="mt-3">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold">Create New VPN Server</h2>
+                        <button type="button" onclick="amneziaApp.closeCreateServerModal()" class="text-gray-400 hover:text-gray-600">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <form id="serverForm" class="space-y-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Server Name *</label>
@@ -82,7 +108,12 @@
 
                 <!-- Obfuscation Parameters -->
                 <div id="obfuscationParams" class="border rounded-lg p-4 bg-gray-50">
-                    <h3 class="text-lg font-medium mb-3">Obfuscation Parameters</h3>
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="text-lg font-medium">Obfuscation Parameters</h3>
+                        <button type="button" id="randomParamsBtn" class="bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600">
+                            Generate Random Parameters
+                        </button>
+                    </div>
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                         <div>
                             <label class="block text-xs font-medium text-gray-600">Jc (4-12)</label>
@@ -97,7 +128,7 @@
                             <input type="number" id="paramJmax" value="80" min="2" max="1440" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-1 text-sm">
                         </div>
                     </div>
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-2">
+                    <div class="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm mt-2">
                         <div>
                             <label class="block text-xs font-medium text-gray-600">S1 (15-150)</label>
                             <input type="number" id="paramS1" value="50" min="15" max="150" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-1 text-sm">
@@ -114,8 +145,6 @@
                             <label class="block text-xs font-medium text-gray-600">H2</label>
                             <input type="number" id="paramH2" value="2000" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-1 text-sm">
                         </div>
-                    </div>
-                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm mt-2">
                         <div>
                             <label class="block text-xs font-medium text-gray-600">H3</label>
                             <input type="number" id="paramH3" value="3000" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-1 text-sm">
@@ -124,10 +153,32 @@
                             <label class="block text-xs font-medium text-gray-600">H4</label>
                             <input type="number" id="paramH4" value="4000" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-1 text-sm">
                         </div>
-                        <div class="col-span-2">
-                            <button type="button" id="randomParamsBtn" class="mt-6 bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600">
-                                Generate Random Parameters
-                            </button>
+                    </div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm mt-2">
+                        <div class="col-span-2 md:col-span-5">
+                            <div class="space-y-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">I1</label>
+                                    <input type="text" id="paramI1" value="" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-2 text-sm font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">I2</label>
+                                    <input type="text" id="paramI2" value="" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-2 text-sm font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">I3</label>
+                                    <input type="text" id="paramI3" value="" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-2 text-sm font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">I4</label>
+                                    <input type="text" id="paramI4" value="" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-2 text-sm font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600">I5</label>
+                                    <input type="text" id="paramI5" value="" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-2 text-sm font-mono">
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -137,19 +188,11 @@
                     <button type="submit" id="createButton" class="bg-blue-500 text-white px-6 py-2 rounded-md hover:bg-blue-600 transition duration-200">
                         Create Server
                     </button>
-                    <button type="button" id="testCreateBtn" class="bg-green-500 text-white px-6 py-2 rounded-md hover:bg-green-600 transition duration-200">
-                        Test Create
-                    </button>
                 </div>
 
                 <div id="formStatus" class="text-sm mt-2 hidden"></div>
-            </form>
-        </div>
-
-        <!-- Servers List -->
-        <div id="serversList" class="space-y-4">
-            <div class="text-center py-8 text-gray-500">
-                Loading servers...
+                    </form>
+                </div>
             </div>
         </div>
 

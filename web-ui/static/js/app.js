@@ -2,6 +2,7 @@
 class AmneziaApp {
     constructor() {
         this.socket = null;
+        this.lastServers = [];
         this.init();
     }
 
@@ -23,21 +24,130 @@ class AmneziaApp {
         return element;
     }
 
+    // Escape user-controlled strings for safe HTML rendering
+    escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    autosizeTextarea(textarea, maxHeightPx = 260) {
+        if (!textarea) return;
+        // Let it shrink too (set to auto first)
+        textarea.style.height = 'auto';
+        const next = Math.min(textarea.scrollHeight, maxHeightPx);
+        textarea.style.height = `${next}px`;
+        textarea.style.overflowY = textarea.scrollHeight > maxHeightPx ? 'auto' : 'hidden';
+    }
+
+    enableTextareaAutosize(textarea, maxHeightPx = 260) {
+        if (!textarea) return;
+        textarea.style.resize = 'none';
+        textarea.style.whiteSpace = 'pre-wrap';
+        textarea.style.overflowWrap = 'anywhere';
+
+        const handler = () => this.autosizeTextarea(textarea, maxHeightPx);
+        textarea.removeEventListener('input', handler);
+        textarea.addEventListener('input', handler);
+        // Initial sizing
+        handler();
+    }
+
+    // Estimate UTF-8 byte size for QR payload diagnostics
+    getUtf8ByteLength(text) {
+        try {
+            if (typeof TextEncoder !== 'undefined') {
+                return new TextEncoder().encode(String(text)).length;
+            }
+        } catch (_) {
+            // fall through
+        }
+        // Fallback (older browsers)
+        return unescape(encodeURIComponent(String(text))).length;
+    }
+
+    generateQrIntoContainer(qrContainer, text) {
+        if (!qrContainer) return;
+
+        const value = String(text ?? '');
+        qrContainer.innerHTML = '';
+
+        if (!value.trim()) {
+            qrContainer.innerHTML = `
+                <div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+                    No configuration text to encode.
+                </div>
+            `;
+            return;
+        }
+
+        // Try higher error correction first, then fall back to fit larger payloads.
+        const levels = [
+            QRCode?.CorrectLevel?.H,
+            QRCode?.CorrectLevel?.Q,
+            QRCode?.CorrectLevel?.M,
+            QRCode?.CorrectLevel?.L
+        ].filter((l) => l !== undefined);
+
+        let lastError = null;
+        for (const level of levels) {
+            try {
+                qrContainer.innerHTML = '';
+                new QRCode(qrContainer, {
+                    text: value,
+                    width: 300,
+                    height: 300,
+                    colorDark: "#000000",
+                    colorLight: "#ffffff",
+                    correctLevel: level,
+                    margin: 1
+                });
+                lastError = null;
+                break;
+            } catch (err) {
+                lastError = err;
+            }
+        }
+
+        if (lastError) {
+            const bytes = this.getUtf8ByteLength(value);
+            const safeMsg = this.escapeHtml(lastError?.message || String(lastError));
+            qrContainer.innerHTML = `
+                <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div class="font-semibold mb-1">QR code could not be generated</div>
+                    <div class="mb-2">Most commonly this happens when the config is too large for a QR code (payload: <span class=\"font-mono\">${bytes}</span> bytes).</div>
+                    <div class="text-xs text-red-600 font-mono break-all">${safeMsg}</div>
+                    <div class="mt-2">Use “Download Config File (.conf)” instead.</div>
+                </div>
+            `;
+        }
+    }
+
     setupEventListeners() {
+        // Create server modal dialog
+        const showCreateServerBtn = this.getElement('showCreateServerBtn');
+        if (showCreateServerBtn) {
+            showCreateServerBtn.addEventListener('click', () => {
+                this.openCreateServerModal();
+            });
+        }
+
+        // ESC closes create-server modal
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                this.closeCreateServerModal();
+            }
+        });
+
         // Server form submission
         const serverForm = this.getElement('serverForm');
         if (serverForm) {
             serverForm.addEventListener('submit', (e) => {
                 e.preventDefault();
                 this.createServer();
-            });
-        }
-
-        // Test create button
-        const testCreateBtn = this.getElement('testCreateBtn');
-        if (testCreateBtn) {
-            testCreateBtn.addEventListener('click', () => {
-                this.testCreateServer();
             });
         }
 
@@ -69,6 +179,21 @@ class AmneziaApp {
 
         // Form validation listeners
         this.setupFormValidation();
+    }
+
+    openCreateServerModal() {
+        const modal = this.getElement('createServerModal');
+        if (!modal) return;
+        modal.classList.remove('hidden');
+
+        const nameElement = this.getElement('serverName');
+        if (nameElement) nameElement.focus();
+    }
+
+    closeCreateServerModal() {
+        const modal = this.getElement('createServerModal');
+        if (!modal) return;
+        modal.classList.add('hidden');
     }
 
     setupFormValidation() {
@@ -403,15 +528,35 @@ class AmneziaApp {
                 H2: parseInt(this.getElement('paramH2')?.value || '2000'),
                 H3: parseInt(this.getElement('paramH3')?.value || '3000'),
                 H4: parseInt(this.getElement('paramH4')?.value || '4000'),
+                I1: (this.getElement('paramI1')?.value || '').trim(),
+                I2: (this.getElement('paramI2')?.value || '').trim(),
+                I3: (this.getElement('paramI3')?.value || '').trim(),
+                I4: (this.getElement('paramI4')?.value || '').trim(),
+                I5: (this.getElement('paramI5')?.value || '').trim(),
             };
 
             const obfErrors = this.validateObfuscationParamsJS(formData.obfuscation_params, formData.mtu);
             if (obfErrors.length > 0) {
-                // You can display all errors in a single error element, or one by one
                 this.showError('obfuscationError', obfErrors.join(' '));
                 return;
             } else {
                 this.hideError('obfuscationError');
+            }
+        }
+
+        // Warn if port/subnet already used by any existing server
+        const conflicts = this.getServerConflicts(formData.port, formData.subnet);
+        if (conflicts.length > 0) {
+            const details = conflicts.map(c => {
+                const parts = [];
+                if (c.portConflict) parts.push(`port ${c.port}`);
+                if (c.subnetConflict) parts.push(`subnet ${c.subnet}`);
+                return `- ${c.name} (${c.id}, ${c.status || 'unknown'}): ${parts.join(' & ')}`;
+            }).join('\n');
+
+            const msg = `An existing server already uses the same port or subnet:\n\n${details}\n\nCreate anyway?`;
+            if (!confirm(msg)) {
+                return;
             }
         }
 
@@ -422,7 +567,7 @@ class AmneziaApp {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                },
+            },
             body: JSON.stringify(formData)
         })
         .then(response => {
@@ -441,6 +586,9 @@ class AmneziaApp {
             // Reset form
             const serverForm = this.getElement('serverForm');
             if (serverForm) serverForm.reset();
+
+            // Close the modal after success
+            this.closeCreateServerModal();
 
             this.loadServers();
         })
@@ -463,44 +611,6 @@ class AmneziaApp {
         }
     }
 
-    testCreateServer() {
-        console.log("Test button clicked");
-        
-        const testData = {
-            name: "Test Server " + Date.now(),
-            port: 51820,
-            subnet: "10.0.0.0/24",
-            obfuscation: true,
-            auto_start: true
-        };
-        
-        console.log("Sending test data:", testData);
-        
-        fetch('/api/servers', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(testData)
-        })
-        .then(response => {
-            console.log("Response status:", response.status);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            return response.json();
-        })
-        .then(server => {
-            console.log("Server created successfully:", server);
-            this.showFormStatus('Test server created successfully!', 'success');
-            this.loadServers();
-        })
-        .catch(error => {
-            console.error('Error creating server:', error);
-            this.showFormStatus('Error creating server: ' + error.message, 'error');
-        });
-    }
-
     loadInitialData() {
         this.loadServers();
         this.loadPublicIp();
@@ -521,12 +631,31 @@ class AmneziaApp {
         fetch('/api/servers')
             .then(response => response.json())
             .then(servers => {
+                this.lastServers = Array.isArray(servers) ? servers : [];
                 this.renderServers(servers);
             })
             .catch(error => {
                 console.error('Error loading servers:', error);
                 this.showServerError('Failed to load servers');
             });
+    }
+
+    getServerConflicts(port, subnet) {
+        const normPort = Number(port);
+        const normSubnet = String(subnet || '').trim();
+        const servers = Array.isArray(this.lastServers) ? this.lastServers : [];
+
+        return servers
+            .filter(s => Number(s.port) === normPort || String(s.subnet || '').trim() === normSubnet)
+            .map(s => ({
+                id: s.id,
+                name: s.name,
+                port: s.port,
+                subnet: s.subnet,
+                status: s.status,
+                portConflict: Number(s.port) === normPort,
+                subnetConflict: String(s.subnet || '').trim() === normSubnet,
+            }));
     }
 
     renderServers(servers) {
@@ -622,6 +751,14 @@ class AmneziaApp {
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
                                 </svg>
                                 QR Code
+                            </button>
+                            <button onclick="amneziaApp.showClientIParamsModal('${serverId}', '${client.id}', '${client.name}')"
+                                    class="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
+                                    title="Edit I1–I5 (client-only)">
+                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l9.586-9.586z"/>
+                                </svg>
+                                I1–I5
                             </button>
                             <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${client.id}')"
                                     class="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
@@ -762,12 +899,19 @@ class AmneziaApp {
     }
 
     displayServerConfigModal(serverInfo) {
+        const safe = (v) => this.escapeHtml(v);
+
+        const obfParams = serverInfo.obfuscation_params || {};
+        const iKeys = ['I1', 'I2', 'I3', 'I4', 'I5'];
+        const normalParams = Object.entries(obfParams).filter(([key]) => !iKeys.includes(key));
+        const iLines = iKeys.map((key) => `${key} = ${obfParams[key] ?? ''}`).join('\n');
+
         const modalHtml = `
             <div id="configModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
                 <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-medium text-gray-900">Server Configuration: ${serverInfo.name}</h3>
+                            <h3 class="text-lg font-medium text-gray-900">Server Configuration: ${safe(serverInfo.name)}</h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -798,10 +942,10 @@ class AmneziaApp {
                                     <div><span class="font-medium">Protocol:</span> ${serverInfo.protocol}</div>
                                     <div><span class="font-medium">Obfuscation:</span> ${serverInfo.obfuscation_enabled ? 'Enabled' : 'Disabled'}</div>
                                     <div><span class="font-medium">Clients:</span> ${serverInfo.clients_count}</div>
-                                    <div><span class="font-medium">DNS:</span> ${serverInfo.dns.join(', ')}</div>
+                                    <div><span class="font-medium">DNS:</span> ${safe(serverInfo.dns.join(', '))}</div>
                                     <div><span class="font-medium">MTU:</span> ${serverInfo.mtu}</div>
                                     <div class="truncate"><span class="font-medium">Public Key:</span>
-                                        <span class="font-mono text-xs">${serverInfo.public_key}</span>
+                                        <span class="font-mono text-xs">${safe(serverInfo.public_key)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -811,19 +955,46 @@ class AmneziaApp {
                         <div class="bg-blue-50 p-3 rounded mb-4">
                             <h4 class="font-semibold text-sm text-blue-700 mb-2">Obfuscation Parameters</h4>
                             <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
-                                ${Object.entries(serverInfo.obfuscation_params).map(([key, value]) => `
+                                ${normalParams.map(([key, value]) => `
                                     <div class="text-center">
-                                        <div class="font-medium">${key}</div>
-                                        <div class="font-mono">${value}</div>
+                                        <div class="font-medium">${safe(key)}</div>
+                                        <div class="font-mono break-all whitespace-pre-wrap">${safe(value)}</div>
                                     </div>
                                 `).join('')}
+                            </div>
+
+                            <div class="mt-3">
+                                <div class="flex items-center justify-between mb-1">
+                                    <h5 class="font-semibold text-xs text-blue-800">I Parameters (client-only)</h5>
+                                    <button onclick="amneziaApp.saveServerIParams('${serverInfo.id}')"
+                                            class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">
+                                        Save I1–I5
+                                    </button>
+                                </div>
+
+                                <div class="text-[11px] text-blue-800/80 mb-2">
+                                    Defaults for NEW clients only (no server restart).
+                                </div>
+
+                                <div class="grid grid-cols-1 gap-2">
+                                    ${iKeys.map((key) => `
+                                        <label class="block text-xs">
+                                            <div class="flex items-center justify-between mb-1">
+                                                <span class="font-semibold text-blue-900">${safe(key)}</span>
+                                            </div>
+                                            <textarea id="serverIParam-${serverInfo.id}-${key}" rows="1"
+                                                class="w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                                                placeholder="${safe(key)} =">${safe(obfParams[key] ?? '')}</textarea>
+                                        </label>
+                                    `).join('')}
+                                </div>
                             </div>
                         </div>
                         ` : ''}
 
                         <div class="mb-4">
                             <h4 class="font-semibold text-sm text-gray-700 mb-2">Configuration Preview</h4>
-                            <pre class="bg-gray-800 text-green-400 p-3 rounded text-xs overflow-x-auto max-h-40 overflow-y-auto">${serverInfo.config_preview}</pre>
+                            <pre class="bg-gray-800 text-green-400 p-3 rounded text-xs overflow-x-auto max-h-40 overflow-y-auto">${safe(serverInfo.config_preview)}</pre>
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t">
@@ -846,15 +1017,153 @@ class AmneziaApp {
         `;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        // Auto-resize I1–I5 textareas to fit content
+        setTimeout(() => {
+            for (const key of ['I1', 'I2', 'I3', 'I4', 'I5']) {
+                const el = document.getElementById(`serverIParam-${serverInfo.id}-${key}`);
+                this.enableTextareaAutosize(el, 260);
+            }
+        }, 0);
+    }
+
+    async saveServerIParams(serverId) {
+        const iParams = {};
+        for (const key of ['I1', 'I2', 'I3', 'I4', 'I5']) {
+            const el = document.getElementById(`serverIParam-${serverId}-${key}`);
+            iParams[key] = el ? el.value : '';
+        }
+
+        try {
+            const response = await fetch(`/api/servers/${serverId}/i-params`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(iParams)
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || 'Failed to update I parameters');
+            }
+
+            this.showTempMessage('I1–I5 updated (client-only).', 'success');
+        } catch (error) {
+            console.error('Error updating server I params:', error);
+            this.showTempMessage('Failed to update I1–I5: ' + (error?.message || error), 'error');
+        }
+    }
+
+    async showClientIParamsModal(serverId, clientId, clientName) {
+        const safeName = this.escapeHtml(clientName);
+
+        // Close any existing modal first
+        this.closeModal();
+
+        const modalHtml = `
+            <div id="configModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+                <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+                    <div class="mt-3">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">Client I1–I5: ${safeName}</h3>
+                            <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="text-sm text-gray-600 mb-3">
+                            Client-only parameters; different clients can have different values.
+                        </div>
+
+                        <div id="clientIParamsBody" class="space-y-3">
+                            <div class="text-sm text-gray-500">Loading…</div>
+                        </div>
+
+                        <div class="flex justify-end space-x-3 pt-4 border-t mt-4">
+                            <button onclick="amneziaApp.saveClientIParams('${serverId}', '${clientId}')"
+                                    class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+                                Save I1–I5
+                            </button>
+                            <button onclick="amneziaApp.closeModal()"
+                                    class="bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        try {
+            const res = await fetch(`/api/servers/${serverId}/clients`);
+            if (!res.ok) throw new Error('Failed to load client list');
+            const clients = await res.json();
+            const client = (clients || []).find((c) => c.id === clientId);
+            const obf = client?.obfuscation_params || {};
+
+            const body = document.getElementById('clientIParamsBody');
+            if (!body) return;
+            const keys = ['I1', 'I2', 'I3', 'I4', 'I5'];
+            body.innerHTML = keys.map((key) => {
+                const value = obf[key] ?? '';
+                return `
+                    <label class="block text-sm">
+                        <div class="font-semibold text-gray-800 mb-1">${this.escapeHtml(key)}</div>
+                        <textarea id="clientIParam-${clientId}-${key}" rows="1"
+                            class="w-full px-3 py-2 border border-gray-200 rounded text-xs font-mono bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            placeholder="${this.escapeHtml(key)} =">${this.escapeHtml(value)}</textarea>
+                    </label>
+                `;
+            }).join('');
+
+            // Auto-resize after insertion
+            for (const key of keys) {
+                const el = document.getElementById(`clientIParam-${clientId}-${key}`);
+                this.enableTextareaAutosize(el, 260);
+            }
+        } catch (e) {
+            const body = document.getElementById('clientIParamsBody');
+            if (body) {
+                body.innerHTML = `<div class="text-sm text-red-600">Failed to load current values: ${this.escapeHtml(e?.message || String(e))}</div>`;
+            }
+        }
+    }
+
+    async saveClientIParams(serverId, clientId) {
+        const iParams = {};
+        for (const key of ['I1', 'I2', 'I3', 'I4', 'I5']) {
+            const el = document.getElementById(`clientIParam-${clientId}-${key}`);
+            iParams[key] = el ? el.value : '';
+        }
+
+        try {
+            const response = await fetch(`/api/servers/${serverId}/clients/${clientId}/i-params`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(iParams)
+            });
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || 'Failed to update client I params');
+            }
+            this.showTempMessage('Client I1–I5 updated.', 'success');
+        } catch (error) {
+            console.error('Error updating client I params:', error);
+            this.showTempMessage('Failed to update client I1–I5: ' + (error?.message || error), 'error');
+        }
     }
 
     displayRawConfigModal(config) {
+        const safe = (v) => this.escapeHtml(v);
         const modalHtml = `
             <div id="rawConfigModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
                 <div class="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-medium text-gray-900">Raw Configuration: ${config.server_name}</h3>
+                            <h3 class="text-lg font-medium text-gray-900">Raw Configuration: ${safe(config.server_name)}</h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -864,13 +1173,13 @@ class AmneziaApp {
 
                         <div class="mb-4">
                             <div class="flex justify-between items-center mb-2">
-                                <span class="text-sm text-gray-600">Config path: ${config.config_path}</span>
+                                <span class="text-sm text-gray-600">Config path: ${safe(config.config_path)}</span>
                                 <button onclick="amneziaApp.copyToClipboard('${btoa(JSON.stringify(config))}')"
                                         class="bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
                                     Copy JSON
                                 </button>
                             </div>
-                            <pre class="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto max-h-96 overflow-y-auto">${config.config_content}</pre>
+                            <pre class="bg-gray-900 text-green-400 p-4 rounded text-sm overflow-x-auto max-h-96 overflow-y-auto">${safe(config.config_content)}</pre>
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t">
@@ -895,19 +1204,21 @@ class AmneziaApp {
 
     closeModal() {
         const existingModal = document.getElementById('configModal') || document.getElementById('rawConfigModal');
-        if (existingModal) {
-            existingModal.remove();
-        }
+        if (existingModal) existingModal.remove();
+
+        // Also close the create-server modal (this one is part of the DOM)
+        this.closeCreateServerModal();
     }
 
     showClientQRCode(serverId, clientId, clientName) {
+        const safeClientName = this.escapeHtml(clientName);
         // Create modal for QR code
         const modalHtml = `
             <div id="qrModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
                 <div class="relative p-8 border w-11/12 md:w-3/4 lg:w-2/3 xl:w-1/2 shadow-2xl rounded-2xl bg-white">
                     <div class="flex flex-col">
                         <div class="flex justify-between items-center w-full mb-6">
-                            <h3 class="text-xl font-bold text-gray-900">QR Code for ${clientName}</h3>
+                            <h3 class="text-xl font-bold text-gray-900">QR Code for ${safeClientName}</h3>
                             <button onclick="amneziaApp.closeQRModal()"
                                     class="text-gray-400 hover:text-gray-600 transition-colors duration-200 p-1 rounded-full hover:bg-gray-100">
                                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1022,22 +1333,21 @@ class AmneziaApp {
             // Generate QR code from clean config
             const qrContainer = document.getElementById('qrcode');
             if (qrContainer) {
-                qrContainer.innerHTML = ''; // Clear any existing QR code
-                
-                new QRCode(qrContainer, {
-                    text: this.currentCleanConfig,
-                    width: 300,
-                    height: 300,
-                    colorDark: "#000000",
-                    colorLight: "#ffffff",
-                    correctLevel: QRCode.CorrectLevel.H,
-                    margin: 1
-                });
+                this.generateQrIntoContainer(qrContainer, this.currentCleanConfig);
             }
         } catch (error) {
             console.error('Error fetching config for QR code:', error);
-            this.showTempMessage('Failed to generate QR code: ' + error.message, 'error');
-            this.closeQRModal();
+            this.showTempMessage('Failed to fetch/generate QR code: ' + error.message, 'error');
+            const qrContainer = document.getElementById('qrcode');
+            if (qrContainer) {
+                const safeMsg = this.escapeHtml(error?.message || String(error));
+                qrContainer.innerHTML = `
+                    <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                        <div class="font-semibold mb-1">Failed to load configuration for QR</div>
+                        <div class="text-xs text-red-600 font-mono break-all">${safeMsg}</div>
+                    </div>
+                `;
+            }
         }
     }
 
@@ -1050,6 +1360,7 @@ class AmneziaApp {
 
     toggleConfigView() {
         const configTextArea = document.getElementById('configText');
+        const qrContainer = document.getElementById('qrcode');
         
         if (this.currentConfigType === 'clean') {
             // Switch to full config
@@ -1062,6 +1373,12 @@ class AmneziaApp {
         }
         
         this.updateConfigTypeLabel();
+
+        // Keep QR aligned with what the user sees.
+        if (qrContainer) {
+            const text = this.currentConfigType === 'clean' ? this.currentCleanConfig : this.currentFullConfig;
+            this.generateQrIntoContainer(qrContainer, text);
+        }
     }
 
     downloadQRCode() {

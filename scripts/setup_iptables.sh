@@ -25,17 +25,23 @@ iptables -t nat -D POSTROUTING -s $SUBNET -o eth+ -j MASQUERADE 2>/dev/null || t
 
 # Allow traffic on the TUN interface
 iptables -A INPUT -i $INTERFACE -j ACCEPT
-iptables -A FORWARD -i $INTERFACE -j ACCEPT
+# Drop traffic from $SUBNET to 192.168.0.0/16
+iptables -A FORWARD -s $SUBNET -d 192.168.0.0/16 -j DROP
 iptables -A OUTPUT -o $INTERFACE -j ACCEPT
 
 # Allow forwarding traffic only from the VPN
-# Match any eth* interface
-iptables -A FORWARD -i $INTERFACE -o eth+ -s $SUBNET -j ACCEPT
+# Accept traffic from wg to eth+ from $SUBNET to NOT 192.168.0.0/16
+iptables -A FORWARD -i $INTERFACE -o eth+ -s $SUBNET ! -d 192.168.0.0/16 -j ACCEPT
 
 # Allow established and related connections
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
 
 # Enable NAT for VPN traffic
-iptables -t nat -A POSTROUTING -s $SUBNET -o eth+ -j MASQUERADE
+if [ -z $ENABLE_NAT ] || [ "$ENABLE_NAT" = "1" ]; then
+    iptables -t nat -A POSTROUTING -s $SUBNET -o eth+ -j MASQUERADE
+    echo "NAT enabled for subnet $SUBNET"
+else
+    echo "NAT not enabled as per configuration"
+fi
 
 echo "iptables rules set up successfully for $INTERFACE"

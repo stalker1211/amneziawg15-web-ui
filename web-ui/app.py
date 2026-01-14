@@ -213,6 +213,11 @@ class AmneziaManager:
             "H2": random.randint(100000, 200000),
             "H3": random.randint(200000, 300000),
             "H4": random.randint(300000, 400000),
+            "I1": "",
+            "I2": "",
+            "I3": "",
+            "I4": "",
+            "I5": "",
             "MTU": mtu
         }
 
@@ -256,6 +261,10 @@ class AmneziaManager:
         # Generate server keys
         server_keys = self.generate_wireguard_keys()
 
+        def sanitize_config_value(value):
+            """Make sure values are single-line to keep config format intact."""
+            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
         # Generate and use provided obfuscation parameters if enabled
         obfuscation_params = None
         if enable_obfuscation:
@@ -263,6 +272,11 @@ class AmneziaManager:
                 obfuscation_params = server_data['obfuscation_params']
             else:
                 obfuscation_params = self.generate_obfuscation_params(mtu)
+
+            # Ensure new I1-I5 keys exist (empty defaults are OK)
+            if isinstance(obfuscation_params, dict):
+                for key in ("I1", "I2", "I3", "I4", "I5"):
+                    obfuscation_params.setdefault(key, "")
 
         # Parse subnet for server IP
         subnet_parts = subnet.split('/')
@@ -382,7 +396,7 @@ H4 = {obfuscation_params['H4']}
         self.save_config()
         return True
 
-    def add_wireguard_client(self, server_id, client_name):
+    def add_wireguard_client(self, server_id, client_name, i_params=None):
         """Add a client to a WireGuard server"""
         server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
         if not server:
@@ -397,6 +411,22 @@ H4 = {obfuscation_params['H4']}
         # Assign client IP
         client_ip = self.get_client_ip(server, len(server['clients']))
 
+        # Copy server defaults so future edits to the server do not affect existing clients
+        server_obf_params = server.get("obfuscation_params") if server.get("obfuscation_enabled") else None
+        if isinstance(server_obf_params, dict):
+            client_obf_params = dict(server_obf_params)
+        else:
+            client_obf_params = server_obf_params
+
+        # Optional per-client I1-I5 overrides (client-only)
+        if isinstance(client_obf_params, dict) and isinstance(i_params, dict):
+            def sanitize_config_value(value):
+                return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
+            for key in ("I1", "I2", "I3", "I4", "I5"):
+                if key in i_params:
+                    client_obf_params[key] = sanitize_config_value(i_params.get(key, ''))
+
         client_config = {
             "id": client_id,
             "name": client_name,
@@ -409,7 +439,7 @@ H4 = {obfuscation_params['H4']}
             "preshared_key": preshared_key,
             "client_ip": client_ip,
             "obfuscation_enabled": server["obfuscation_enabled"],
-            "obfuscation_params": server["obfuscation_params"]
+            "obfuscation_params": client_obf_params
         }
 
         # Add client to server config
@@ -439,6 +469,66 @@ AllowedIPs = {client_ip}/32
 
         config_content = self.generate_wireguard_client_config(server, client_config, include_comments=True)
         return client_config, config_content
+
+    def update_server_i_params(self, server_id, i_params):
+        """Update server-level default I1-I5 parameters (used for NEW clients only).
+
+        These parameters are NOT written to the server config file and do not
+        require restarting the server. Existing clients are NOT modified.
+        """
+        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        if not server:
+            return None
+
+        def sanitize_config_value(value):
+            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
+        if not server.get('obfuscation_params') or not isinstance(server.get('obfuscation_params'), dict):
+            server['obfuscation_params'] = {}
+
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            if key in i_params:
+                server['obfuscation_params'][key] = sanitize_config_value(i_params.get(key, ''))
+            else:
+                server['obfuscation_params'].setdefault(key, "")
+
+        self.save_config()
+        return server
+
+    def update_client_i_params(self, server_id, client_id, i_params):
+        """Update client-only I1-I5 parameters for a specific client."""
+        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        if not server:
+            return None
+
+        client = self.config.get('clients', {}).get(client_id)
+        if not client or client.get('server_id') != server_id:
+            return None
+
+        def sanitize_config_value(value):
+            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
+        if not client.get('obfuscation_params') or not isinstance(client.get('obfuscation_params'), dict):
+            client['obfuscation_params'] = {}
+
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            if key in i_params:
+                client['obfuscation_params'][key] = sanitize_config_value(i_params.get(key, ''))
+            else:
+                client['obfuscation_params'].setdefault(key, "")
+
+        # Mirror update into the server-embedded client list too
+        for embedded in server.get('clients', []):
+            if embedded.get('id') != client_id:
+                continue
+            if not embedded.get('obfuscation_params') or not isinstance(embedded.get('obfuscation_params'), dict):
+                embedded['obfuscation_params'] = {}
+            for key in ("I1", "I2", "I3", "I4", "I5"):
+                embedded['obfuscation_params'][key] = client['obfuscation_params'].get(key, "")
+            break
+
+        self.save_config()
+        return client
 
     def delete_client(self, server_id, client_id):
         """Delete a client from a server and update the config file"""
@@ -510,6 +600,9 @@ AllowedIPs = {client_ip}/32
 
     def generate_wireguard_client_config(self, server, client_config, include_comments=True):
         """Generate WireGuard client configuration"""
+        def sanitize_config_value(value):
+            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
         config = ""
         
         # Add comments only if requested
@@ -532,6 +625,13 @@ MTU = {server['mtu']}
         # Add obfuscation parameters if enabled
         if client_config['obfuscation_enabled'] and client_config['obfuscation_params']:
             params = client_config['obfuscation_params']
+
+            i_lines = []
+            for key in ("I1", "I2", "I3", "I4", "I5"):
+                value = sanitize_config_value(params.get(key, ''))
+                if value:
+                    i_lines.append(f"{key} = {value}")
+
             config += f"""Jc = {params['Jc']}
 Jmin = {params['Jmin']}
 Jmax = {params['Jmax']}
@@ -542,6 +642,9 @@ H2 = {params['H2']}
 H3 = {params['H3']}
 H4 = {params['H4']}
 """
+
+            if i_lines:
+                config += "\n".join(i_lines) + "\n"
 
         config += f"""
 [Peer]
@@ -774,7 +877,16 @@ def add_client(server_id):
     data = request.json
     client_name = data.get('name', 'New Client')
 
-    result = amnezia_manager.add_wireguard_client(server_id, client_name)
+    # Optional per-client I1-I5 overrides
+    i_params = None
+    if isinstance(data, dict):
+        raw = data.get('i_params')
+        if raw is None:
+            raw = data.get('obfuscation_params')
+        if isinstance(raw, dict):
+            i_params = {k: raw.get(k, "") for k in ("I1", "I2", "I3", "I4", "I5") if k in raw}
+
+    result = amnezia_manager.add_wireguard_client(server_id, client_name, i_params=i_params)
     if result:
         client_config, config_content = result
         return jsonify({
@@ -943,6 +1055,47 @@ def get_server_info(server_id):
     }
 
     return jsonify(server_info)
+
+
+@app.route('/api/servers/<server_id>/i-params', methods=['POST'])
+def update_server_i_params(server_id):
+    """Update server-level default I1-I5 (used for NEW clients only)."""
+    data = request.json or {}
+    i_params = {}
+    for key in ("I1", "I2", "I3", "I4", "I5"):
+        if key in data:
+            i_params[key] = data.get(key, "")
+
+    updated_server = amnezia_manager.update_server_i_params(server_id, i_params)
+    if not updated_server:
+        return jsonify({"error": "Server not found"}), 404
+
+    return jsonify({
+        "status": "updated",
+        "server_id": server_id,
+        "obfuscation_params": updated_server.get('obfuscation_params', {})
+    })
+
+
+@app.route('/api/servers/<server_id>/clients/<client_id>/i-params', methods=['POST'])
+def update_client_i_params(server_id, client_id):
+    """Update client-only I1-I5 parameters for a specific client."""
+    data = request.json or {}
+    i_params = {}
+    for key in ("I1", "I2", "I3", "I4", "I5"):
+        if key in data:
+            i_params[key] = data.get(key, "")
+
+    updated_client = amnezia_manager.update_client_i_params(server_id, client_id, i_params)
+    if not updated_client:
+        return jsonify({"error": "Client not found"}), 404
+
+    return jsonify({
+        "status": "updated",
+        "server_id": server_id,
+        "client_id": client_id,
+        "obfuscation_params": updated_client.get('obfuscation_params', {})
+    })
 
 @app.route('/api/servers', methods=['GET'])
 def get_servers():

@@ -1,0 +1,11 @@
+.vscode/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
