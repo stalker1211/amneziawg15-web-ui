@@ -3,6 +3,8 @@
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
 All server configuration is done via web interface or via API endpoints. Providing env variables at docker startup is supported but doesn't make much sense: all settings can be overridden via web interface except for NGINX_PORT and ENABLE_NAT.
 
+Current version: **1.4.1**
+
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
 ## 🚀 Features
@@ -11,6 +13,7 @@ All server configuration is done via web interface or via API endpoints. Providi
 *   **AmneziaWG Integration**: Full support for AmneziaWG's obfuscation features
 *   **Client Management**: Generate and download client configurations
 *   **Real-time Monitoring**: Live server status and connection monitoring
+*   **Client endpoint + Geo**: Shows connected client public endpoint (`IP:PORT`) with optional country flag + location
 *   **Auto-start**: Automatic server startup on container restart
 *   **IPTables Automation**: Automatic firewall configuration
 *   **Custom values**: MTU and other connection settings can be customized
@@ -254,6 +257,7 @@ Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg
 | `DEFAULT_PORT` | `51820` | Default port for new servers. Effective only for api requests. For UI management set via UI. |
 | `DEFAULT_DNS` | `8.8.8.8,1.1.1.1` | Default DNS servers for clients. Effective only for api requests. For UI management set via UI. |
 | `ENABLE_NAT` | `1` | Enable NAT/MASQUERADE for VPN subnet (set `0` to disable). |
+| `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoints (adds country flag + location). Set `0` to disable external requests. |
 
 ## 🧪 Local build/run (dev)
 

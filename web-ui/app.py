@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 import os
+import io
 import json
 import subprocess
-import tempfile
 import uuid
 import base64
 import random
 import requests
+import re
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 from flask_socketio import SocketIO
 import threading
@@ -35,6 +36,7 @@ WIREGUARD_CONFIG_DIR = os.path.join(CONFIG_DIR, 'amneziawg')
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'web_config.json')
 PUBLIC_IP_SERVICE = 'http://ifconfig.me'
 ENABLE_OBFUSCATION = True
+ENABLE_GEOIP = os.getenv('ENABLE_GEOIP', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 print(f"Base directory: {BASE_DIR}")
 print(f"Template directory: {TEMPLATE_DIR}")
@@ -80,6 +82,10 @@ class AmneziaManager:
         self.config = self.load_config()
         self.ensure_directories()
         self.public_ip = self.detect_public_ip()
+
+        # Cache GeoIP lookups to avoid rate limits and latency
+        # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
+        self._geoip_cache = {}
 
         # Auto-start servers based on environment variable
         if AUTO_START_SERVERS:
@@ -196,7 +202,6 @@ class AmneziaManager:
             return base64.b64encode(os.urandom(32)).decode('utf-8')
 
     def generate_obfuscation_params(self, mtu=1420):
-        import random
         S1 = random.randint(15, min(150, mtu - 148))
         # S2 must not be S1+56
         s2_candidates = [s for s in range(15, min(150, mtu - 92) + 1) if s != S1 + 56]
@@ -795,8 +800,8 @@ PersistentKeepalive = 25
         if not output:
             return None
 
-        # Parse output to get traffic per peer public key
-        traffic_data = {}
+        # Parse output to get traffic+endpoint per peer public key
+        peer_data = {}
 
         lines = output.splitlines()
         current_peer = None
@@ -804,6 +809,18 @@ PersistentKeepalive = 25
             line = line.strip()
             if line.startswith("peer:"):
                 current_peer = line.split("peer:")[1].strip()
+                if current_peer:
+                    peer_data.setdefault(current_peer, {})
+            elif line.startswith("endpoint:") and current_peer:
+                # Example: endpoint: 203.0.113.10:51820
+                # Example IPv6: endpoint: [2001:db8::1]:51820
+                endpoint = line.split("endpoint:", 1)[1].strip()
+                peer_data.setdefault(current_peer, {})["endpoint"] = endpoint
+            elif line.startswith("latest handshake:") and current_peer:
+                # Example: latest handshake: 57 seconds ago
+                # Example: latest handshake: 1 minute, 2 seconds ago
+                handshake = line.split("latest handshake:", 1)[1].strip()
+                peer_data.setdefault(current_peer, {})["latest_handshake"] = handshake
             elif line.startswith("transfer:") and current_peer:
                 # Example: transfer: 1.39 MiB received, 6.59 MiB sent
                 transfer_line = line[len("transfer:"):].strip()
@@ -811,21 +828,103 @@ PersistentKeepalive = 25
                 parts = transfer_line.split(',')
                 received = parts[0].strip() if len(parts) > 0 else ""
                 sent = parts[1].strip() if len(parts) > 1 else ""
-                traffic_data[current_peer] = {
-                    "received": received,
-                    "sent": sent
-                }
+                peer_data.setdefault(current_peer, {})["received"] = received
+                peer_data.setdefault(current_peer, {})["sent"] = sent
                 current_peer = None
 
-        # Map traffic data to clients by matching public keys
+        def extract_ip_from_endpoint(endpoint_value):
+            if not endpoint_value or endpoint_value == '(none)':
+                return None
+            # IPv6 endpoint format: [ip]:port
+            m = re.match(r'^\[([^\]]+)\]:(\d+)$', endpoint_value)
+            if m:
+                return m.group(1)
+            # IPv4 endpoint format: ip:port
+            m = re.match(r'^([^:]+):(\d+)$', endpoint_value)
+            if m:
+                return m.group(1)
+            return None
+
+        def format_geo_label(raw):
+            if not isinstance(raw, dict):
+                return None
+            country = raw.get('country') or raw.get('country_name') or raw.get('countryCode')
+            city = raw.get('city')
+            region = raw.get('region') or raw.get('regionName')
+
+            loc_parts = [p for p in [city, region] if p]
+            loc = ', '.join(loc_parts).strip()
+
+            if country and loc:
+                return f"{country} / {loc}"
+            if country:
+                return str(country)
+            if loc:
+                return loc
+            return None
+
+        def extract_country_code(raw):
+            if not isinstance(raw, dict):
+                return None
+            # ipapi.co typically returns ISO 3166-1 alpha-2 in `country`
+            cc = raw.get('country') or raw.get('country_code') or raw.get('countryCode')
+            if isinstance(cc, str):
+                cc = cc.strip().upper()
+                if re.fullmatch(r'[A-Z]{2}', cc):
+                    return cc
+            return None
+
+        def geoip_lookup(ip):
+            if not ENABLE_GEOIP:
+                return (None, None)
+            if not ip:
+                return (None, None)
+
+            # Skip obvious local addresses
+            if ip.startswith('10.') or ip.startswith('192.168.') or ip.startswith('172.16.') or ip.startswith('172.17.') or ip.startswith('172.18.') or ip.startswith('172.19.') or ip.startswith('172.2') or ip.startswith('172.3') or ip.startswith('127.'):
+                return (None, None)
+
+            now = time.time()
+            cached = self._geoip_cache.get(ip)
+            if isinstance(cached, dict) and (now - cached.get('ts', 0)) < 24 * 3600:
+                return (cached.get('label'), cached.get('country_code'))
+
+            try:
+                # ipapi.co uses HTTPS and returns JSON
+                resp = requests.get(f"https://ipapi.co/{ip}/json/", timeout=2, headers={"User-Agent": "amneziawg-web-ui"})
+                if resp.status_code != 200:
+                    self._geoip_cache[ip] = {"ts": now, "label": None, "country_code": None, "raw": {"status": resp.status_code}}
+                    return (None, None)
+                data = resp.json() if resp.headers.get('content-type', '').startswith('application/json') else {}
+                label = format_geo_label(data)
+                country_code = extract_country_code(data)
+                self._geoip_cache[ip] = {"ts": now, "label": label, "country_code": country_code, "raw": data}
+                return (label, country_code)
+            except Exception:
+                self._geoip_cache[ip] = {"ts": now, "label": None, "country_code": None, "raw": {"error": "lookup_failed"}}
+                return (None, None)
+
+        # Map peer data to clients by matching public keys
         clients_traffic = {}
         for client_id, client in self.config["clients"].items():
             if client.get("server_id") == server_id:
                 pubkey = client.get("client_public_key")
-                if pubkey in traffic_data:
-                    clients_traffic[client_id] = traffic_data[pubkey]
-                else:
-                    clients_traffic[client_id] = {"received": "0 B", "sent": "0 B"}
+                info = peer_data.get(pubkey) if pubkey else None
+                received = (info or {}).get('received') or "0 B"
+                sent = (info or {}).get('sent') or "0 B"
+                endpoint = (info or {}).get('endpoint')
+                latest_handshake = (info or {}).get('latest_handshake')
+                endpoint_ip = extract_ip_from_endpoint(endpoint)
+                geo_label, geo_country_code = geoip_lookup(endpoint_ip)
+
+                clients_traffic[client_id] = {
+                    "received": received,
+                    "sent": sent,
+                    "endpoint": endpoint,
+                    "geo": geo_label,
+                    "geo_country_code": geo_country_code,
+                    "latest_handshake": latest_handshake
+                }
 
         return clients_traffic
 
@@ -917,12 +1016,26 @@ def download_client_config(server_id, client_id):
         server, client, include_comments=True
     )
 
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.conf', delete=False) as f:
-        f.write(config_content)
-        temp_path = f.name
+    raw_filename = f"{client.get('name', 'client')}_{server.get('name', 'server')}.conf"
 
-    filename = f"{client['name']}_{server['name']}.conf"
-    return send_file(temp_path, as_attachment=True, download_name=filename)
+    def sanitize_filename(value):
+        # Keep it simple and dependency-free: allow alnum, dot, dash, underscore.
+        safe = re.sub(r'[^A-Za-z0-9._-]+', '_', str(value)).strip('._')
+        # Avoid pathological lengths and empty names
+        return (safe[:200] or "client")
+
+    filename = sanitize_filename(raw_filename) + ".conf" if not raw_filename.endswith('.conf') else sanitize_filename(raw_filename)
+    if not filename.lower().endswith('.conf'):
+        filename += '.conf'
+
+    data = io.BytesIO(config_content.encode('utf-8'))
+    data.seek(0)
+    return send_file(
+        data,
+        as_attachment=True,
+        download_name=filename,
+        mimetype='text/plain; charset=utf-8'
+    )
 
 @app.route('/api/clients', methods=['GET'])
 def get_all_clients():
@@ -1219,8 +1332,8 @@ def handle_disconnect():
     print(f"WebSocket disconnected from {request.remote_addr}")
 
 if __name__ == '__main__':
-    print(f"AmneziaWG Web UI starting...")
-    print(f"Configuration:")
+    print("AmneziaWG Web UI starting...")
+    print("Configuration:")
     print(f"  NGINX Port: {NGINX_PORT}")
     print(f"  Auto-start: {AUTO_START_SERVERS}")
     print(f"  Default MTU: {DEFAULT_MTU}")

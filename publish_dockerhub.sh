@@ -9,8 +9,8 @@ set -euo pipefail
 #
 # Examples:
 #   ./publish_dockerhub.sh            # pushes :latest
-#   ./publish_dockerhub.sh 1.4.0      # pushes :1.4.0 and :latest
-#   TAG=1.4.0 ./publish_dockerhub.sh  # same as above
+#   ./publish_dockerhub.sh 1.4.1      # pushes :1.4.1 and :latest
+#   TAG=1.4.1 ./publish_dockerhub.sh  # same as above
 
 IMAGE_REPO="${IMAGE_REPO:-stalker1211/amneziawg15-web-ui}"
 ARG_TAG="${1:-}"
@@ -34,8 +34,8 @@ Env vars:
 
 Examples:
   $0
-  $0 1.4.0
-  TAG=1.4.0 $0
+	$0 1.4.1
+	TAG=1.4.1 $0
 EOF
 }
 

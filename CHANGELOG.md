@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## Version 1.4.1 - Client endpoint IP + GeoIP flag
+
+### New Features
+- UI now displays connected client public endpoint (`IP:PORT`) from `awg show`.
+- UI now displays `latest handshake` (from `awg show`) under the endpoint.
+- Optional GeoIP enrichment for endpoints:
+  - Shows a country flag and location label when available.
+  - Controlled by `ENABLE_GEOIP` (set `0`/`false`/`no`/`off` to disable external lookups).
+
+### API
+- `/api/servers/<server_id>/traffic` now includes `endpoint`, `latest_handshake` and GeoIP fields (`geo`, `geo_country_code`) per client.
+
+### Improvements
+- Client config download no longer writes temp files to disk (streams from memory).
+- IPTables scripts: safer quoting, safer `ENABLE_NAT` handling, and basic argument validation.
+
 ## Version 1.4.0 - AmneziaWG 1.5 protocol (I1–I5)
 
 ### New Features

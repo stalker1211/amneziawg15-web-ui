@@ -3,7 +3,17 @@ class AmneziaApp {
     constructor() {
         this.socket = null;
         this.lastServers = [];
+        this.serverClients = new Map();
         this.init();
+    }
+
+    countryCodeToFlagEmoji(countryCode) {
+        const code = String(countryCode || '').trim().toUpperCase();
+        if (!/^[A-Z]{2}$/.test(code)) return '';
+        const A = 0x1F1E6;
+        const first = A + (code.charCodeAt(0) - 65);
+        const second = A + (code.charCodeAt(1) - 65);
+        return String.fromCodePoint(first, second);
     }
 
     init() {
@@ -662,6 +672,8 @@ class AmneziaApp {
         const serversList = this.getElement('serversList');
         if (!serversList) return;
 
+        const safe = (v) => this.escapeHtml(v);
+
         if (servers.length === 0) {
             serversList.innerHTML = `
                 <div class="text-center py-8 text-gray-500">
@@ -675,12 +687,12 @@ class AmneziaApp {
             <div class="bg-white rounded-lg shadow-md p-6">
                 <div class="flex justify-between items-center mb-4">
                     <div>
-                        <h3 class="text-lg font-semibold">${server.name}</h3>
+                        <h3 class="text-lg font-semibold">${safe(server.name)}</h3>
                         <p class="text-sm text-gray-600">
-                            ID: ${server.id} | Port: ${server.port} | Subnet: ${server.subnet}
+                            ID: ${safe(server.id)} | Port: ${safe(server.port)} | Subnet: ${safe(server.subnet)}
                             ${server.obfuscation_enabled ? '| 🔒 Obfuscated' : ''}
                         </p>
-                        <p class="text-sm text-gray-500">Public IP: ${server.public_ip}</p>
+                        <p class="text-sm text-gray-500">Public IP: ${safe(server.public_ip)}</p>
                     </div>
                     <div class="flex items-center space-x-2">
                         <span class="px-3 py-1 rounded-full text-sm ${
@@ -721,12 +733,26 @@ class AmneziaApp {
         if (clients.length === 0) {
             return '<p class="text-gray-500 text-sm">No clients yet.</p>';
         }
+
+        const safe = (v) => this.escapeHtml(v);
         
         return `
             <h4 class="font-medium mb-2">Clients (${clients.length}):</h4>
             <div class="space-y-2">
                 ${clients.map(client => {
                     const clientTraffic = traffic[client.id] || {received: '0 B', sent: '0 B'};
+                    const endpoint = clientTraffic.endpoint;
+                    const geo = clientTraffic.geo;
+                    const geoCountryCode = clientTraffic.geo_country_code;
+                    const flag = geoCountryCode ? this.countryCodeToFlagEmoji(geoCountryCode) : '';
+                    const flagPrefix = flag ? `${safe(flag)} ` : '';
+                    const latestHandshake = clientTraffic.latest_handshake;
+                    const endpointLine = endpoint && endpoint !== '(none)'
+                        ? `${flagPrefix}${safe(endpoint)}${geo ? ` <span class=\"text-gray-500\">(${safe(geo)})</span>` : ''}`
+                        : '<span class="text-gray-400">(not connected)</span>';
+                    const handshakeLine = (endpoint && endpoint !== '(none)' && latestHandshake)
+                        ? `<span class="text-xs text-gray-500">latest handshake: ${safe(latestHandshake)}</span>`
+                        : '';
                     return `
                     <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg hover:bg-gray-100 transition-colors duration-200">
                         <div class="flex items-center">
@@ -736,15 +762,19 @@ class AmneziaApp {
                                 </svg>
                             </div>
                             <div class="flex items-center space-x-2">
-                                <span class="font-medium">${client.name}</span>
-                                <span class="text-sm text-gray-600 ml-2">${client.client_ip}</span>
+                                <div class="flex flex-col">
+                                    <span class="font-medium">${safe(client.name)}</span>
+                                    <span class="text-xs text-gray-600">${endpointLine}</span>
+                                    ${handshakeLine}
+                                </div>
+                                <span class="text-sm text-gray-600 ml-2">${safe(client.client_ip)}</span>
                                 <span class="text-xs text-gray-500 ml-6" style="margin-left: 0.5cm;">
-                                    ⬇️ ${clientTraffic.received} &nbsp; ⬆️ ${clientTraffic.sent}
+                                    ⬇️ ${safe(clientTraffic.received)} &nbsp; ⬆️ ${safe(clientTraffic.sent)}
                                 </span>
                             </div>
                         </div>
                         <div class="flex space-x-2">
-                            <button onclick="amneziaApp.showClientQRCode('${serverId}', '${client.id}', '${client.name}')"
+                            <button onclick="amneziaApp.showClientQRCode('${serverId}', '${client.id}')"
                                     class="bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
                                     title="Show QR Code">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -752,7 +782,7 @@ class AmneziaApp {
                                 </svg>
                                 QR Code
                             </button>
-                            <button onclick="amneziaApp.showClientIParamsModal('${serverId}', '${client.id}', '${client.name}')"
+                            <button onclick="amneziaApp.showClientIParamsModal('${serverId}', '${client.id}')"
                                     class="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
                                     title="Edit I1–I5 (client-only)">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -787,6 +817,7 @@ class AmneziaApp {
             fetch(`/api/servers/${serverId}/clients`).then(res => res.json()),
             fetch(`/api/servers/${serverId}/traffic`).then(res => res.ok ? res.json() : {})
         ]).then(([clients, traffic]) => {
+            this.serverClients.set(serverId, Array.isArray(clients) ? clients : []);
             const clientsContainer = this.getElement(`clients-${serverId}`);
             if (clientsContainer) {
                 clientsContainer.innerHTML = this.renderServerClients(serverId, clients, traffic);
@@ -1053,8 +1084,9 @@ class AmneziaApp {
         }
     }
 
-    async showClientIParamsModal(serverId, clientId, clientName) {
-        const safeName = this.escapeHtml(clientName);
+    async showClientIParamsModal(serverId, clientId) {
+        const cached = (this.serverClients.get(serverId) || []).find((c) => c.id === clientId);
+        const safeName = this.escapeHtml(cached?.name || clientId);
 
         // Close any existing modal first
         this.closeModal();
@@ -1210,8 +1242,9 @@ class AmneziaApp {
         this.closeCreateServerModal();
     }
 
-    showClientQRCode(serverId, clientId, clientName) {
-        const safeClientName = this.escapeHtml(clientName);
+    showClientQRCode(serverId, clientId) {
+        const cached = (this.serverClients.get(serverId) || []).find((c) => c.id === clientId);
+        const safeClientName = this.escapeHtml(cached?.name || clientId);
         // Create modal for QR code
         const modalHtml = `
             <div id="qrModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center">
