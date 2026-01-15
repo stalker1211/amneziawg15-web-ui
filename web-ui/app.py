@@ -38,6 +38,21 @@ PUBLIC_IP_SERVICE = 'http://ifconfig.me'
 ENABLE_OBFUSCATION = True
 ENABLE_GEOIP = os.getenv('ENABLE_GEOIP', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
+# API Token Auth (optional, for defense-in-depth)
+API_TOKEN = os.getenv('API_TOKEN', '').strip()
+
+# Socket.IO CORS origins (comma-separated list or '*' for all)
+# Empty/not set = same-origin only (recommended for production)
+ALLOWED_ORIGINS_RAW = os.getenv('ALLOWED_ORIGINS', '').strip()
+if ALLOWED_ORIGINS_RAW == '*':
+    ALLOWED_ORIGINS = '*'
+elif ALLOWED_ORIGINS_RAW:
+    # Parse comma-separated list and strip whitespace
+    ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_RAW.split(',') if origin.strip()]
+else:
+    # Default: same-origin only (let Flask-SocketIO use its default behavior)
+    ALLOWED_ORIGINS = []
+
 print(f"Base directory: {BASE_DIR}")
 print(f"Template directory: {TEMPLATE_DIR}")
 print(f"Static directory: {STATIC_DIR}")
@@ -55,6 +70,8 @@ print("Fixed Configuration:")
 print(f"WEB_UI_PORT: {WEB_UI_PORT} (internal)")
 print(f"CONFIG_DIR: {CONFIG_DIR}")
 print(f"ENABLE_OBFUSCATION: {ENABLE_OBFUSCATION}")
+print(f"API_TOKEN: {'<set>' if API_TOKEN else '<not set>'}")
+print(f"ALLOWED_ORIGINS: {ALLOWED_ORIGINS if ALLOWED_ORIGINS else '<same-origin only>'}")
 print("==================================")
 
 # Check if directories exist
@@ -70,18 +87,66 @@ app = Flask(__name__,
     static_folder=STATIC_DIR
 )
 app.secret_key = os.urandom(24)
-socketio = SocketIO(
-    app,
-    async_mode='eventlet',
-    cors_allowed_origins="*",  # Allow all origins for development
-    path='/socket.io'  # Explicitly set the path
-)
+
+# Configure Socket.IO with CORS restrictions
+if ALLOWED_ORIGINS:
+    socketio = SocketIO(
+        app,
+        async_mode='eventlet',
+        cors_allowed_origins=ALLOWED_ORIGINS,
+        path='/socket.io'
+    )
+else:
+    # Default: same-origin only (no cors_allowed_origins parameter)
+    socketio = SocketIO(
+        app,
+        async_mode='eventlet',
+        path='/socket.io'
+    )
+
+# API Token Auth decorator
+def require_token(f):
+    """Enforce API token auth if API_TOKEN is set (defense-in-depth with Nginx Basic Auth)."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # If no API_TOKEN is configured, allow access (rely on Nginx Basic Auth)
+        if not API_TOKEN:
+            return f(*args, **kwargs)
+
+        # Support either:
+        # - Authorization: Bearer <token> (useful when there is no proxy auth)
+        # - X-API-Token: <token>         (works alongside Nginx Basic Auth)
+        token = (request.headers.get('X-API-Token') or '').strip()
+        if not token:
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:].strip()  # Remove 'Bearer ' prefix
+
+        if not token:
+            return jsonify({"error": "Missing API token (use X-API-Token header or Authorization: Bearer ...)"}), 401
+
+        if token != API_TOKEN:
+            return jsonify({"error": "Invalid API token"}), 401
+        
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _sanitize_config_value(value):
+    """Make sure config values are single-line to keep config format intact."""
+    return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
 
 class AmneziaManager:
     def __init__(self):
         self.config = self.load_config()
         self.ensure_directories()
         self.public_ip = self.detect_public_ip()
+
+        # Track derived client status updates (active/inactive) and persist with throttling.
+        self._client_status_dirty = False
+        self._last_client_status_persist_ts = 0.0
 
         # Cache GeoIP lookups to avoid rate limits and latency
         # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
@@ -90,6 +155,9 @@ class AmneziaManager:
         # Auto-start servers based on environment variable
         if AUTO_START_SERVERS:
             self.auto_start_servers()
+        
+        # Start real-time traffic monitoring
+        self.start_traffic_monitoring()
 
     def ensure_directories(self):
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -114,7 +182,7 @@ class AmneziaManager:
                         if self.is_valid_ip(ip):
                             print(f"Detected public IP: {ip}")
                             return ip
-                except:
+                except Exception:
                     continue
 
             # Fallback: try to get from network interfaces
@@ -123,7 +191,7 @@ class AmneziaManager:
                 if result and self.is_valid_ip(result):
                     print(f"Detected local IP: {result}")
                     return result
-            except:
+            except Exception:
                 pass
 
         except Exception as e:
@@ -141,7 +209,7 @@ class AmneziaManager:
                 if not 0 <= int(part) <= 255:
                     return False
             return True
-        except:
+        except Exception:
             return False
 
     def auto_start_servers(self):
@@ -198,7 +266,7 @@ class AmneziaManager:
         """Generate preshared key"""
         try:
             return self.execute_command("wg genpsk")
-        except:
+        except Exception:
             return base64.b64encode(os.urandom(32)).decode('utf-8')
 
     def generate_obfuscation_params(self, mtu=1420):
@@ -265,10 +333,6 @@ class AmneziaManager:
 
         # Generate server keys
         server_keys = self.generate_wireguard_keys()
-
-        def sanitize_config_value(value):
-            """Make sure values are single-line to keep config format intact."""
-            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
 
         # Generate and use provided obfuscation parameters if enabled
         obfuscation_params = None
@@ -378,9 +442,15 @@ H4 = {obfuscation_params['H4']}
             return f"{parts[0]}.{parts[1]}.{parts[2]}.{client_index + 2}"
         return f"10.0.0.{client_index + 2}"
 
+    def get_server(self, server_id):
+        return next((s for s in self.config.get('servers', []) if s.get('id') == server_id), None)
+
+    def get_client(self, client_id):
+        return self.config.get('clients', {}).get(client_id)
+
     def delete_server(self, server_id):
         """Delete a server and all its clients"""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return False
 
@@ -403,7 +473,7 @@ H4 = {obfuscation_params['H4']}
 
     def add_wireguard_client(self, server_id, client_name, i_params=None):
         """Add a client to a WireGuard server"""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return None
 
@@ -425,12 +495,9 @@ H4 = {obfuscation_params['H4']}
 
         # Optional per-client I1-I5 overrides (client-only)
         if isinstance(client_obf_params, dict) and isinstance(i_params, dict):
-            def sanitize_config_value(value):
-                return str(value).replace('\r', ' ').replace('\n', ' ').strip()
-
             for key in ("I1", "I2", "I3", "I4", "I5"):
                 if key in i_params:
-                    client_obf_params[key] = sanitize_config_value(i_params.get(key, ''))
+                    client_obf_params[key] = _sanitize_config_value(i_params.get(key, ''))
 
         client_config = {
             "id": client_id,
@@ -481,19 +548,16 @@ AllowedIPs = {client_ip}/32
         These parameters are NOT written to the server config file and do not
         require restarting the server. Existing clients are NOT modified.
         """
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return None
-
-        def sanitize_config_value(value):
-            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
 
         if not server.get('obfuscation_params') or not isinstance(server.get('obfuscation_params'), dict):
             server['obfuscation_params'] = {}
 
         for key in ("I1", "I2", "I3", "I4", "I5"):
             if key in i_params:
-                server['obfuscation_params'][key] = sanitize_config_value(i_params.get(key, ''))
+                server['obfuscation_params'][key] = _sanitize_config_value(i_params.get(key, ''))
             else:
                 server['obfuscation_params'].setdefault(key, "")
 
@@ -502,23 +566,20 @@ AllowedIPs = {client_ip}/32
 
     def update_client_i_params(self, server_id, client_id, i_params):
         """Update client-only I1-I5 parameters for a specific client."""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return None
 
-        client = self.config.get('clients', {}).get(client_id)
+        client = self.get_client(client_id)
         if not client or client.get('server_id') != server_id:
             return None
-
-        def sanitize_config_value(value):
-            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
 
         if not client.get('obfuscation_params') or not isinstance(client.get('obfuscation_params'), dict):
             client['obfuscation_params'] = {}
 
         for key in ("I1", "I2", "I3", "I4", "I5"):
             if key in i_params:
-                client['obfuscation_params'][key] = sanitize_config_value(i_params.get(key, ''))
+                client['obfuscation_params'][key] = _sanitize_config_value(i_params.get(key, ''))
             else:
                 client['obfuscation_params'].setdefault(key, "")
 
@@ -537,7 +598,7 @@ AllowedIPs = {client_ip}/32
 
     def delete_client(self, server_id, client_id):
         """Delete a client from a server and update the config file"""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return False
 
@@ -605,9 +666,6 @@ AllowedIPs = {client_ip}/32
 
     def generate_wireguard_client_config(self, server, client_config, include_comments=True):
         """Generate WireGuard client configuration"""
-        def sanitize_config_value(value):
-            return str(value).replace('\r', ' ').replace('\n', ' ').strip()
-
         config = ""
         
         # Add comments only if requested
@@ -633,7 +691,7 @@ MTU = {server['mtu']}
 
             i_lines = []
             for key in ("I1", "I2", "I3", "I4", "I5"):
-                value = sanitize_config_value(params.get(key, ''))
+                value = _sanitize_config_value(params.get(key, ''))
                 if value:
                     i_lines.append(f"{key} = {value}")
 
@@ -701,7 +759,7 @@ PersistentKeepalive = 25
 
     def start_server(self, server_id):
         """Start a WireGuard server using awg-quick with iptables setup"""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return False
 
@@ -732,7 +790,7 @@ PersistentKeepalive = 25
 
     def stop_server(self, server_id):
         """Stop a WireGuard server using awg-quick with iptables cleanup"""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return False
 
@@ -761,7 +819,7 @@ PersistentKeepalive = 25
 
     def get_server_status(self, server_id):
         """Check actual server status by checking interface"""
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return "not_found"
 
@@ -772,7 +830,7 @@ PersistentKeepalive = 25
                 return "running"
             else:
                 return "stopped"
-        except:
+        except Exception:
             return "stopped"
 
     def simulate_server_operation(self, server_id, status):
@@ -783,6 +841,34 @@ PersistentKeepalive = 25
             'status': status
         })
 
+    def start_traffic_monitoring(self):
+        """Start background thread for real-time traffic monitoring"""
+        # Use Socket.IO background tasks so this works correctly under eventlet.
+        def monitor_traffic():
+            while True:
+                try:
+                    # Get all running servers and their traffic
+                    for server in self.config["servers"]:
+                        # Check actual status, not cached
+                        actual_status = self.get_server_status(server['id'])
+                        if actual_status == 'running':
+                            traffic = self.get_traffic_for_server(server['id'])
+                            if traffic:
+                                socketio.emit(
+                                    'traffic_update',
+                                    {
+                                        'server_id': server['id'],
+                                        'traffic': traffic
+                                    }
+                                )
+
+                    socketio.sleep(7)  # Update every 7 seconds
+                except Exception as e:
+                    print(f"Error in traffic monitoring: {e}")
+                    socketio.sleep(7)
+
+        socketio.start_background_task(monitor_traffic)
+
     def get_client_configs(self, server_id=None):
         """Get all client configs, optionally filtered by server"""
         if server_id:
@@ -791,7 +877,7 @@ PersistentKeepalive = 25
         return list(self.config["clients"].values())
 
     def get_traffic_for_server(self, server_id):
-        server = next((s for s in self.config['servers'] if s['id'] == server_id), None)
+        server = self.get_server(server_id)
         if not server:
             return None
 
@@ -844,6 +930,40 @@ PersistentKeepalive = 25
             if m:
                 return m.group(1)
             return None
+
+        def parse_handshake_seconds(handshake_value):
+            """Parse 'latest handshake' strings from `awg show` into seconds.
+
+            Examples:
+              - '57 seconds ago' -> 57
+              - '1 minute, 2 seconds ago' -> 62
+              - 'Never' -> None
+            """
+            if not handshake_value or not isinstance(handshake_value, str):
+                return None
+            s = handshake_value.strip().lower()
+            if not s:
+                return None
+            if 'never' in s:
+                return None
+            if 'just now' in s:
+                return 0
+
+            total = 0
+            unit_seconds = {
+                'second': 1,
+                'minute': 60,
+                'hour': 3600,
+                'day': 86400,
+            }
+            for m in re.finditer(r'(\d+)\s+(second|minute|hour|day)s?', s):
+                try:
+                    n = int(m.group(1))
+                    unit = m.group(2)
+                    total += n * unit_seconds.get(unit, 0)
+                except Exception:
+                    continue
+            return total if total > 0 else None
 
         def format_geo_label(raw):
             if not isinstance(raw, dict):
@@ -914,8 +1034,21 @@ PersistentKeepalive = 25
                 sent = (info or {}).get('sent') or "0 B"
                 endpoint = (info or {}).get('endpoint')
                 latest_handshake = (info or {}).get('latest_handshake')
+                latest_handshake_seconds = parse_handshake_seconds(latest_handshake)
+                active = latest_handshake_seconds is not None and latest_handshake_seconds <= 5 * 60
                 endpoint_ip = extract_ip_from_endpoint(endpoint)
                 geo_label, geo_country_code = geoip_lookup(endpoint_ip)
+
+                # Persist derived status into the existing client config field.
+                # This makes /api/* clients reflect live activity without the UI needing traffic.
+                try:
+                    desired_status = 'active' if active else 'inactive'
+                    if client.get('status') != desired_status:
+                        client['status'] = desired_status
+                        self._client_status_dirty = True
+                except Exception:
+                    # Don't let status persistence break traffic reporting.
+                    pass
 
                 clients_traffic[client_id] = {
                     "received": received,
@@ -923,8 +1056,21 @@ PersistentKeepalive = 25
                     "endpoint": endpoint,
                     "geo": geo_label,
                     "geo_country_code": geo_country_code,
-                    "latest_handshake": latest_handshake
+                    "latest_handshake": latest_handshake,
+                    "latest_handshake_seconds": latest_handshake_seconds,
+                    "active": active
                 }
+
+        # Throttle config writes: persist derived status at most once per minute.
+        if self._client_status_dirty:
+            now = time.time()
+            if (now - self._last_client_status_persist_ts) >= 60:
+                try:
+                    self.save_config()
+                    self._client_status_dirty = False
+                    self._last_client_status_persist_ts = now
+                except Exception as e:
+                    print(f"Failed to persist client status updates: {e}")
 
         return clients_traffic
 
@@ -935,7 +1081,15 @@ amnezia_manager = AmneziaManager()
 @app.route('/')
 def index():
     print("Serving index.html")
-    return render_template('index.html')
+    # Cache-bust static assets so browsers pick up new JS/CSS immediately.
+    try:
+        js_path = os.path.join(STATIC_DIR, 'js', 'app.js')
+        css_path = os.path.join(STATIC_DIR, 'css', 'style.css')
+        cache_bust = int(max(os.path.getmtime(js_path), os.path.getmtime(css_path)))
+    except OSError:
+        cache_bust = int(time.time())
+
+    return render_template('index.html', cache_bust=cache_bust)
 
 # Explicit static file route to ensure they're served
 @app.route('/static/<path:filename>')
@@ -943,37 +1097,43 @@ def static_files(filename):
     return send_from_directory(STATIC_DIR, filename)
 
 @app.route('/api/servers', methods=['POST'])
+@require_token
 def create_server():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     server = amnezia_manager.create_wireguard_server(data)
     return jsonify(server)
 
 @app.route('/api/servers/<server_id>', methods=['DELETE'])
+@require_token
 def delete_server(server_id):
     if amnezia_manager.delete_server(server_id):
         return jsonify({"status": "deleted", "server_id": server_id})
     return jsonify({"error": "Server not found"}), 404
 
 @app.route('/api/servers/<server_id>/start', methods=['POST'])
+@require_token
 def start_server(server_id):
     if amnezia_manager.start_server(server_id):
         return jsonify({"status": "started"})
     return jsonify({"error": "Server not found or failed to start"}), 404
 
 @app.route('/api/servers/<server_id>/stop', methods=['POST'])
+@require_token
 def stop_server(server_id):
     if amnezia_manager.stop_server(server_id):
         return jsonify({"status": "stopped"})
     return jsonify({"error": "Server not found or failed to stop"}), 404
 
 @app.route('/api/servers/<server_id>/clients', methods=['GET'])
+@require_token
 def get_server_clients(server_id):
     clients = amnezia_manager.get_client_configs(server_id)
     return jsonify(clients)
 
 @app.route('/api/servers/<server_id>/clients', methods=['POST'])
+@require_token
 def add_client(server_id):
-    data = request.json
+    data = request.get_json(silent=True) or {}
     client_name = data.get('name', 'New Client')
 
     # Optional per-client I1-I5 overrides
@@ -995,19 +1155,21 @@ def add_client(server_id):
     return jsonify({"error": "Server not found"}), 404
 
 @app.route('/api/servers/<server_id>/clients/<client_id>', methods=['DELETE'])
+@require_token
 def delete_client(server_id, client_id):
     if amnezia_manager.delete_client(server_id, client_id):
         return jsonify({"status": "deleted", "client_id": client_id})
     return jsonify({"error": "Client not found"}), 404
 
 @app.route('/api/servers/<server_id>/clients/<client_id>/config')
+@require_token
 def download_client_config(server_id, client_id):
     """Download client configuration file (with comments)"""
-    client = amnezia_manager.config["clients"].get(client_id)
+    client = amnezia_manager.get_client(client_id)
     if not client or client.get("server_id") != server_id:
         return jsonify({"error": "Client not found"}), 404
 
-    server = next((s for s in amnezia_manager.config['servers'] if s['id'] == server_id), None)
+    server = amnezia_manager.get_server(server_id)
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
@@ -1038,11 +1200,13 @@ def download_client_config(server_id, client_id):
     )
 
 @app.route('/api/clients', methods=['GET'])
+@require_token
 def get_all_clients():
     clients = amnezia_manager.get_client_configs()
     return jsonify(clients)
 
 @app.route('/api/system/status')
+@require_token
 def system_status():
     status = {
         "awg_available": os.path.exists("/usr/bin/awg") and os.path.exists("/usr/bin/awg-quick"),
@@ -1064,6 +1228,7 @@ def system_status():
     return jsonify(status)
 
 @app.route('/api/system/refresh-ip')
+@require_token
 def refresh_ip():
     """Refresh public IP address"""
     new_ip = amnezia_manager.detect_public_ip()
@@ -1077,9 +1242,10 @@ def refresh_ip():
     return jsonify({"public_ip": new_ip})
 
 @app.route('/api/servers/<server_id>/config')
+@require_token
 def get_server_config(server_id):
     """Get the raw WireGuard server configuration"""
-    server = next((s for s in amnezia_manager.config['servers'] if s['id'] == server_id), None)
+    server = amnezia_manager.get_server(server_id)
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
@@ -1103,9 +1269,10 @@ def get_server_config(server_id):
         return jsonify({"error": f"Failed to read config: {str(e)}"}), 500
 
 @app.route('/api/servers/<server_id>/config/download')
+@require_token
 def download_server_config(server_id):
     """Download the WireGuard server configuration file"""
-    server = next((s for s in amnezia_manager.config['servers'] if s['id'] == server_id), None)
+    server = amnezia_manager.get_server(server_id)
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
@@ -1122,9 +1289,10 @@ def download_server_config(server_id):
         return jsonify({"error": f"Failed to download config: {str(e)}"}), 500
 
 @app.route('/api/servers/<server_id>/info')
+@require_token
 def get_server_info(server_id):
     """Get detailed server information including config preview"""
-    server = next((s for s in amnezia_manager.config['servers'] if s['id'] == server_id), None)
+    server = amnezia_manager.get_server(server_id)
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
@@ -1140,7 +1308,7 @@ def get_server_info(server_id):
                 # Read first 10 lines for preview
                 lines = f.readlines()
                 config_preview = ''.join(lines[:min(10, len(lines))])
-        except:
+        except Exception:
             config_preview = "Unable to read config file"
 
     # Ensure MTU is included (handle both old and new servers)
@@ -1171,6 +1339,7 @@ def get_server_info(server_id):
 
 
 @app.route('/api/servers/<server_id>/i-params', methods=['POST'])
+@require_token
 def update_server_i_params(server_id):
     """Update server-level default I1-I5 (used for NEW clients only)."""
     data = request.json or {}
@@ -1191,6 +1360,7 @@ def update_server_i_params(server_id):
 
 
 @app.route('/api/servers/<server_id>/clients/<client_id>/i-params', methods=['POST'])
+@require_token
 def update_client_i_params(server_id, client_id):
     """Update client-only I1-I5 parameters for a specific client."""
     data = request.json or {}
@@ -1211,6 +1381,7 @@ def update_client_i_params(server_id, client_id):
     })
 
 @app.route('/api/servers', methods=['GET'])
+@require_token
 def get_servers():
     # Update server status based on actual interface state
     for server in amnezia_manager.config["servers"]:
@@ -1223,13 +1394,14 @@ def get_servers():
     return jsonify(amnezia_manager.config["servers"])
 
 @app.route('/api/system/iptables-test')
+@require_token
 def iptables_test():
     """Test iptables setup for a specific server"""
     server_id = request.args.get('server_id')
     if not server_id:
         return jsonify({"error": "server_id parameter required"}), 400
 
-    server = next((s for s in amnezia_manager.config['servers'] if s['id'] == server_id), None)
+    server = amnezia_manager.get_server(server_id)
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
@@ -1247,7 +1419,7 @@ def iptables_test():
             try:
                 result = amnezia_manager.execute_command(cmd)
                 results[cmd] = "Found" if result else "Not found"
-            except:
+            except Exception:
                 results[cmd] = "Error"
 
         return jsonify({
@@ -1262,13 +1434,14 @@ def iptables_test():
         return jsonify({"error": f"iptables test failed: {str(e)}"}), 500
     
 @app.route('/api/servers/<server_id>/clients/<client_id>/config-both')
+@require_token
 def get_client_config_both(server_id, client_id):
     """Get both clean and full client configurations"""
-    client = amnezia_manager.config["clients"].get(client_id)
+    client = amnezia_manager.get_client(client_id)
     if not client or client.get("server_id") != server_id:
         return jsonify({"error": "Client not found"}), 404
 
-    server = next((s for s in amnezia_manager.config['servers'] if s['id'] == server_id), None)
+    server = amnezia_manager.get_server(server_id)
     if not server:
         return jsonify({"error": "Server not found"}), 404
 
@@ -1292,6 +1465,7 @@ def get_client_config_both(server_id, client_id):
     })
     
 @app.route('/api/servers/<server_id>/traffic')
+@require_token
 def get_server_traffic(server_id):
     traffic = amnezia_manager.get_traffic_for_server(server_id)
     if traffic is None:

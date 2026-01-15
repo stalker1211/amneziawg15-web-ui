@@ -3,7 +3,7 @@
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
 All server configuration is done via web interface or via API endpoints. Providing env variables at docker startup is supported but doesn't make much sense: all settings can be overridden via web interface except for NGINX_PORT and ENABLE_NAT.
 
-Current version: **1.4.1**
+Current version: **1.4.2**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
@@ -103,6 +103,40 @@ WireGuard configs can become too large to fit into a single QR code (especially 
 ```
 
 ## 🔧 API Endpoints
+
+### Authentication
+
+All `/api/*` endpoints support optional token authentication (configured via `API_TOKEN` env var):
+
+**Using token auth (recommended for scripts/automation):**
+```bash
+curl -H "Authorization: Bearer YOUR_API_TOKEN" http://localhost:8080/api/servers
+```
+
+**Using token auth with Nginx Basic Auth enabled (recommended for this container):**
+
+Nginx Basic Auth uses the `Authorization` header (`Authorization: Basic ...`), so a Bearer token cannot reliably be sent in the same header.
+Use `X-API-Token` instead:
+
+```bash
+curl -u admin:changeme -H "X-API-Token: YOUR_API_TOKEN" http://localhost:8080/api/servers
+```
+
+**Using Nginx Basic Auth (default):**
+```bash
+curl -u admin:changeme http://localhost:8080/api/servers
+```
+
+**CLI tool with token:**
+```bash
+export AMNEZIA_API_TOKEN=YOUR_API_TOKEN
+./scripts/api_status.py --base-url http://localhost:8080 --token $AMNEZIA_API_TOKEN
+```
+
+**Generate a token:**
+```bash
+openssl rand -hex 32
+```
 
 ### Server Management
 
@@ -258,6 +292,8 @@ Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg
 | `DEFAULT_DNS` | `8.8.8.8,1.1.1.1` | Default DNS servers for clients. Effective only for api requests. For UI management set via UI. |
 | `ENABLE_NAT` | `1` | Enable NAT/MASQUERADE for VPN subnet (set `0` to disable). |
 | `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoints (adds country flag + location). Set `0` to disable external requests. |
+| `API_TOKEN` | *(empty)* | Optional API token for `/api/*` endpoints (defense-in-depth). If set, all API requests must include either `X-API-Token: <token>` (recommended when using Nginx Basic Auth) or `Authorization: Bearer <token>`. Generate with: `openssl rand -hex 32` |
+| `ALLOWED_ORIGINS` | *(empty)* | Socket.IO CORS allowed origins. Empty = same-origin only (recommended). Use `*` for development/all origins, or comma-separated list: `http://localhost:3000,https://vpn.example.com` |
 
 ## 🧪 Local build/run (dev)
 

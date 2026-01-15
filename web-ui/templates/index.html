@@ -7,7 +7,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.8.1/socket.io.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ cache_bust }}">
 </head>
 <body class="bg-gray-100">
     <div class="container mx-auto px-4 py-8">
@@ -203,30 +203,6 @@
         </div>
     </div>
 
-    <script>
-        // Get the NGINX port from the template
-        const nginxPort = "{{ nginx_port }}";
-        const isCustomPort = nginxPort !== "80";
-
-        // Configure SocketIO connection based on port
-        let socket;
-        if (isCustomPort) {
-            // For custom ports, explicitly specify the URL
-            const protocol = window.location.protocol;
-            const hostname = window.location.hostname;
-            socket = io(`${protocol}//${hostname}:${nginxPort}`, {
-                path: '/socket.io'
-            });
-        } else {
-            // For default port 80, use automatic detection
-            socket = io({
-                path: '/socket.io'
-            });
-        }
-
-        // Rest of your JavaScript code will use this socket object
-    </script>
-
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

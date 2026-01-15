@@ -47,7 +47,11 @@ docker run "${RUN_FLAGS[@]}" \
 	-e NGINX_PORT=8090 \
 	-e NGINX_USER=admin \
 	-e NGINX_PASSWORD=changeme \
+	# Optional: set API_TOKEN on the host to enable app-layer token auth for /api/*
+	# Example: API_TOKEN=$(openssl rand -hex 32) ./run.sh
+	-e API_TOKEN="${API_TOKEN:-}" \
 	-v amnezia-data:/etc/amnezia \
 	"${IMAGE_NAME}" \
 	"${CMD_ARGS[@]}"
 
+	#-e ALLOWED_ORIGINS=* \

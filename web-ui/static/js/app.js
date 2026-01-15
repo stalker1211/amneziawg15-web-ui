@@ -4,7 +4,26 @@ class AmneziaApp {
         this.socket = null;
         this.lastServers = [];
         this.serverClients = new Map();
+        this.lastTrafficByServer = new Map();
         this.init();
+    }
+
+    isClientActiveFromTraffic(clientTraffic) {
+        if (!clientTraffic || typeof clientTraffic !== 'object') return false;
+        if (typeof clientTraffic.active === 'boolean') return clientTraffic.active;
+        const seconds = clientTraffic.latest_handshake_seconds;
+        if (typeof seconds === 'number' && Number.isFinite(seconds)) return seconds <= 300;
+        const hs = String(clientTraffic.latest_handshake || '').toLowerCase();
+        if (!hs || hs.includes('never')) return false;
+        // Very small fallback parser (covers the common 'N seconds/minutes ago' format).
+        let total = 0;
+        const unitSeconds = { second: 1, minute: 60, hour: 3600, day: 86400 };
+        const re = /(\d+)\s+(second|minute|hour|day)s?/g;
+        let m;
+        while ((m = re.exec(hs)) !== null) {
+            total += Number(m[1]) * (unitSeconds[m[2]] || 0);
+        }
+        return total > 0 && total <= 300;
     }
 
     countryCodeToFlagEmoji(countryCode) {
@@ -42,6 +61,88 @@ class AmneziaApp {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    getApiToken() {
+        try {
+            return String(localStorage.getItem('amnezia_api_token') || '').trim();
+        } catch (_) {
+            return '';
+        }
+    }
+
+    setApiToken(token) {
+        try {
+            const v = String(token || '').trim();
+            if (v) localStorage.setItem('amnezia_api_token', v);
+            else localStorage.removeItem('amnezia_api_token');
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    buildApiHeaders(existingHeaders) {
+        const headers = new Headers(existingHeaders || {});
+        const token = this.getApiToken();
+        if (token) headers.set('X-API-Token', token);
+        return headers;
+    }
+
+    async apiFetch(input, init = {}) {
+        const nextInit = { ...(init || {}) };
+        nextInit.headers = this.buildApiHeaders(nextInit.headers);
+
+        let resp = await fetch(input, nextInit);
+
+        if (resp.status === 401) {
+            const entered = prompt('API token required. Paste API_TOKEN value:', this.getApiToken());
+            if (entered && String(entered).trim()) {
+                this.setApiToken(String(entered).trim());
+                const retryInit = { ...(init || {}) };
+                retryInit.headers = this.buildApiHeaders(retryInit.headers);
+                resp = await fetch(input, retryInit);
+            }
+        }
+
+        return resp;
+    }
+
+    _filenameFromContentDisposition(cd, fallback) {
+        const value = String(cd || '');
+        const m = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(value);
+        const raw = (m && (m[1] || m[2])) ? (m[1] || m[2]) : '';
+        try {
+            const decoded = raw ? decodeURIComponent(raw) : '';
+            return decoded || fallback;
+        } catch (_) {
+            return raw || fallback;
+        }
+    }
+
+    async downloadBlob(url, fallbackFilename) {
+        const resp = await this.apiFetch(url);
+        if (!resp.ok) {
+            let msg = `HTTP ${resp.status}`;
+            try {
+                const err = await resp.json();
+                msg = err?.error || msg;
+            } catch (_) {
+                // ignore
+            }
+            throw new Error(msg);
+        }
+
+        const blob = await resp.blob();
+        const filename = this._filenameFromContentDisposition(resp.headers.get('Content-Disposition'), fallbackFilename);
+
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename || 'download';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     }
 
     autosizeTextarea(textarea, maxHeightPx = 260) {
@@ -245,22 +346,12 @@ class AmneziaApp {
     }
 
     setupSocketIO() {
-        // Get the current host and protocol
-        const protocol = window.location.protocol;
-        const hostname = window.location.hostname;
-        const port = window.location.port;
-
-        let socketUrl;
-        if (port && port !== '' && port !== '80' && port !== '443') {
-            // For custom ports, explicitly specify the URL with port
-            socketUrl = `${protocol}//${hostname}:${port}`;
-        } else {
-            socketUrl = `${protocol}//${hostname}`;
-        }
+        // Use the exact same URL as the current page to avoid CORS issues
+        const socketUrl = window.location.origin;
 
         this.socket = io(socketUrl, {
             path: '/socket.io',
-            transports: ['websocket'], // Explicitly set transports
+            transports: ['websocket'],
         });
 
         this.socket.on('connect', () => {
@@ -289,6 +380,10 @@ class AmneziaApp {
             console.log("Server status update:", data);
             this.loadServers();
         });
+
+        this.socket.on('traffic_update', (data) => {
+            this.updateServerTraffic(data.server_id, data.traffic);
+        });
     }
 
     updateStatus(message) {
@@ -306,7 +401,7 @@ class AmneziaApp {
     }
 
     refreshPublicIp() {
-        fetch('/api/system/refresh-ip')
+        this.apiFetch('/api/system/refresh-ip')
             .then(response => response.json())
             .then(data => {
                 this.updatePublicIp(data.public_ip);
@@ -573,7 +668,7 @@ class AmneziaApp {
         // Disable button and show loading
         this.setCreateButtonState(true);
 
-        fetch('/api/servers', {
+        this.apiFetch('/api/servers', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -627,7 +722,7 @@ class AmneziaApp {
     }
 
     loadPublicIp() {
-        fetch('/api/system/status')
+        this.apiFetch('/api/system/status')
             .then(response => response.json())
             .then(data => {
                 this.updatePublicIp(data.public_ip);
@@ -638,8 +733,15 @@ class AmneziaApp {
     }
 
     loadServers() {
-        fetch('/api/servers')
-            .then(response => response.json())
+        this.apiFetch('/api/servers')
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => {
+                        throw new Error(err?.error || `HTTP ${response.status}`);
+                    });
+                }
+                return response.json();
+            })
             .then(servers => {
                 this.lastServers = Array.isArray(servers) ? servers : [];
                 this.renderServers(servers);
@@ -741,6 +843,7 @@ class AmneziaApp {
             <div class="space-y-2">
                 ${clients.map(client => {
                     const clientTraffic = traffic[client.id] || {received: '0 B', sent: '0 B'};
+                    const isActive = this.isClientActiveFromTraffic(clientTraffic);
                     const endpoint = clientTraffic.endpoint;
                     const geo = clientTraffic.geo;
                     const geoCountryCode = clientTraffic.geo_country_code;
@@ -753,6 +856,8 @@ class AmneziaApp {
                     const handshakeLine = (endpoint && endpoint !== '(none)' && latestHandshake)
                         ? `<span class="text-xs text-gray-500">latest handshake: ${safe(latestHandshake)}</span>`
                         : '';
+                    const rxFlashClass = clientTraffic._rx_changed ? 'traffic-flash' : '';
+                    const txFlashClass = clientTraffic._tx_changed ? 'traffic-flash' : '';
                     return `
                     <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg hover:bg-gray-100 transition-colors duration-200">
                         <div class="flex items-center">
@@ -763,13 +868,27 @@ class AmneziaApp {
                             </div>
                             <div class="flex items-center space-x-2">
                                 <div class="flex flex-col">
-                                    <span class="font-medium">${safe(client.name)}</span>
+                                    <span class="font-medium flex items-center gap-2">
+                                        <span class="inline-block w-2 h-2 rounded-full ${isActive ? 'bg-green-500' : 'bg-red-500'}" title="${isActive ? 'active (≤ 5 minutes)' : 'inactive'}"></span>
+                                        <span>${safe(client.name)} <span class="text-sm text-gray-600">(${safe(client.client_ip)})</span></span>
+                                    </span>
                                     <span class="text-xs text-gray-600">${endpointLine}</span>
                                     ${handshakeLine}
                                 </div>
-                                <span class="text-sm text-gray-600 ml-2">${safe(client.client_ip)}</span>
                                 <span class="text-xs text-gray-500 ml-6" style="margin-left: 0.5cm;">
-                                    ⬇️ ${safe(clientTraffic.received)} &nbsp; ⬆️ ${safe(clientTraffic.sent)}
+                                    <span class="traffic-arrow ${rxFlashClass}" aria-label="received">
+                                        <svg class="traffic-arrow-icon traffic-arrow-icon-rx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                            <path fill-rule="evenodd" d="M10 15a1 1 0 01-.707-.293l-5-5a1 1 0 111.414-1.414L9 11.586V3a1 1 0 112 0v8.586l3.293-3.293a1 1 0 111.414 1.414l-5 5A1 1 0 0110 15z" clip-rule="evenodd" />
+                                        </svg>
+                                    </span>
+                                    ${safe(clientTraffic.received)}
+                                    &nbsp;
+                                    <span class="traffic-arrow ${txFlashClass}" aria-label="sent">
+                                        <svg class="traffic-arrow-icon traffic-arrow-icon-tx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                            <path fill-rule="evenodd" d="M10 5a1 1 0 01.707.293l5 5a1 1 0 11-1.414 1.414L11 8.414V17a1 1 0 11-2 0V8.414L5.707 11.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 5z" clip-rule="evenodd" />
+                                        </svg>
+                                    </span>
+                                    ${safe(clientTraffic.sent)}
                                 </span>
                             </div>
                         </div>
@@ -814,17 +933,49 @@ class AmneziaApp {
 
     loadServerClients(serverId) {
         Promise.all([
-            fetch(`/api/servers/${serverId}/clients`).then(res => res.json()),
-            fetch(`/api/servers/${serverId}/traffic`).then(res => res.ok ? res.json() : {})
+            this.apiFetch(`/api/servers/${serverId}/clients`).then(res => res.json()),
+            this.apiFetch(`/api/servers/${serverId}/traffic`).then(res => res.ok ? res.json() : {})
         ]).then(([clients, traffic]) => {
             this.serverClients.set(serverId, Array.isArray(clients) ? clients : []);
+            const trafficObj = (traffic && typeof traffic === 'object') ? traffic : {};
+            // Initial load: store snapshot but do not flash.
+            this.lastTrafficByServer.set(serverId, trafficObj);
             const clientsContainer = this.getElement(`clients-${serverId}`);
             if (clientsContainer) {
-                clientsContainer.innerHTML = this.renderServerClients(serverId, clients, traffic);
+                clientsContainer.innerHTML = this.renderServerClients(serverId, clients, trafficObj);
             }
         }).catch(error => {
             console.error(`Error loading clients or traffic for server ${serverId}:`, error);
         });
+    }
+
+    updateServerTraffic(serverId, traffic) {
+        // Update traffic without full reload - only if clients are already loaded
+        const clients = this.serverClients.get(serverId);
+        if (!clients) return;
+
+        const nextTraffic = (traffic && typeof traffic === 'object') ? traffic : {};
+        const prevTraffic = this.lastTrafficByServer.get(serverId) || {};
+
+        // Decorate traffic entries with change flags so the UI can flash rx/tx updates.
+        const decoratedTraffic = {};
+        for (const [clientId, info] of Object.entries(nextTraffic)) {
+            const prev = prevTraffic[clientId] || {};
+            const received = info?.received;
+            const sent = info?.sent;
+            decoratedTraffic[clientId] = {
+                ...(info || {}),
+                _rx_changed: typeof received !== 'undefined' && received !== prev.received,
+                _tx_changed: typeof sent !== 'undefined' && sent !== prev.sent,
+            };
+        }
+
+        this.lastTrafficByServer.set(serverId, nextTraffic);
+
+        const clientsContainer = this.getElement(`clients-${serverId}`);
+        if (clientsContainer) {
+            clientsContainer.innerHTML = this.renderServerClients(serverId, clients, decoratedTraffic);
+        }
     }
 
     showServerError(message) {
@@ -841,7 +992,7 @@ class AmneziaApp {
     // Server management methods
     deleteServer(serverId) {
         if (confirm('Are you sure you want to delete this server and all its clients?')) {
-            fetch(`/api/servers/${serverId}`, { method: 'DELETE' })
+            this.apiFetch(`/api/servers/${serverId}`, { method: 'DELETE' })
                 .then(() => this.loadServers())
                 .catch(error => {
                     console.error('Error deleting server:', error);
@@ -852,7 +1003,7 @@ class AmneziaApp {
 
     deleteClient(serverId, clientId) {
         if (confirm('Are you sure you want to delete this client?')) {
-            fetch(`/api/servers/${serverId}/clients/${clientId}`, { method: 'DELETE' })
+            this.apiFetch(`/api/servers/${serverId}/clients/${clientId}`, { method: 'DELETE' })
                 .then(() => this.loadServers())
                 .catch(error => {
                     console.error('Error deleting client:', error);
@@ -862,7 +1013,7 @@ class AmneziaApp {
     }
 
     startServer(serverId) {
-        fetch(`/api/servers/${serverId}/start`, { method: 'POST' })
+        this.apiFetch(`/api/servers/${serverId}/start`, { method: 'POST' })
             .then(() => this.loadServers())
             .catch(error => {
                 console.error('Error starting server:', error);
@@ -871,7 +1022,7 @@ class AmneziaApp {
     }
 
     stopServer(serverId) {
-        fetch(`/api/servers/${serverId}/stop`, { method: 'POST' })
+        this.apiFetch(`/api/servers/${serverId}/stop`, { method: 'POST' })
             .then(() => this.loadServers())
             .catch(error => {
                 console.error('Error stopping server:', error);
@@ -882,7 +1033,7 @@ class AmneziaApp {
     addClient(serverId) {
         const clientName = prompt('Enter client name:');
         if (clientName) {
-            fetch(`/api/servers/${serverId}/clients`, {
+            this.apiFetch(`/api/servers/${serverId}/clients`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -897,12 +1048,45 @@ class AmneziaApp {
         }
     }
 
-    downloadClientConfig(serverId, clientId) {
-        window.open(`/api/servers/${serverId}/clients/${clientId}/config`, '_blank');
+    async downloadClientConfig(serverId, clientId) {
+        try {
+            const url = `/api/servers/${serverId}/clients/${clientId}/config`;
+            const resp = await this.apiFetch(url);
+            if (!resp.ok) {
+                let msg = `HTTP ${resp.status}`;
+                try {
+                    const err = await resp.json();
+                    msg = err?.error || msg;
+                } catch (_) {
+                    // ignore
+                }
+                throw new Error(msg);
+            }
+
+            const text = await resp.text();
+            const w = window.open('', '_blank');
+            if (w) {
+                w.document.title = `client-${clientId}.conf`;
+                w.document.body.innerHTML = `<pre style="white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; padding: 16px;">${this.escapeHtml(text)}</pre>`;
+            } else {
+                const blob = new Blob([text], { type: 'text/plain' });
+                const blobUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = `client-${clientId}.conf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+            }
+        } catch (error) {
+            console.error('Error downloading client config:', error);
+            alert('Error downloading client config: ' + error.message);
+        }
     }
 
     showServerConfig(serverId) {
-        fetch(`/api/servers/${serverId}/info`)
+        this.apiFetch(`/api/servers/${serverId}/info`)
             .then(response => response.json())
             .then(serverInfo => {
                 this.displayServerConfigModal(serverInfo);
@@ -914,7 +1098,7 @@ class AmneziaApp {
     }
 
     showRawServerConfig(serverId) {
-        fetch(`/api/servers/${serverId}/config`)
+        this.apiFetch(`/api/servers/${serverId}/config`)
             .then(response => response.json())
             .then(config => {
                 this.displayRawConfigModal(config);
@@ -926,7 +1110,11 @@ class AmneziaApp {
     }
 
     downloadServerConfig(serverId) {
-        window.open(`/api/servers/${serverId}/config/download`, '_blank');
+        this.downloadBlob(`/api/servers/${serverId}/config/download`, `server-${serverId}.conf`)
+            .catch((error) => {
+                console.error('Error downloading server config:', error);
+                alert('Error downloading server config: ' + error.message);
+            });
     }
 
     displayServerConfigModal(serverInfo) {
@@ -1066,7 +1254,7 @@ class AmneziaApp {
         }
 
         try {
-            const response = await fetch(`/api/servers/${serverId}/i-params`, {
+            const response = await this.apiFetch(`/api/servers/${serverId}/i-params`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(iParams)
@@ -1130,7 +1318,7 @@ class AmneziaApp {
         document.body.insertAdjacentHTML('beforeend', modalHtml);
 
         try {
-            const res = await fetch(`/api/servers/${serverId}/clients`);
+            const res = await this.apiFetch(`/api/servers/${serverId}/clients`);
             if (!res.ok) throw new Error('Failed to load client list');
             const clients = await res.json();
             const client = (clients || []).find((c) => c.id === clientId);
@@ -1172,7 +1360,7 @@ class AmneziaApp {
         }
 
         try {
-            const response = await fetch(`/api/servers/${serverId}/clients/${clientId}/i-params`, {
+            const response = await this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/i-params`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(iParams)
@@ -1345,7 +1533,7 @@ class AmneziaApp {
             this.qrClientId = clientId;
             
             // Use the efficient endpoint that returns both versions
-            const response = await fetch(`/api/servers/${serverId}/clients/${clientId}/config-both`);
+            const response = await this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/config-both`);
             if (!response.ok) {
                 throw new Error('Failed to fetch config');
             }

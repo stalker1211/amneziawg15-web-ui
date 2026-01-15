@@ -67,6 +67,52 @@ input:focus, button:focus {
     }
 }
 
+/* Link-activity LED for rx/tx arrows */
+.traffic-arrow {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+    color: #9CA3AF; /* gray-400 */
+}
+
+.traffic-arrow-icon {
+    width: 16px;
+    height: 16px;
+    display: inline-block;
+    position: relative;
+    /* Make filled SVG feel bolder (cheap stroke effect) */
+    filter: drop-shadow(0 0 0 currentColor) drop-shadow(0 0 0 currentColor);
+}
+
+/* Per-direction vertical offsets (fonts render ⬇️/⬆️ differently) */
+.traffic-arrow-icon-rx {
+    top: 0.4em;
+}
+
+.traffic-arrow-icon-tx {
+    top: 0.2em;
+}
+
+/* Apply only to the arrow element when rx/tx changes */
+.traffic-flash {
+    animation: trafficArrowFlash 900ms ease-out;
+}
+
+@keyframes trafficArrowFlash {
+    0% {
+        color: #22C55E; /* green-500 */
+        text-shadow: 0 0 8px rgba(34, 197, 94, 0.9);
+    }
+    60% {
+        color: #22C55E;
+        text-shadow: 0 0 8px rgba(34, 197, 94, 0.9);
+    }
+    100% {
+        color: #9CA3AF;
+        text-shadow: none;
+    }
+}
+
 /* Custom scrollbar for config preview */
 .config-preview {
     scrollbar-width: thin;

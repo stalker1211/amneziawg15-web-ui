@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## Version 1.4.2 - Security hardening + live monitoring (2026-01-14)
+
+### Security / Auth
+- Optional app-layer API token (`API_TOKEN`) enforcement for all `/api/*` endpoints.
+- Token can be provided as `X-API-Token` (works alongside Nginx Basic Auth) or `Authorization: Bearer ...`.
+- Socket.IO CORS can be restricted via `ALLOWED_ORIGINS` (default is same-origin).
+
+### Monitoring / UX
+- Live traffic updates pushed via Socket.IO so UI refresh is not required.
+- Client rows show endpoint + latest handshake (and optional GeoIP enrichment when enabled).
+
+### Tooling
+- Added `scripts/api_status.py` CLI to quickly inspect server/client status from a terminal.
+
+### Internal
+- Reduced duplication in backend by centralizing config-value sanitization and server/client lookup helpers.
+
 ## Version 1.4.1 - Client endpoint IP + GeoIP flag
 
 ### New Features
