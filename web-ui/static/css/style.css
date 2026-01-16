@@ -23,8 +23,13 @@ body.dark .bg-blue-100 { background-color: #173b63 !important; }
 body.dark .text-gray-800 { color: #e5e7eb !important; }
 body.dark .text-gray-900 { color: #f1f5f9 !important; }
 body.dark .text-gray-700 { color: #d1d5db !important; }
-body.dark .text-gray-600 { color: #cbd5e1 !important; }
+body.dark .text-gray-600 { color: #e0e7ff !important; }
 body.dark .text-gray-500 { color: #94a3b8 !important; }
+body.dark label { color: #e0e7ff !important; }
+body.dark h3, body.dark h4 { color: #bfdbfe !important; }
+body.dark .text-blue-800 { color: #93c5fd !important; }
+body.dark .text-blue-900 { color: #bfdbfe !important; }
+body.dark .text-blue-800\/80 { color: #93c5fd !important; opacity: 1 !important; }
 body.dark .text-blue-800 { color: #bfdbfe !important; }
 body.dark .text-blue-600 { color: #93c5fd !important; }
 body.dark .text-blue-500 { color: #60a5fa !important; }
