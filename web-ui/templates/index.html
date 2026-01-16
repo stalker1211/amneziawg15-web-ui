@@ -11,18 +11,27 @@
 </head>
 <body class="bg-gray-100">
     <div class="container mx-auto px-4 py-8">
-        <h1 class="text-3xl font-bold text-gray-800 mb-8">AmneziaWG Web UI</h1>
-
-        <!-- Public IP Display -->
-        <div class="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-3">
-            <div class="flex justify-between items-center">
-                <div>
-                    <span class="text-sm font-medium text-blue-800">Public IP: </span>
-                    <span id="publicIp" class="text-sm text-blue-600">Detecting...</span>
-                </div>
-                <button id="refreshIpBtn" class="text-blue-500 hover:text-blue-700 text-sm">
-                    🔄 Refresh
+        <div class="flex items-center justify-between mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">AmneziaWG Web UI</h1>
+            <div class="flex items-center gap-3">
+                <button id="themeToggleBtn"
+                        class="w-8 h-8 rounded-full bg-gray-100 text-gray-700 hover:bg-gray-200 text-sm flex items-center justify-center transition"
+                        title="Toggle dark theme">
+                    🌙
                 </button>
+                <div class="bg-blue-50 border border-blue-200 rounded-full px-3 py-1 flex items-center gap-2">
+                    <span class="text-sm font-medium text-blue-800">Public IP:</span>
+                    <span id="publicIp" class="text-sm text-blue-600">Detecting...</span>
+                    <button id="refreshIpBtn"
+                            class="w-7 h-7 rounded-full bg-white/80 text-blue-600 hover:text-blue-700 shadow-sm border border-blue-200/70 hover:border-blue-300/80 backdrop-blur flex items-center justify-center transition"
+                            title="Refresh public IP">
+                        <span class="text-[12px] leading-none">↻</span>
+                    </button>
+                </div>
+                <div id="statusFrame" class="flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-full px-3 py-1">
+                    <span id="statusDot" class="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span>
+                    <span id="status" class="text-sm text-gray-600">Disconnected</span>
+                </div>
             </div>
         </div>
 
@@ -30,7 +39,7 @@
         <div class="bg-white rounded-lg shadow-md p-6 mb-6">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xl font-semibold">Servers</h2>
-                <button id="showCreateServerBtn" type="button" class="bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition duration-200">
+                <button id="showCreateServerBtn" type="button" class="btn-pill bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition duration-200">
                     Create new server
                 </button>
             </div>
@@ -55,7 +64,7 @@
                         </button>
                     </div>
 
-                    <form id="serverForm" class="space-y-4">
+                    <form id="serverForm" class="space-y-4" novalidate>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Server Name *</label>
@@ -105,12 +114,21 @@
                     <input type="checkbox" id="enableObfuscation" checked class="mr-2">
                     <label class="text-sm font-medium text-gray-700">Enable Traffic Obfuscation</label>
                 </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="enableNat" checked class="mr-2">
+                    <label class="text-sm font-medium text-gray-700">Enable NAT/MASQUERADE</label>
+                </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="blockLanCidrs" checked class="mr-2">
+                    <label class="text-sm font-medium text-gray-700">Block access to private LAN ranges</label>
+                </div>
+                <p class="text-xs text-gray-500">Changing NAT or LAN blocking requires iptables reapply (handled automatically on server start).</p>
 
                 <!-- Obfuscation Parameters -->
                 <div id="obfuscationParams" class="border rounded-lg p-4 bg-gray-50">
                     <div class="flex items-center justify-between mb-3">
                         <h3 class="text-lg font-medium">Obfuscation Parameters</h3>
-                        <button type="button" id="randomParamsBtn" class="bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600">
+                        <button type="button" id="randomParamsBtn" class="btn-pill bg-gray-500 text-white px-3 py-1 rounded text-sm hover:bg-gray-600">
                             Generate Random Parameters
                         </button>
                     </div>
@@ -185,7 +203,7 @@
                 <div id="obfuscationError" class="text-red-600 text-xs mt-1 hidden"></div>
 
                 <div class="flex space-x-4">
-                    <button type="submit" id="createButton" class="bg-blue-500 text-white px-6 py-2 rounded-md hover:bg-blue-600 transition duration-200">
+                    <button type="submit" id="createButton" class="btn-pill bg-blue-500 text-white px-6 py-2 rounded-md hover:bg-blue-600 transition duration-200">
                         Create Server
                     </button>
                 </div>
@@ -196,11 +214,6 @@
             </div>
         </div>
 
-        <!-- Status -->
-        <div class="mt-8 bg-white rounded-lg shadow-md p-6">
-            <h2 class="text-xl font-semibold mb-4">System Status</h2>
-            <div id="status" class="text-gray-600">Connecting to AmneziaWG Web UI...</div>
-        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}?v={{ cache_bust }}"></script>

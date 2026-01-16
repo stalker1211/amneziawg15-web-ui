@@ -1,5 +1,31 @@
 # CHANGELOG
 
+## Version 1.4.3 (2026-01-15)
+
+### Networking / IPTables
+- NAT and forwarding rules now target the actual WAN interface instead of relying on the `eth+` wildcard.
+- Auto-detect outbound interface from the default route (override with `WAN_IF` if detection fails).
+- Optional LAN access blocking toggle via `BLOCK_LAN_CIDRS` (default: `1`) for common private ranges (`192.168.0.0/16`, `10.0.0.0/8`, `172.16.0.0/12`).
+- Per-server `ENABLE_NAT` and `BLOCK_LAN_CIDRS` settings (defaults still read from env).
+- New API: `POST /api/servers/<server_id>/networking` applies networking changes and reapplies iptables when running.
+- UI: Create-server checkboxes + server config modal toggles for NAT and LAN blocking.
+
+### Tooling
+- `scripts/api_status.py`: simplified output/logic and more robust handling of invalid responses; token auth continues to use `X-API-Token` (compatible with Nginx Basic Auth).
+
+### Docs / Dev
+- Documented `WAN_IF` and `BLOCK_LAN_CIDRS` environment variables in README.
+- `run.sh`: default `ENABLE_NAT=1` in the example run command and clarified `API_TOKEN` usage.
+- Updated screenshot.
+- Docker Compose/run examples now omit IPv6 sysctls for IPv4-only setups.
+
+### UX
+- NAT / LAN Block statuses on the server's card
+- Create-server modal uses JS validation only (native HTML validation disabled) to avoid the “invalid form control is not focusable” error.
+- Header now shows Public IP and connection status on the same line, with a green/red status dot.
+- Added dark theme toggle and refined dark mode contrast (dialogs, headers, refresh button).
+- Rounded “pill” button styling applied across dialogs and controls.
+
 ## Version 1.4.2 - Security hardening + live monitoring (2026-01-14)
 
 ### Security / Auth

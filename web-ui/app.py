@@ -25,6 +25,8 @@ DEFAULT_MTU = int(os.getenv('DEFAULT_MTU', '1280'))
 DEFAULT_SUBNET = os.getenv('DEFAULT_SUBNET', '10.0.0.0/24')
 DEFAULT_PORT = int(os.getenv('DEFAULT_PORT', '51820'))
 DEFAULT_DNS = os.getenv('DEFAULT_DNS', '8.8.8.8,1.1.1.1')
+DEFAULT_ENABLE_NAT = os.getenv('ENABLE_NAT', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+DEFAULT_BLOCK_LAN_CIDRS = os.getenv('BLOCK_LAN_CIDRS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 
 # Parse DNS servers from comma-separated string
 DNS_SERVERS = [dns.strip() for dns in DEFAULT_DNS.split(',') if dns.strip()]
@@ -64,6 +66,8 @@ print(f"DEFAULT_MTU: {DEFAULT_MTU}")
 print(f"DEFAULT_SUBNET: {DEFAULT_SUBNET}")
 print(f"DEFAULT_PORT: {DEFAULT_PORT}")
 print(f"DEFAULT_DNS: {DEFAULT_DNS}")
+print(f"DEFAULT_ENABLE_NAT: {DEFAULT_ENABLE_NAT}")
+print(f"DEFAULT_BLOCK_LAN_CIDRS: {DEFAULT_BLOCK_LAN_CIDRS}")
 print(f"DNS_SERVERS: {DNS_SERVERS}")
 print("==================================")
 print("Fixed Configuration:")
@@ -136,6 +140,21 @@ def require_token(f):
 def _sanitize_config_value(value):
     """Make sure config values are single-line to keep config format intact."""
     return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+
+
+def _to_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ('', 'none', 'null'):
+            return default
+        return s not in ('0', 'false', 'no', 'off')
+    return bool(value)
 
 
 class AmneziaManager:
@@ -326,6 +345,8 @@ class AmneziaManager:
         # Fixed values for other settings
         enable_obfuscation = server_data.get('obfuscation', ENABLE_OBFUSCATION)
         auto_start = server_data.get('auto_start', AUTO_START_SERVERS)
+        enable_nat = _to_bool(server_data.get('enable_nat'), DEFAULT_ENABLE_NAT)
+        block_lan_cidrs = _to_bool(server_data.get('block_lan_cidrs'), DEFAULT_BLOCK_LAN_CIDRS)
 
         server_id = str(uuid.uuid4())[:6]
         interface_name = f"wg-{server_id}"
@@ -393,6 +414,8 @@ H4 = {obfuscation_params['H4']}
             "obfuscation_enabled": enable_obfuscation,
             "obfuscation_params": obfuscation_params,
             "auto_start": auto_start,
+            "enable_nat": enable_nat,
+            "block_lan_cidrs": block_lan_cidrs,
             "dns": dns_servers,  # Store DNS servers
             "clients": [],
             "created_at": time.time()
@@ -444,6 +467,23 @@ H4 = {obfuscation_params['H4']}
 
     def get_server(self, server_id):
         return next((s for s in self.config.get('servers', []) if s.get('id') == server_id), None)
+
+    def reapply_iptables_for_server(self, server):
+        """Reapply iptables rules for a running server after networking changes."""
+        if not server:
+            return False
+        self.cleanup_iptables(
+            server['interface'],
+            server['subnet'],
+            enable_nat=server.get('enable_nat'),
+            block_lan_cidrs=server.get('block_lan_cidrs')
+        )
+        return self.setup_iptables(
+            server['interface'],
+            server['subnet'],
+            enable_nat=server.get('enable_nat'),
+            block_lan_cidrs=server.get('block_lan_cidrs')
+        )
 
     def get_client(self, client_id):
         return self.config.get('clients', {}).get(client_id)
@@ -719,12 +759,18 @@ PersistentKeepalive = 25
 """
         return config
 
-    def setup_iptables(self, interface, subnet):
+    def setup_iptables(self, interface, subnet, enable_nat=None, block_lan_cidrs=None):
         """Setup iptables rules for WireGuard interface"""
         try:
             script_path = "/app/scripts/setup_iptables.sh"
             if os.path.exists(script_path):
-                result = self.execute_command(f"{script_path} {interface} {subnet}")
+                env_parts = []
+                if enable_nat is not None:
+                    env_parts.append(f"ENABLE_NAT={'1' if enable_nat else '0'}")
+                if block_lan_cidrs is not None:
+                    env_parts.append(f"BLOCK_LAN_CIDRS={'1' if block_lan_cidrs else '0'}")
+                env_prefix = (" ".join(env_parts) + " ") if env_parts else ""
+                result = self.execute_command(f"{env_prefix}{script_path} {interface} {subnet}")
                 if result is not None:
                     print(f"iptables setup completed for {interface}")
                     return True
@@ -738,12 +784,18 @@ PersistentKeepalive = 25
             print(f"Error setting up iptables for {interface}: {e}")
             return False
 
-    def cleanup_iptables(self, interface, subnet):
+    def cleanup_iptables(self, interface, subnet, enable_nat=None, block_lan_cidrs=None):
         """Cleanup iptables rules for WireGuard interface"""
         try:
             script_path = "/app/scripts/cleanup_iptables.sh"
             if os.path.exists(script_path):
-                result = self.execute_command(f"{script_path} {interface} {subnet}")
+                env_parts = []
+                if enable_nat is not None:
+                    env_parts.append(f"ENABLE_NAT={'1' if enable_nat else '0'}")
+                if block_lan_cidrs is not None:
+                    env_parts.append(f"BLOCK_LAN_CIDRS={'1' if block_lan_cidrs else '0'}")
+                env_prefix = (" ".join(env_parts) + " ") if env_parts else ""
+                result = self.execute_command(f"{env_prefix}{script_path} {interface} {subnet}")
                 if result is not None:
                     print(f"iptables cleanup completed for {interface}")
                     return True
@@ -768,7 +820,12 @@ PersistentKeepalive = 25
             result = self.execute_command(f"/usr/bin/awg-quick up {server['interface']}")
             if result is not None:
                 # Setup iptables rules
-                iptables_success = self.setup_iptables(server['interface'], server['subnet'])
+                iptables_success = self.setup_iptables(
+                    server['interface'],
+                    server['subnet'],
+                    enable_nat=server.get('enable_nat'),
+                    block_lan_cidrs=server.get('block_lan_cidrs')
+                )
 
                 server['status'] = 'running'
                 self.save_config()
@@ -796,7 +853,12 @@ PersistentKeepalive = 25
 
         try:
             # Cleanup iptables rules first
-            iptables_cleaned = self.cleanup_iptables(server['interface'], server['subnet'])
+            iptables_cleaned = self.cleanup_iptables(
+                server['interface'],
+                server['subnet'],
+                enable_nat=server.get('enable_nat'),
+                block_lan_cidrs=server.get('block_lan_cidrs')
+            )
 
             # Use awg-quick to bring down the interface
             result = self.execute_command(f"/usr/bin/awg-quick down {server['interface']}")
@@ -1328,6 +1390,8 @@ def get_server_info(server_id):
         "mtu": mtu_value,  # Make sure MTU is included
         "obfuscation_enabled": server['obfuscation_enabled'],
         "obfuscation_params": server.get('obfuscation_params', {}),
+        "enable_nat": server.get('enable_nat', DEFAULT_ENABLE_NAT),
+        "block_lan_cidrs": server.get('block_lan_cidrs', DEFAULT_BLOCK_LAN_CIDRS),
         "clients_count": len(server['clients']),
         "created_at": server['created_at'],
         "config_preview": config_preview,
@@ -1336,6 +1400,36 @@ def get_server_info(server_id):
     }
 
     return jsonify(server_info)
+
+
+@app.route('/api/servers/<server_id>/networking', methods=['POST'])
+@require_token
+def update_server_networking(server_id):
+    """Update per-server networking flags (ENABLE_NAT/BLOCK_LAN_CIDRS)."""
+    server = amnezia_manager.get_server(server_id)
+    if not server:
+        return jsonify({"error": "Server not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    enable_nat = _to_bool(data.get('enable_nat'), server.get('enable_nat', DEFAULT_ENABLE_NAT))
+    block_lan_cidrs = _to_bool(data.get('block_lan_cidrs'), server.get('block_lan_cidrs', DEFAULT_BLOCK_LAN_CIDRS))
+
+    server['enable_nat'] = enable_nat
+    server['block_lan_cidrs'] = block_lan_cidrs
+    amnezia_manager.save_config()
+
+    iptables_status = 'skipped'
+    if amnezia_manager.get_server_status(server_id) == 'running':
+        ok = amnezia_manager.reapply_iptables_for_server(server)
+        iptables_status = 'reapplied' if ok else 'failed'
+
+    return jsonify({
+        "status": "updated",
+        "server_id": server_id,
+        "enable_nat": enable_nat,
+        "block_lan_cidrs": block_lan_cidrs,
+        "iptables": iptables_status
+    })
 
 
 @app.route('/api/servers/<server_id>/i-params', methods=['POST'])
@@ -1389,6 +1483,10 @@ def get_servers():
         # Ensure MTU is included in basic server list
         if 'mtu' not in server:
             server['mtu'] = 1420  # Default value
+        if 'enable_nat' not in server:
+            server['enable_nat'] = DEFAULT_ENABLE_NAT
+        if 'block_lan_cidrs' not in server:
+            server['block_lan_cidrs'] = DEFAULT_BLOCK_LAN_CIDRS
 
     amnezia_manager.save_config()
     return jsonify(amnezia_manager.config["servers"])

@@ -1,9 +1,9 @@
 # AmneziaWG Web UI
 
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
-All server configuration is done via web interface or via API endpoints. Providing env variables at docker startup is supported but doesn't make much sense: all settings can be overridden via web interface except for NGINX_PORT and ENABLE_NAT.
+Most server configuration is done via the web interface or API endpoints. However, some defaults are controlled only via environment variables at container startup: `NGINX_PORT`, `API_TOKEN`, `ENABLE_GEOIP`,`WAN_IF`, `ALLOWED_ORIGINS`, (NAT/LAN settings `ENABLE_NAT` and `BLOCK_LAN_CIDRS` are defaults per-server and can be overridden in the UI).
 
-Current version: **1.4.2**
+Current version: **1.4.3**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
@@ -201,6 +201,16 @@ Content-Type: application/json
 
 `GET /api/servers/{server_id}/info`
 
+#### Update per-server NAT/LAN behavior
+
+`POST /api/servers/{server_id}/networking`
+
+Body example:
+
+```json
+{ "enable_nat": true, "block_lan_cidrs": true }
+```
+
 #### Update server default I1–I5 (new clients only)
 
 `POST /api/servers/{server_id}/i-params`
@@ -290,7 +300,9 @@ Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg
 | `DEFAULT_SUBNET` | `10.0.0.0/24` | Default subnet for new servers. Effective only for api requests. For UI management set via UI. |
 | `DEFAULT_PORT` | `51820` | Default port for new servers. Effective only for api requests. For UI management set via UI. |
 | `DEFAULT_DNS` | `8.8.8.8,1.1.1.1` | Default DNS servers for clients. Effective only for api requests. For UI management set via UI. |
-| `ENABLE_NAT` | `1` | Enable NAT/MASQUERADE for VPN subnet (set `0` to disable). |
+| `ENABLE_NAT` | `1` | Default NAT/MASQUERADE setting for new servers (set `0` to disable). Per-server override is available in the UI. |
+| `WAN_IF` | *(auto)* | Outbound/WAN interface used for NAT and forwarding rules. Auto-detected from the default route if unset (set explicitly if detection fails). |
+| `BLOCK_LAN_CIDRS` | `1` | Default LAN-blocking for new servers. Blocks private LAN ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12). Set `0` to allow LAN access. Per-server override is available in the UI. |
 | `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoints (adds country flag + location). Set `0` to disable external requests. |
 | `API_TOKEN` | *(empty)* | Optional API token for `/api/*` endpoints (defense-in-depth). If set, all API requests must include either `X-API-Token: <token>` (recommended when using Nginx Basic Auth) or `Authorization: Bearer <token>`. Generate with: `openssl rand -hex 32` |
 | `ALLOWED_ORIGINS` | *(empty)* | Socket.IO CORS allowed origins. Empty = same-origin only (recommended). Use `*` for development/all origins, or comma-separated list: `http://localhost:3000,https://vpn.example.com` |
@@ -330,9 +342,6 @@ services:
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
-      - net.ipv6.conf.all.disable_ipv6=0
-      - net.ipv6.conf.all.forwarding=1
-      - net.ipv6.conf.default.forwarding=1
     restart: unless-stopped
 volumes:
  amnezia-data:
@@ -347,9 +356,6 @@ docker run -d \
   --cap-add=SYS_MODULE \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-  --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-  --sysctl net.ipv6.conf.all.forwarding=1 \
-  --sysctl net.ipv6.conf.default.forwarding=1 \
   --device /dev/net/tun \
   --restart unless-stopped \
   -p 9090:9090 \

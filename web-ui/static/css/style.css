@@ -1,5 +1,67 @@
 /* AmneziaWG Web UI Custom Styles */
 
+/* Pill buttons (modal/dialog actions) */
+.btn-pill {
+    border-radius: 9999px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    transition: all 0.2s ease;
+}
+
+/* Dark theme base */
+body.dark {
+    background-color: #111827;
+    color: #e5e7eb;
+}
+
+/* Common background/text overrides for Tailwind utility classes */
+body.dark .bg-gray-100 { background-color: #111827 !important; }
+body.dark .bg-white { background-color: #1f2937 !important; }
+body.dark .bg-gray-50 { background-color: #1e293b !important; }
+body.dark .bg-blue-50 { background-color: #123255 !important; }
+body.dark .bg-blue-100 { background-color: #173b63 !important; }
+
+body.dark .text-gray-800 { color: #e5e7eb !important; }
+body.dark .text-gray-900 { color: #f1f5f9 !important; }
+body.dark .text-gray-700 { color: #d1d5db !important; }
+body.dark .text-gray-600 { color: #cbd5e1 !important; }
+body.dark .text-gray-500 { color: #94a3b8 !important; }
+body.dark .text-blue-800 { color: #bfdbfe !important; }
+body.dark .text-blue-600 { color: #93c5fd !important; }
+body.dark .text-blue-500 { color: #60a5fa !important; }
+
+/* Dark mode: header refresh button */
+body.dark #refreshIpBtn {
+    background-color: rgba(30, 58, 95, 0.9);
+    color: #bfdbfe;
+    border-color: rgba(59, 130, 246, 0.4);
+}
+body.dark #refreshIpBtn:hover {
+    background-color: rgba(37, 75, 122, 0.95);
+    color: #dbeafe;
+}
+
+body.dark .border-gray-200 { border-color: #1f2937 !important; }
+body.dark .border-gray-300 { border-color: #334155 !important; }
+body.dark .border-blue-200 { border-color: #1e3a5f !important; }
+body.dark .shadow-md { box-shadow: 0 4px 8px rgba(0,0,0,0.35) !important; }
+
+body.dark input,
+body.dark textarea,
+body.dark select {
+    background-color: #111827;
+    color: #e5e7eb;
+    border-color: #334155;
+}
+
+body.dark input::placeholder,
+body.dark textarea::placeholder {
+    color: #64748b;
+}
+
+body.dark .bg-gray-800 { background-color: #111827 !important; }
+body.dark .bg-gray-900 { background-color: #0f172a !important; }
+body.dark .text-green-400 { color: #86efac !important; }
+
 /* Loading animations */
 .loading {
     animation: pulse 2s infinite;

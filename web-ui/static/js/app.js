@@ -38,6 +38,7 @@ class AmneziaApp {
     init() {
         document.addEventListener('DOMContentLoaded', () => {
             console.log("AmneziaWG Web UI initializing...");
+            this.applyTheme(this.getPreferredTheme(), false);
             this.setupEventListeners();
             this.setupSocketIO();
             this.loadInitialData();
@@ -262,6 +263,13 @@ class AmneziaApp {
             });
         }
 
+        const themeToggleBtn = this.getElement('themeToggleBtn');
+        if (themeToggleBtn) {
+            themeToggleBtn.addEventListener('click', () => {
+                this.toggleTheme();
+            });
+        }
+
         // Random parameters button
         const randomParamsBtn = this.getElement('randomParamsBtn');
         if (randomParamsBtn) {
@@ -290,6 +298,49 @@ class AmneziaApp {
 
         // Form validation listeners
         this.setupFormValidation();
+    }
+
+    getPreferredTheme() {
+        try {
+            const saved = localStorage.getItem('amnezia_theme');
+            if (saved === 'dark') return true;
+            if (saved === 'light') return false;
+        } catch (_) {
+            // ignore
+        }
+
+        return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+
+    applyTheme(isDark, persist = true) {
+        document.body.classList.toggle('dark', !!isDark);
+        this.updateThemeButton(!!isDark);
+
+        if (persist) {
+            try {
+                localStorage.setItem('amnezia_theme', isDark ? 'dark' : 'light');
+            } catch (_) {
+                // ignore
+            }
+        }
+    }
+
+    toggleTheme() {
+        const isDark = document.body.classList.contains('dark');
+        this.applyTheme(!isDark, true);
+    }
+
+    updateThemeButton(isDark) {
+        const btn = this.getElement('themeToggleBtn');
+        if (!btn) return;
+        btn.textContent = isDark ? '☀️' : '🌙';
+        btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
+        btn.classList.toggle('bg-gray-100', !isDark);
+        btn.classList.toggle('bg-gray-800', isDark);
+        btn.classList.toggle('text-gray-700', !isDark);
+        btn.classList.toggle('text-gray-200', isDark);
+        btn.classList.toggle('hover:bg-gray-200', !isDark);
+        btn.classList.toggle('hover:bg-gray-700', isDark);
     }
 
     openCreateServerModal() {
@@ -356,17 +407,17 @@ class AmneziaApp {
 
         this.socket.on('connect', () => {
             console.log("✅ Connected to server via WebSocket");
-            this.updateStatus('Connected to AmneziaWG Web UI');
+            this.updateStatus('Connected to AmneziaWG Web UI', true);
         });
 
         this.socket.on('disconnect', () => {
             console.log("❌ Disconnected from server");
-            this.updateStatus('Disconnected from AmneziaWG Web UI');
+            this.updateStatus('Disconnected from AmneziaWG Web UI', false);
         });
 
         this.socket.on('connect_error', (error) => {
             console.error("❌ WebSocket connection error:", error);
-            this.updateStatus('Connection error - retrying...');
+            this.updateStatus('Connection error - retrying...', false);
         });
 
         this.socket.on('status', (data) => {
@@ -386,10 +437,16 @@ class AmneziaApp {
         });
     }
 
-    updateStatus(message) {
+    updateStatus(message, isConnected = null) {
         const statusElement = this.getElement('status');
         if (statusElement) {
             statusElement.textContent = message;
+        }
+
+        const dot = this.getElement('statusDot');
+        if (dot && typeof isConnected === 'boolean') {
+            dot.classList.toggle('bg-green-500', isConnected);
+            dot.classList.toggle('bg-red-500', !isConnected);
         }
     }
 
@@ -608,6 +665,8 @@ class AmneziaApp {
         const dnsElement = this.getElement('serverDNS');
         const obfuscationElement = this.getElement('enableObfuscation');
         const autoStartElement = this.getElement('autoStart');
+        const enableNatElement = this.getElement('enableNat');
+        const blockLanElement = this.getElement('blockLanCidrs');
 
         const formData = {
             name: nameElement ? nameElement.value.trim() : 'New Server',
@@ -616,7 +675,9 @@ class AmneziaApp {
             mtu: mtuElement ? parseInt(mtuElement.value) : 1420,
             dns: dnsElement ? dnsElement.value.trim() : '8.8.8.8,1.1.1.1',
             obfuscation: obfuscationElement ? obfuscationElement.checked : true,
-            auto_start: autoStartElement ? autoStartElement.checked : true
+            auto_start: autoStartElement ? autoStartElement.checked : true,
+            enable_nat: enableNatElement ? enableNatElement.checked : true,
+            block_lan_cidrs: blockLanElement ? blockLanElement.checked : true
         };
 
         console.log("Form data:", formData);
@@ -793,6 +854,8 @@ class AmneziaApp {
                         <p class="text-sm text-gray-600">
                             ID: ${safe(server.id)} | Port: ${safe(server.port)} | Subnet: ${safe(server.subnet)}
                             ${server.obfuscation_enabled ? '| 🔒 Obfuscated' : ''}
+                            | NAT: ${server.enable_nat ? 'On' : 'Off'}
+                            | LAN Block: ${server.block_lan_cidrs ? 'On' : 'Off'}
                         </p>
                         <p class="text-sm text-gray-500">Public IP: ${safe(server.public_ip)}</p>
                     </div>
@@ -800,22 +863,30 @@ class AmneziaApp {
                         <span class="px-3 py-1 rounded-full text-sm ${
                             server.status === 'running' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                         }">${server.status}</span>
-                        <button onclick="amneziaApp.deleteServer('${server.id}')" class="text-red-500 hover:text-red-700">
-                            🗑️ Delete
+                        <button onclick="amneziaApp.deleteServer('${server.id}')"
+                                class="inline-flex items-center gap-1.5 rounded-full bg-red-50/70 text-red-600 hover:text-red-700 border border-red-200/70 hover:border-red-300 px-3 py-1 text-xs font-medium shadow-sm transition">
+                            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                                <line x1="10" y1="11" x2="10" y2="17"></line>
+                                <line x1="14" y1="11" x2="14" y2="17"></line>
+                            </svg>
+                            Delete
                         </button>
                     </div>
                 </div>
                 <div class="space-x-2 mb-4">
-                    <button onclick="amneziaApp.startServer('${server.id}')" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">
+                    <button onclick="amneziaApp.startServer('${server.id}')" class="btn-pill bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">
                         Start
                     </button>
-                    <button onclick="amneziaApp.stopServer('${server.id}')" class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
+                    <button onclick="amneziaApp.stopServer('${server.id}')" class="btn-pill bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
                         Stop
                     </button>
-                    <button onclick="amneziaApp.addClient('${server.id}')" class="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600">
+                    <button onclick="amneziaApp.addClient('${server.id}')" class="btn-pill bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600">
                         Add Client
                     </button>
-                    <button onclick="amneziaApp.showServerConfig('${server.id}')" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">
+                    <button onclick="amneziaApp.showServerConfig('${server.id}')" class="btn-pill bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">
                         Show Config
                     </button>
                 </div>
@@ -893,31 +964,31 @@ class AmneziaApp {
                             </div>
                         </div>
                         <div class="flex space-x-2">
-                            <button onclick="amneziaApp.showClientQRCode('${serverId}', '${client.id}')"
-                                    class="bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
+                                <button onclick="amneziaApp.showClientQRCode('${serverId}', '${client.id}')"
+                                    class="btn-pill bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
                                     title="Show QR Code">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
                                 </svg>
                                 QR Code
                             </button>
-                            <button onclick="amneziaApp.showClientIParamsModal('${serverId}', '${client.id}')"
-                                    class="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
+                                <button onclick="amneziaApp.showClientIParamsModal('${serverId}', '${client.id}')"
+                                    class="btn-pill bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
                                     title="Edit I1–I5 (client-only)">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l9.586-9.586z"/>
                                 </svg>
                                 I1–I5
                             </button>
-                            <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${client.id}')"
-                                    class="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
+                                <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${client.id}')"
+                                    class="btn-pill bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                                 </svg>
                                 Download
                             </button>
-                            <button onclick="amneziaApp.deleteClient('${serverId}', '${client.id}')"
-                                    class="bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
+                                <button onclick="amneziaApp.deleteClient('${serverId}', '${client.id}')"
+                                    class="btn-pill bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                                 </svg>
@@ -1170,6 +1241,27 @@ class AmneziaApp {
                             </div>
                         </div>
 
+                        <div class="bg-gray-50 p-3 rounded mb-4">
+                            <h4 class="font-semibold text-sm text-gray-700 mb-2">Networking</h4>
+                            <div class="space-y-2 text-sm">
+                                <label class="flex items-center gap-2">
+                                    <input type="checkbox" id="serverEnableNat-${serverInfo.id}" ${serverInfo.enable_nat ? 'checked' : ''}>
+                                    <span>Enable NAT/MASQUERADE</span>
+                                </label>
+                                <label class="flex items-center gap-2">
+                                    <input type="checkbox" id="serverBlockLan-${serverInfo.id}" ${serverInfo.block_lan_cidrs ? 'checked' : ''}>
+                                    <span>Block access to private LAN ranges</span>
+                                </label>
+                                <div class="text-xs text-gray-500">Requires iptables reapply if the server is running.</div>
+                                <div>
+                                        <button onclick="amneziaApp.saveServerNetworking('${serverInfo.id}')"
+                                            class="btn-pill bg-indigo-600 text-white px-3 py-1 rounded text-xs hover:bg-indigo-700">
+                                        Save Networking
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
                         ${serverInfo.obfuscation_enabled ? `
                         <div class="bg-blue-50 p-3 rounded mb-4">
                             <h4 class="font-semibold text-sm text-blue-700 mb-2">Obfuscation Parameters</h4>
@@ -1185,8 +1277,8 @@ class AmneziaApp {
                             <div class="mt-3">
                                 <div class="flex items-center justify-between mb-1">
                                     <h5 class="font-semibold text-xs text-blue-800">I Parameters (client-only)</h5>
-                                    <button onclick="amneziaApp.saveServerIParams('${serverInfo.id}')"
-                                            class="bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">
+                                        <button onclick="amneziaApp.saveServerIParams('${serverInfo.id}')"
+                                            class="btn-pill bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">
                                         Save I1–I5
                                     </button>
                                 </div>
@@ -1217,16 +1309,16 @@ class AmneziaApp {
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t">
-                            <button onclick="amneziaApp.showRawServerConfig('${serverInfo.id}')"
-                                    class="bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600">
+                                <button onclick="amneziaApp.showRawServerConfig('${serverInfo.id}')"
+                                    class="btn-pill bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600">
                                 View Full Config
                             </button>
-                            <button onclick="amneziaApp.downloadServerConfig('${serverInfo.id}')"
-                                    class="bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">
+                                <button onclick="amneziaApp.downloadServerConfig('${serverInfo.id}')"
+                                    class="btn-pill bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">
                                 Download Config
                             </button>
-                            <button onclick="amneziaApp.closeModal()"
-                                    class="bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
+                                <button onclick="amneziaApp.closeModal()"
+                                    class="btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
                                 Close
                             </button>
                         </div>
@@ -1272,6 +1364,39 @@ class AmneziaApp {
         }
     }
 
+    async saveServerNetworking(serverId) {
+        const enableNatEl = document.getElementById(`serverEnableNat-${serverId}`);
+        const blockLanEl = document.getElementById(`serverBlockLan-${serverId}`);
+        const payload = {
+            enable_nat: enableNatEl ? enableNatEl.checked : true,
+            block_lan_cidrs: blockLanEl ? blockLanEl.checked : true
+        };
+
+        try {
+            const response = await this.apiFetch(`/api/servers/${serverId}/networking`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || 'Failed to update networking');
+            }
+
+            const data = await response.json();
+            const ipt = data?.iptables || 'skipped';
+            const msg = ipt === 'failed'
+                ? 'Networking updated, but iptables reapply failed.'
+                : (ipt === 'reapplied' ? 'Networking updated and iptables reapplied.' : 'Networking updated.');
+            this.showTempMessage(msg, ipt === 'failed' ? 'error' : 'success');
+            this.loadServers();
+        } catch (error) {
+            console.error('Error updating server networking:', error);
+            this.showTempMessage('Failed to update networking: ' + (error?.message || error), 'error');
+        }
+    }
+
     async showClientIParamsModal(serverId, clientId) {
         const cached = (this.serverClients.get(serverId) || []).find((c) => c.id === clientId);
         const safeName = this.escapeHtml(cached?.name || clientId);
@@ -1301,12 +1426,12 @@ class AmneziaApp {
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t mt-4">
-                            <button onclick="amneziaApp.saveClientIParams('${serverId}', '${clientId}')"
-                                    class="bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
+                                <button onclick="amneziaApp.saveClientIParams('${serverId}', '${clientId}')"
+                                    class="btn-pill bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
                                 Save I1–I5
                             </button>
-                            <button onclick="amneziaApp.closeModal()"
-                                    class="bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
+                                <button onclick="amneziaApp.closeModal()"
+                                    class="btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
                                 Close
                             </button>
                         </div>
@@ -1395,7 +1520,7 @@ class AmneziaApp {
                             <div class="flex justify-between items-center mb-2">
                                 <span class="text-sm text-gray-600">Config path: ${safe(config.config_path)}</span>
                                 <button onclick="amneziaApp.copyToClipboard('${btoa(JSON.stringify(config))}')"
-                                        class="bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
+                                    class="btn-pill bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600">
                                     Copy JSON
                                 </button>
                             </div>
@@ -1403,12 +1528,12 @@ class AmneziaApp {
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t">
-                            <button onclick="amneziaApp.downloadServerConfig('${config.server_id}')"
-                                    class="bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">
+                                <button onclick="amneziaApp.downloadServerConfig('${config.server_id}')"
+                                    class="btn-pill bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">
                                 Download Config
                             </button>
-                            <button onclick="amneziaApp.closeModal()"
-                                    class="bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
+                                <button onclick="amneziaApp.closeModal()"
+                                    class="btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
                                 Close
                             </button>
                         </div>
@@ -1457,8 +1582,8 @@ class AmneziaApp {
                                 </div>
                                 <!-- Download QR Code button outside the box -->
                                 <div class="mt-4 text-center">
-                                    <button onclick="amneziaApp.downloadQRCode()"
-                                            class="inline-flex items-center bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 shadow hover:shadow-lg transform hover:-translate-y-0.5">
+                                        <button onclick="amneziaApp.downloadQRCode()"
+                                            class="btn-pill inline-flex items-center bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 shadow hover:shadow-lg transform hover:-translate-y-0.5">
                                         <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
                                         </svg>
@@ -1473,12 +1598,12 @@ class AmneziaApp {
                                     <div class="flex items-center justify-between mb-2">
                                         <label class="block text-sm font-medium text-gray-700">Configuration Text</label>
                                         <div class="flex space-x-2">
-                                            <button onclick="amneziaApp.toggleConfigView()"
-                                                    class="text-blue-500 hover:text-blue-700 text-sm font-medium px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors duration-200">
+                                                <button onclick="amneziaApp.toggleConfigView()"
+                                                    class="btn-pill text-blue-500 hover:text-blue-700 text-sm font-medium px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors duration-200">
                                                 Toggle View
                                             </button>
-                                            <button onclick="amneziaApp.copyConfigText()"
-                                                    class="bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-200 shadow hover:shadow-md">
+                                                <button onclick="amneziaApp.copyConfigText()"
+                                                    class="btn-pill bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-200 shadow hover:shadow-md">
                                                 Copy Config
                                             </button>
                                         </div>
@@ -1495,15 +1620,15 @@ class AmneziaApp {
                         </div>
                         
                         <div class="flex justify-end space-x-4 w-full pt-6 border-t border-gray-200">
-                            <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${clientId}')"
-                                    class="bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 shadow hover:shadow-lg transform hover:-translate-y-0.5">
+                                <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${clientId}')"
+                                    class="btn-pill bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 shadow hover:shadow-lg transform hover:-translate-y-0.5">
                                 <svg class="w-5 h-5 inline mr-2 -mt-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                                 </svg>
                                 Download Config File (.conf)
                             </button>
-                            <button onclick="amneziaApp.closeQRModal()"
-                                    class="bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 shadow hover:shadow-lg">
+                                <button onclick="amneziaApp.closeQRModal()"
+                                    class="btn-pill bg-gradient-to-r from-gray-500 to-gray-600 hover:from-gray-600 hover:to-gray-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all duration-200 shadow hover:shadow-lg">
                                 Close
                             </button>
                         </div>
