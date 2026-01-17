@@ -3,7 +3,7 @@
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
 Most server configuration is done via the web interface or API endpoints. However, some defaults are controlled only via environment variables at container startup: `NGINX_PORT`, `API_TOKEN`, `ENABLE_GEOIP`,`WAN_IF`, `ALLOWED_ORIGINS`, (NAT/LAN settings `ENABLE_NAT` and `BLOCK_LAN_CIDRS` are defaults per-server and can be overridden in the UI).
 
-Current version: **1.4.3**
+Current version: **1.5**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
@@ -20,6 +20,17 @@ Current version: **1.4.3**
 *   **QR code**: Client can be viewed, copied and downloaded via text, file or QR code (with size limits)
 *   **Config view**: Both servers' and clients' configs can be viewed directly from UI
 *   **Client-only I1–I5**: I1–I5 are stored and applied to client configs only (server has defaults; each client can override)
+*   **S3/S4 supported (experimental)**: UI/API support `S3`/`S4`, but current AmneziaWG build (amneziavpn/amneziawg-go) appear to reject/ignore connections when `S3`/`S4` are set to non-empty values. This UI leaves `S3`/`S4` empty by default.
+*   **AWG logs viewer**: Per-server “View Logs” modal with auto-refresh and interface-aware filtering.
+
+## 📝 Logs (amneziawg-go)
+
+AmneziaWG userspace logs are produced by `amneziawg-go` and are only visible when `LOG_LEVEL` is set. This container exposes a safe wrapper controlled by env vars:
+
+- `AWG_LOG_LEVEL`: `debug|verbose|error|silent` to enable logs (empty/`off` disables).
+- `AWG_LOG_FILE`: log file path (default: `/var/log/amnezia/amneziawg-go.log`).
+
+Once enabled, use **Server → View Logs** in the UI. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
 
 ## 🏗️ Architecture
 
@@ -159,6 +170,8 @@ Content-Type: application/json
     "Jmax": 80,
     "S1": 50,
     "S2": 60,
+    "S3": null,
+    "S4": null,
     "H1": 1000,
     "H2": 2000,
     "H3": 3000,
@@ -172,6 +185,18 @@ Content-Type: application/json
   }
 }
 ```
+
+Note: `S3`/`S4` are optional. In this Web UI, `null`/empty means the parameter is omitted from generated configs. Due to observed connectivity issues with non-empty `S3`/`S4` on some AmneziaWG versions, leaving them empty is currently recommended.
+
+### Obfuscation compatibility notes (experimental)
+
+Official AmneziaWG documentation is somewhat vague about which obfuscation parameters must match between server and client.
+Based on experiments with this Web UI:
+
+- `S1` and `S2` appear to **require strict equality** between server and client. If `S1`/`S2` differ, the connection may fail.
+- Other parameters (`J*`, `H*`, `I*`) appear to be **more tolerant** (connections may still work even if values differ), but this may depend on the specific AmneziaWG build/version.
+
+If you observe different behavior on your AmneziaWG version, please share logs/output so this note can be refined.
 
 #### List Servers
 
@@ -481,5 +506,3 @@ By default, docker image is built with user `admin` and password `changeme`. To 
 
 # Support
 The NO support provided as well as no regular updates are planned. Found issues can be fixed if free time permits.
-
-From Russia with L❤️VE

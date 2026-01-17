@@ -8,6 +8,7 @@ import base64
 import random
 import requests
 import re
+from collections import deque
 from flask import Flask, render_template, request, jsonify, send_file, send_from_directory
 from flask_socketio import SocketIO
 import threading
@@ -27,6 +28,7 @@ DEFAULT_PORT = int(os.getenv('DEFAULT_PORT', '51820'))
 DEFAULT_DNS = os.getenv('DEFAULT_DNS', '8.8.8.8,1.1.1.1')
 DEFAULT_ENABLE_NAT = os.getenv('ENABLE_NAT', '1').strip().lower() not in ('0', 'false', 'no', 'off')
 DEFAULT_BLOCK_LAN_CIDRS = os.getenv('BLOCK_LAN_CIDRS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+AWG_LOG_FILE = os.getenv('AWG_LOG_FILE', '/var/log/amnezia/amneziawg-go.log')
 
 # Parse DNS servers from comma-separated string
 DNS_SERVERS = [dns.strip() for dns in DEFAULT_DNS.split(',') if dns.strip()]
@@ -239,7 +241,11 @@ class AmneziaManager:
                 current_status = self.get_server_status(server['id'])
                 if current_status == 'stopped' and server.get('auto_start', True):
                     print(f"Auto-starting server: {server['name']}")
-                    self.start_server(server['id'])
+                    try:
+                        self.start_server(server['id'])
+                    except Exception as e:
+                        # Never crash the Web UI on boot due to a VPN startup failure.
+                        print(f"Auto-start failed for server '{server.get('name', server.get('id'))}': {e}")
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -293,6 +299,9 @@ class AmneziaManager:
         # S2 must not be S1+56
         s2_candidates = [s for s in range(15, min(150, mtu - 92) + 1) if s != S1 + 56]
         S2 = random.choice(s2_candidates)
+        # S3/S4: message paddings (same value-space as S1/S2)
+        S3 = random.randint(15, 150)
+        S4 = random.randint(15, 150)
         Jmin = random.randint(4, mtu - 2)
         Jmax = random.randint(Jmin + 1, mtu)
         return {
@@ -301,6 +310,8 @@ class AmneziaManager:
             "Jmax": Jmax,
             "S1": S1,
             "S2": S2,
+            "S3": S3,
+            "S4": S4,
             "H1": random.randint(10000, 100000),
             "H2": random.randint(100000, 200000),
             "H3": random.randint(200000, 300000),
@@ -386,11 +397,17 @@ MTU = {mtu}
         # Add obfuscation parameters if enabled
         if enable_obfuscation and obfuscation_params:
 
+            def _opt_line(key):
+                # Allow empty/omitted S params: AWG treats missing as 0.
+                v = obfuscation_params.get(key, None)
+                if v is None or v == '':
+                    return ""
+                return f"{key} = {v}\n"
+
             server_config_content += f"""Jc = {obfuscation_params['Jc']}
 Jmin = {obfuscation_params['Jmin']}
 Jmax = {obfuscation_params['Jmax']}
-S1 = {obfuscation_params['S1']}
-S2 = {obfuscation_params['S2']}
+{_opt_line('S1')}{_opt_line('S2')}{_opt_line('S3')}{_opt_line('S4')}H1 = {obfuscation_params['H1']}
 H1 = {obfuscation_params['H1']}
 H2 = {obfuscation_params['H2']}
 H3 = {obfuscation_params['H3']}
@@ -434,6 +451,190 @@ H4 = {obfuscation_params['H4']}
             self.start_server(server_id)
 
         return server_config
+
+    def _build_server_config_content(self, server):
+        """Build full server config content (Interface + all Peer blocks)."""
+        subnet = server.get('subnet', DEFAULT_SUBNET)
+        subnet_parts = str(subnet).split('/')
+        prefix = subnet_parts[1] if len(subnet_parts) > 1 else "24"
+
+        server_ip = server.get('server_ip') or self.get_server_ip(subnet_parts[0])
+        mtu = int(server.get('mtu', DEFAULT_MTU))
+        port = int(server.get('port', DEFAULT_PORT))
+
+        content = f"""[Interface]
+PrivateKey = {server['server_private_key']}
+Address = {server_ip}/{prefix}
+ListenPort = {port}
+SaveConfig = false
+MTU = {mtu}
+"""
+
+        if server.get('obfuscation_enabled') and isinstance(server.get('obfuscation_params'), dict):
+            p = server.get('obfuscation_params') or {}
+
+            def _opt_line(key):
+                v = p.get(key, None)
+                if v is None or v == '':
+                    return ""
+                return f"{key} = {v}\n"
+
+            content += f"""Jc = {p.get('Jc', 0)}
+Jmin = {p.get('Jmin', 0)}
+Jmax = {p.get('Jmax', 0)}
+{_opt_line('S1')}{_opt_line('S2')}{_opt_line('S3')}{_opt_line('S4')}H1 = {p.get('H1', 0)}
+H2 = {p.get('H2', 0)}
+H3 = {p.get('H3', 0)}
+H4 = {p.get('H4', 0)}
+"""
+
+        for client in (server.get('clients') or []):
+            try:
+                content += f"""
+
+# Client: {client.get('name', client.get('id', 'client'))}
+[Peer]
+PublicKey = {client['client_public_key']}
+PresharedKey = {client['preshared_key']}
+AllowedIPs = {client['client_ip']}/32
+"""
+            except Exception as e:
+                print(f"Failed to render client peer block: {e}")
+
+        return content
+
+    def update_server_obfuscation_params(self, server_id, params):
+        """Update server obfuscation params, rewrite server config file, and restart if running.
+
+        This updates server AND all existing clients' shared obfuscation params (J/S/H).
+        Per-client I1-I5 are preserved.
+        """
+        server = self.get_server(server_id)
+        if not server:
+            return None
+
+        if not server.get('obfuscation_enabled'):
+            raise ValueError('Obfuscation is disabled for this server')
+
+        if not isinstance(params, dict):
+            raise ValueError('Invalid payload')
+
+        mtu = int(server.get('mtu', DEFAULT_MTU))
+
+        def as_int(key):
+            if key not in params:
+                raise ValueError(f"Missing '{key}'")
+            try:
+                return int(params.get(key))
+            except Exception as exc:
+                raise ValueError(f"'{key}' must be an integer") from exc
+
+        def as_opt_int(key):
+            # Allow null/empty string to mean “unset” (omit from config)
+            if key not in params:
+                return None
+            value = params.get(key)
+            if value is None:
+                return None
+            if isinstance(value, str) and value.strip() == '':
+                return None
+            try:
+                return int(value)
+            except Exception as exc:
+                raise ValueError(f"'{key}' must be an integer or empty") from exc
+
+        next_params = {
+            'Jc': as_int('Jc'),
+            'Jmin': as_int('Jmin'),
+            'Jmax': as_int('Jmax'),
+            'S1': as_opt_int('S1'),
+            'S2': as_opt_int('S2'),
+            'S3': as_opt_int('S3'),
+            'S4': as_opt_int('S4'),
+            'H1': as_int('H1'),
+            'H2': as_int('H2'),
+            'H3': as_int('H3'),
+            'H4': as_int('H4'),
+        }
+
+        # Validation (aligned with frontend rules)
+        if not (4 <= next_params['Jc'] <= 12):
+            raise ValueError(f"Jc must be in [4, 12], got {next_params['Jc']}")
+
+        if not (next_params['Jmin'] < next_params['Jmax'] and next_params['Jmax'] <= mtu and next_params['Jmin'] < mtu):
+            raise ValueError(f"Jmin/Jmax invalid for MTU {mtu}: Jmin={next_params['Jmin']}, Jmax={next_params['Jmax']}")
+
+        if next_params['S1'] is not None:
+            if not (15 <= next_params['S1'] <= 150 and next_params['S1'] <= (mtu - 148)):
+                raise ValueError(f"S1 must be in [15, 150] and ≤ (MTU - 148) ({mtu - 148}), got {next_params['S1']}")
+
+        if next_params['S2'] is not None:
+            if not (15 <= next_params['S2'] <= 150 and next_params['S2'] <= (mtu - 92)):
+                raise ValueError(f"S2 must be in [15, 150] and ≤ (MTU - 92) ({mtu - 92}), got {next_params['S2']}")
+
+        if next_params['S1'] is not None and next_params['S2'] is not None:
+            if next_params['S1'] + 56 == next_params['S2']:
+                raise ValueError(f"S1 + 56 must not equal S2 (S1={next_params['S1']}, S2={next_params['S2']})")
+
+        for k in ('S3', 'S4'):
+            if next_params[k] is not None and not (15 <= next_params[k] <= 150):
+                raise ValueError(f"{k} must be in [15, 150], got {next_params[k]}")
+
+        for k in ('H1', 'H2', 'H3', 'H4'):
+            if next_params[k] < 0:
+                raise ValueError(f"{k} must be non-negative")
+
+        # Apply to server (preserve I1-I5). Allow clearing S params.
+        if not isinstance(server.get('obfuscation_params'), dict):
+            server['obfuscation_params'] = {}
+        for k, v in next_params.items():
+            if k in ('S1', 'S2', 'S3', 'S4') and v is None:
+                server['obfuscation_params'].pop(k, None)
+            else:
+                server['obfuscation_params'][k] = v
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            server['obfuscation_params'].setdefault(key, "")
+
+        # Apply to embedded server clients + global client dict (preserve per-client I1-I5)
+        def apply_to_client_obj(client_obj):
+            if not isinstance(client_obj, dict):
+                return
+            if not isinstance(client_obj.get('obfuscation_params'), dict):
+                client_obj['obfuscation_params'] = {}
+            for k, v in next_params.items():
+                if k in ('S1', 'S2', 'S3', 'S4') and v is None:
+                    client_obj['obfuscation_params'].pop(k, None)
+                else:
+                    client_obj['obfuscation_params'][k] = v
+            for key in ("I1", "I2", "I3", "I4", "I5"):
+                client_obj['obfuscation_params'].setdefault(key, "")
+
+        for embedded in (server.get('clients') or []):
+            apply_to_client_obj(embedded)
+            cid = embedded.get('id')
+            if cid and isinstance(self.config.get('clients'), dict) and cid in self.config['clients']:
+                apply_to_client_obj(self.config['clients'][cid])
+
+        # Rewrite server config file
+        content = self._build_server_config_content(server)
+        with open(server['config_path'], 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        self.save_config()
+
+        # Restart if running
+        was_running = self.get_server_status(server_id) == 'running'
+        restarted = False
+        if was_running:
+            if self.stop_server(server_id):
+                restarted = bool(self.start_server(server_id))
+
+        return {
+            'status': 'updated',
+            'server_id': server_id,
+            'was_running': was_running,
+            'restarted': restarted
+        }
     
     def apply_live_config(self, interface):
         """Apply the latest config to the running WireGuard interface using wg syncconf."""
@@ -729,21 +930,25 @@ MTU = {server['mtu']}
         if client_config['obfuscation_enabled'] and client_config['obfuscation_params']:
             params = client_config['obfuscation_params']
 
+            def _opt_line(key):
+                v = params.get(key, None)
+                if v is None or v == '':
+                    return ""
+                return f"{key} = {v}\n"
+
             i_lines = []
             for key in ("I1", "I2", "I3", "I4", "I5"):
                 value = _sanitize_config_value(params.get(key, ''))
                 if value:
                     i_lines.append(f"{key} = {value}")
 
-            config += f"""Jc = {params['Jc']}
-Jmin = {params['Jmin']}
-Jmax = {params['Jmax']}
-S1 = {params['S1']}
-S2 = {params['S2']}
-H1 = {params['H1']}
-H2 = {params['H2']}
-H3 = {params['H3']}
-H4 = {params['H4']}
+            config += f"""Jc = {params.get('Jc', 0)}
+Jmin = {params.get('Jmin', 0)}
+Jmax = {params.get('Jmax', 0)}
+{_opt_line('S1')}{_opt_line('S2')}{_opt_line('S3')}{_opt_line('S4')}H1 = {params.get('H1', 0)}
+H2 = {params.get('H2', 0)}
+H3 = {params.get('H3', 0)}
+H4 = {params.get('H4', 0)}
 """
 
             if i_lines:
@@ -1289,6 +1494,92 @@ def system_status():
     }
     return jsonify(status)
 
+
+@app.route('/api/system/awg-log')
+@require_token
+def get_awg_log():
+    """Tail amneziawg-go log with optional interface filtering.
+
+    Filtering rules:
+    - If interface is set, include lines that match that interface marker ("(wg0)" or "*** (wg0) ***").
+    - Always include general lines that do not mention any interface.
+    """
+    interface = (request.args.get('interface') or '').strip()
+    raw_lines = request.args.get('lines', '400')
+    try:
+        lines_n = int(raw_lines)
+    except Exception:
+        lines_n = 400
+    lines_n = max(50, min(5000, lines_n))
+
+    log_path = AWG_LOG_FILE or '/var/log/amnezia/amneziawg-go.log'
+    if not os.path.exists(log_path):
+        return jsonify({"path": log_path, "lines": [], "note": "log file not found"})
+
+    # Pre-compile interface detection regexes.
+    iface_any_re = re.compile(r"\([A-Za-z0-9_.=+\-]{1,15}\)")
+    iface_star_any_re = re.compile(r"\*\*\*\s*\([A-Za-z0-9_.=+\-]{1,15}\)\s*\*\*\*")
+
+    iface_token = f"({interface})" if interface else ""
+    iface_star = f"*** ({interface}) ***" if interface else ""
+    start_iface_re = re.compile(r"\bstarting:\s*([A-Za-z0-9_.=+\-]{1,15})\b")
+
+    def line_mentions_any_interface(line: str) -> bool:
+        return bool(iface_any_re.search(line) or iface_star_any_re.search(line))
+
+    def line_matches_interface(line: str) -> bool:
+        if not interface:
+            return True
+        return (iface_token in line) or (iface_star in line)
+
+    def is_global_noise(line: str) -> bool:
+        stripped = line.strip()
+        if "[amneziawg-go-logged]" in line:
+            return True
+        if stripped.startswith("┌") or stripped.startswith("└") or stripped.startswith("│"):
+            return True
+        if stripped.startswith("| https://github.com/amnezia-vpn/amneziawg-linux-kernel-module"):
+            return True
+        if "amneziawg-go is not required" in line:
+            return True
+        if "kernel has first class support for AmneziaWG" in line:
+            return True
+        return False
+
+    try:
+        buf = deque(maxlen=lines_n)
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            for ln in f:
+                buf.append(ln.rstrip('\n'))
+
+        if not interface:
+            filtered = list(buf)
+        else:
+            filtered = []
+            banner_iface = None
+            banner_active = False
+            for ln in buf:
+                sm = start_iface_re.search(ln)
+                if sm:
+                    banner_iface = sm.group(1)
+                    banner_active = True
+
+                if line_matches_interface(ln):
+                    filtered.append(ln)
+                elif not line_mentions_any_interface(ln):
+                    if is_global_noise(ln):
+                        if banner_active and banner_iface == interface:
+                            filtered.append(ln)
+                    else:
+                        filtered.append(ln)
+
+                if banner_active and ln.strip().startswith("└"):
+                    banner_active = False
+
+        return jsonify({"path": log_path, "lines": filtered, "interface": interface, "total": len(filtered)})
+    except Exception as e:
+        return jsonify({"error": str(e), "path": log_path}), 500
+
 @app.route('/api/system/refresh-ip')
 @require_token
 def refresh_ip():
@@ -1400,6 +1691,21 @@ def get_server_info(server_id):
     }
 
     return jsonify(server_info)
+
+
+@app.route('/api/servers/<server_id>/obfuscation-params', methods=['POST'])
+@require_token
+def update_server_obfuscation_params(server_id):
+    data = request.get_json(silent=True) or {}
+    try:
+        result = amnezia_manager.update_server_obfuscation_params(server_id, data)
+        if not result:
+            return jsonify({"error": "Server not found"}), 404
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Failed to update obfuscation params: {str(e)}"}), 500
 
 
 @app.route('/api/servers/<server_id>/networking', methods=['POST'])

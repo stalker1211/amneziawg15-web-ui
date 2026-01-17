@@ -50,6 +50,8 @@ docker run "${RUN_FLAGS[@]}" \
 	-e NGINX_PORT=8090 \
 	-e NGINX_USER=admin \
 	-e NGINX_PASSWORD=changeme \
+	-e AWG_LOG_LEVEL="${AWG_LOG_LEVEL:-}" \
+	-e AWG_LOG_FILE="${AWG_LOG_FILE:-}" \
 	-e API_TOKEN="${API_TOKEN:-}" \
 	-v amnezia-data:/etc/amnezia \
 	"${IMAGE_NAME}" \

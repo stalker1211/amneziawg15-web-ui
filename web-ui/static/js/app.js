@@ -5,6 +5,7 @@ class AmneziaApp {
         this.lastServers = [];
         this.serverClients = new Map();
         this.lastTrafficByServer = new Map();
+        this.logPoller = null;
         this.init();
     }
 
@@ -474,6 +475,8 @@ class AmneziaApp {
         const jcElement = this.getElement('paramJc');
         const s1Element = this.getElement('paramS1');
         const s2Element = this.getElement('paramS2');
+        const s3Element = this.getElement('paramS3');
+        const s4Element = this.getElement('paramS4');
         const h1Element = this.getElement('paramH1');
         const h2Element = this.getElement('paramH2');
         const h3Element = this.getElement('paramH3');
@@ -482,6 +485,8 @@ class AmneziaApp {
         if (jcElement) jcElement.value = Math.floor(Math.random() * 9) + 4; // 4-12
         if (s1Element) s1Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
         if (s2Element) s2Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
+        if (s3Element) s3Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
+        if (s4Element) s4Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
         
         // Generate unique H values
         const hValues = new Set();
@@ -512,6 +517,11 @@ class AmneziaApp {
     validateObfuscationParamsJS(params, mtu) {
         let errors = [];
 
+        // Jc in recommended range 4-12
+        if (!(params.Jc >= 4 && params.Jc <= 12)) {
+            errors.push(`Jc (${params.Jc}) must be in [4, 12]`);
+        }
+
         // Jmin < Jmax ≤ mtu
         if (!(params.Jmin < params.Jmax && params.Jmax <= mtu)) {
             errors.push(`Jmin (${params.Jmin}) must be less than Jmax (${params.Jmax}), and Jmax ≤ MTU (${mtu})`);
@@ -520,16 +530,29 @@ class AmneziaApp {
         if (!(params.Jmax > params.Jmin && params.Jmin < mtu)) {
             errors.push(`Jmax (${params.Jmax}) must be greater than Jmin (${params.Jmin}), and Jmin < MTU (${mtu})`);
         }
-        // S1 ≤ (mtu - 148) and in the range from 15 to 150
-        if (!(params.S1 <= (mtu - 148) && params.S1 >= 15 && params.S1 <= 150)) {
+        const hasS1 = Number.isFinite(params.S1);
+        const hasS2 = Number.isFinite(params.S2);
+        const hasS3 = Number.isFinite(params.S3);
+        const hasS4 = Number.isFinite(params.S4);
+
+        // S1 ≤ (mtu - 148) and in the range from 15 to 150 (optional)
+        if (hasS1 && !(params.S1 <= (mtu - 148) && params.S1 >= 15 && params.S1 <= 150)) {
             errors.push(`S1 (${params.S1}) must be in [15, 150] and ≤ (MTU - 148) (${mtu - 148})`);
         }
-        // S2 ≤ (mtu - 92) and in the range from 15 to 150
-        if (!(params.S2 <= (mtu - 92) && params.S2 >= 15 && params.S2 <= 150)) {
+        // S2 ≤ (mtu - 92) and in the range from 15 to 150 (optional)
+        if (hasS2 && !(params.S2 <= (mtu - 92) && params.S2 >= 15 && params.S2 <= 150)) {
             errors.push(`S2 (${params.S2}) must be in [15, 150] and ≤ (MTU - 92) (${mtu - 92})`);
         }
-        // S1 + 56 ≠ S2
-        if (params.S1 + 56 === params.S2) {
+        // S3 in the range from 15 to 150 (optional)
+        if (hasS3 && !(params.S3 >= 15 && params.S3 <= 150)) {
+            errors.push(`S3 (${params.S3}) must be in [15, 150]`);
+        }
+        // S4 in the range from 15 to 150 (optional)
+        if (hasS4 && !(params.S4 >= 15 && params.S4 <= 150)) {
+            errors.push(`S4 (${params.S4}) must be in [15, 150]`);
+        }
+        // S1 + 56 ≠ S2 (only when both present)
+        if (hasS1 && hasS2 && (params.S1 + 56 === params.S2)) {
             errors.push(`S1 + 56 (${params.S1 + 56}) must not equal S2 (${params.S2})`);
         }
 
@@ -684,12 +707,21 @@ class AmneziaApp {
 
         // Add obfuscation parameters if enabled
         if (formData.obfuscation) {
+            const toOptionalInt = (raw) => {
+                const s = String(raw ?? '').trim();
+                if (!s) return null;
+                const n = parseInt(s, 10);
+                return Number.isFinite(n) ? n : null;
+            };
+
             formData.obfuscation_params = {
                 Jc: parseInt(this.getElement('paramJc')?.value || '8'),
                 Jmin: parseInt(this.getElement('paramJmin')?.value || '8'),
                 Jmax: parseInt(this.getElement('paramJmax')?.value || '80'),
-                S1: parseInt(this.getElement('paramS1')?.value || '50'),
-                S2: parseInt(this.getElement('paramS2')?.value || '60'),
+                S1: toOptionalInt(this.getElement('paramS1')?.value),
+                S2: toOptionalInt(this.getElement('paramS2')?.value),
+                S3: toOptionalInt(this.getElement('paramS3')?.value),
+                S4: toOptionalInt(this.getElement('paramS4')?.value),
                 H1: parseInt(this.getElement('paramH1')?.value || '1000'),
                 H2: parseInt(this.getElement('paramH2')?.value || '2000'),
                 H3: parseInt(this.getElement('paramH3')?.value || '3000'),
@@ -864,7 +896,7 @@ class AmneziaApp {
                             server.status === 'running' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                         }">${server.status}</span>
                         <button onclick="amneziaApp.deleteServer('${server.id}')"
-                                class="inline-flex items-center gap-1.5 rounded-full bg-red-50/70 text-red-600 hover:text-red-700 border border-red-200/70 hover:border-red-300 px-3 py-1 text-xs font-medium shadow-sm transition">
+                            class="inline-flex items-center gap-1.5 rounded-full bg-red-50/70 text-red-600 hover:text-red-700 border border-red-200/70 hover:border-red-300 px-3 py-1.5 text-xs font-medium shadow-sm transition">
                             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                 <polyline points="3 6 5 6 21 6"></polyline>
                                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -877,17 +909,20 @@ class AmneziaApp {
                     </div>
                 </div>
                 <div class="space-x-2 mb-4">
-                    <button onclick="amneziaApp.startServer('${server.id}')" class="btn-pill bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">
+                    <button onclick="amneziaApp.startServer('${server.id}')" class="btn-pill bg-green-500 text-white px-3.5 py-1.5 rounded-full text-sm hover:bg-green-600">
                         Start
                     </button>
-                    <button onclick="amneziaApp.stopServer('${server.id}')" class="btn-pill bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">
+                    <button onclick="amneziaApp.stopServer('${server.id}')" class="btn-pill bg-red-500 text-white px-3.5 py-1.5 rounded-full text-sm hover:bg-red-600">
                         Stop
                     </button>
-                    <button onclick="amneziaApp.addClient('${server.id}')" class="btn-pill bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600">
+                    <button onclick="amneziaApp.addClient('${server.id}')" class="btn-pill bg-blue-500 text-white px-3.5 py-1.5 rounded-full text-sm hover:bg-blue-600">
                         Add Client
                     </button>
-                    <button onclick="amneziaApp.showServerConfig('${server.id}')" class="btn-pill bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">
+                    <button onclick="amneziaApp.showServerConfig('${server.id}')" class="btn-pill bg-purple-500 text-white px-3.5 py-1.5 rounded-full text-sm hover:bg-purple-600">
                         Show Config
+                    </button>
+                    <button onclick="amneziaApp.showServerLogs('${server.id}', '${server.interface || ''}')" class="btn-pill bg-slate-700 text-white px-3.5 py-1.5 rounded-full text-sm hover:bg-slate-800">
+                        View Logs
                     </button>
                 </div>
                 <div id="clients-${server.id}">
@@ -939,33 +974,33 @@ class AmneziaApp {
                             </div>
                             <div class="flex items-center space-x-2">
                                 <div class="flex flex-col">
-                                    <span class="font-medium flex items-center gap-2">
+                                    <span class="font-medium flex items-center gap-2 flex-wrap">
                                         <span class="inline-block w-2 h-2 rounded-full ${isActive ? 'bg-green-500' : 'bg-red-500'}" title="${isActive ? 'active (≤ 5 minutes)' : 'inactive'}"></span>
                                         <span>${safe(client.name)} <span class="text-sm text-gray-600">(${safe(client.client_ip)})</span></span>
+                                        <span class="text-xs text-gray-500">
+                                            <span class="traffic-arrow ${rxFlashClass}" aria-label="received">
+                                                <svg class="traffic-arrow-icon traffic-arrow-icon-rx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path fill-rule="evenodd" d="M10 15a1 1 0 01-.707-.293l-5-5a1 1 0 111.414-1.414L9 11.586V3a1 1 0 112 0v8.586l3.293-3.293a1 1 0 111.414 1.414l-5 5A1 1 0 0110 15z" clip-rule="evenodd" />
+                                                </svg>
+                                            </span>
+                                            ${safe(clientTraffic.received)}
+                                            &nbsp;
+                                            <span class="traffic-arrow ${txFlashClass}" aria-label="sent">
+                                                <svg class="traffic-arrow-icon traffic-arrow-icon-tx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path fill-rule="evenodd" d="M10 5a1 1 0 01.707.293l5 5a1 1 0 11-1.414 1.414L11 8.414V17a1 1 0 11-2 0V8.414L5.707 11.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 5z" clip-rule="evenodd" />
+                                                </svg>
+                                            </span>
+                                            ${safe(clientTraffic.sent)}
+                                        </span>
                                     </span>
                                     <span class="text-xs text-gray-600">${endpointLine}</span>
                                     ${handshakeLine}
                                 </div>
-                                <span class="text-xs text-gray-500 ml-6" style="margin-left: 0.5cm;">
-                                    <span class="traffic-arrow ${rxFlashClass}" aria-label="received">
-                                        <svg class="traffic-arrow-icon traffic-arrow-icon-rx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                            <path fill-rule="evenodd" d="M10 15a1 1 0 01-.707-.293l-5-5a1 1 0 111.414-1.414L9 11.586V3a1 1 0 112 0v8.586l3.293-3.293a1 1 0 111.414 1.414l-5 5A1 1 0 0110 15z" clip-rule="evenodd" />
-                                        </svg>
-                                    </span>
-                                    ${safe(clientTraffic.received)}
-                                    &nbsp;
-                                    <span class="traffic-arrow ${txFlashClass}" aria-label="sent">
-                                        <svg class="traffic-arrow-icon traffic-arrow-icon-tx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                            <path fill-rule="evenodd" d="M10 5a1 1 0 01.707.293l5 5a1 1 0 11-1.414 1.414L11 8.414V17a1 1 0 11-2 0V8.414L5.707 11.707a1 1 0 01-1.414-1.414l5-5A1 1 0 0110 5z" clip-rule="evenodd" />
-                                        </svg>
-                                    </span>
-                                    ${safe(clientTraffic.sent)}
-                                </span>
                             </div>
                         </div>
                         <div class="flex space-x-2">
                                 <button onclick="amneziaApp.showClientQRCode('${serverId}', '${client.id}')"
-                                    class="btn-pill bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
+                                    class="btn-pill bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 text-white px-3.5 py-1.5 rounded-full text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
                                     title="Show QR Code">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
@@ -973,7 +1008,7 @@ class AmneziaApp {
                                 QR Code
                             </button>
                                 <button onclick="amneziaApp.showClientIParamsModal('${serverId}', '${client.id}')"
-                                    class="btn-pill bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
+                                    class="btn-pill bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white px-3.5 py-1.5 rounded-full text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center"
                                     title="Edit I1–I5 (client-only)">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l9.586-9.586z"/>
@@ -981,14 +1016,14 @@ class AmneziaApp {
                                 I1–I5
                             </button>
                                 <button onclick="amneziaApp.downloadClientConfig('${serverId}', '${client.id}')"
-                                    class="btn-pill bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
+                                    class="btn-pill bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white px-3.5 py-1.5 rounded-full text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                                 </svg>
                                 Download
                             </button>
                                 <button onclick="amneziaApp.deleteClient('${serverId}', '${client.id}')"
-                                    class="btn-pill bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
+                                    class="btn-pill bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white px-3.5 py-1.5 rounded-full text-sm font-medium transition-all duration-200 shadow hover:shadow-md flex items-center">
                                 <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
                                 </svg>
@@ -1193,8 +1228,6 @@ class AmneziaApp {
 
         const obfParams = serverInfo.obfuscation_params || {};
         const iKeys = ['I1', 'I2', 'I3', 'I4', 'I5'];
-        const normalParams = Object.entries(obfParams).filter(([key]) => !iKeys.includes(key));
-        const iLines = iKeys.map((key) => `${key} = ${obfParams[key] ?? ''}`).join('\n');
 
         const modalHtml = `
             <div id="configModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -1264,13 +1297,48 @@ class AmneziaApp {
 
                         ${serverInfo.obfuscation_enabled ? `
                         <div class="bg-blue-50 p-3 rounded mb-4">
-                            <h4 class="font-semibold text-sm text-blue-700 mb-2">Obfuscation Parameters</h4>
-                            <div class="grid grid-cols-3 md:grid-cols-6 gap-2 text-xs">
-                                ${normalParams.map(([key, value]) => `
-                                    <div class="text-center">
-                                        <div class="font-medium">${safe(key)}</div>
-                                        <div class="font-mono break-all whitespace-pre-wrap">${safe(value)}</div>
-                                    </div>
+                            <div class="flex items-center justify-between mb-2">
+                                <h4 class="font-semibold text-sm text-blue-700">Obfuscation Parameters</h4>
+                                <button onclick="amneziaApp.saveServerObfuscationParams('${serverInfo.id}')"
+                                    class="btn-pill bg-blue-700 text-white px-3 py-1 rounded text-xs hover:bg-blue-800">
+                                    Save + Rewrite/Restart
+                                </button>
+                            </div>
+
+                            <div class="text-[11px] text-blue-800/80 mb-3">
+                                Updates server + all existing clients, rewrites the server config file, and restarts the server if it is running.
+                            </div>
+
+                            <div class="flex flex-wrap items-end gap-3 text-xs mb-3">
+                                ${['Jc','Jmin','Jmax'].map((key) => `
+                                    <label class="flex flex-col">
+                                        <div class="font-medium text-blue-900">${safe(key)}</div>
+                                        <input id="serverObfParam-${serverInfo.id}-${key}" type="number"
+                                            class="mt-1 px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70 w-24"
+                                            value="${safe(obfParams[key] ?? 0)}" />
+                                    </label>
+                                `).join('')}
+                            </div>
+
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mb-3">
+                                ${['S1','S2','S3','S4'].map((key) => `
+                                    <label class="block">
+                                        <div class="font-medium text-blue-900">${safe(key)}</div>
+                                        <input id="serverObfParam-${serverInfo.id}-${key}" type="number"
+                                            class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70"
+                                            value="${safe(obfParams[key] ?? '')}" />
+                                    </label>
+                                `).join('')}
+                            </div>
+
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mb-3">
+                                ${['H1','H2','H3','H4'].map((key) => `
+                                    <label class="block">
+                                        <div class="font-medium text-blue-900">${safe(key)}</div>
+                                        <input id="serverObfParam-${serverInfo.id}-${key}" type="number"
+                                            class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70"
+                                            value="${safe(obfParams[key] ?? 0)}" />
+                                    </label>
                                 `).join('')}
                             </div>
 
@@ -1394,6 +1462,73 @@ class AmneziaApp {
         } catch (error) {
             console.error('Error updating server networking:', error);
             this.showTempMessage('Failed to update networking: ' + (error?.message || error), 'error');
+        }
+    }
+
+    async saveServerObfuscationParams(serverId) {
+        // Pull MTU from cached server list if possible (fallback to 1420)
+        const server = (this.lastServers || []).find((s) => String(s.id) === String(serverId));
+        const mtu = Number(server?.mtu) || 1420;
+
+        const toOptionalInt = (raw) => {
+            const s = String(raw ?? '').trim();
+            if (!s) return null;
+            const n = parseInt(s, 10);
+            return Number.isFinite(n) ? n : null;
+        };
+
+        const params = {
+            Jc: parseInt(document.getElementById(`serverObfParam-${serverId}-Jc`)?.value || '0', 10),
+            Jmin: parseInt(document.getElementById(`serverObfParam-${serverId}-Jmin`)?.value || '0', 10),
+            Jmax: parseInt(document.getElementById(`serverObfParam-${serverId}-Jmax`)?.value || '0', 10),
+            S1: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S1`)?.value),
+            S2: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S2`)?.value),
+            S3: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S3`)?.value),
+            S4: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S4`)?.value),
+            H1: parseInt(document.getElementById(`serverObfParam-${serverId}-H1`)?.value || '0', 10),
+            H2: parseInt(document.getElementById(`serverObfParam-${serverId}-H2`)?.value || '0', 10),
+            H3: parseInt(document.getElementById(`serverObfParam-${serverId}-H3`)?.value || '0', 10),
+            H4: parseInt(document.getElementById(`serverObfParam-${serverId}-H4`)?.value || '0', 10),
+        };
+
+        const errors = this.validateObfuscationParamsJS(params, mtu);
+        if (errors.length > 0) {
+            this.showTempMessage(errors.join(' '), 'error');
+            return;
+        }
+
+        const ok = confirm('Update obfuscation parameters and restart the server if it is running? Existing clients will be updated too.');
+        if (!ok) return;
+
+        try {
+            const response = await this.apiFetch(`/api/servers/${serverId}/obfuscation-params`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(params)
+            });
+
+            if (!response.ok) {
+                let msg = 'Failed to update obfuscation parameters';
+                try {
+                    const data = await response.json();
+                    msg = data?.error || msg;
+                } catch (_) {
+                    const text = await response.text();
+                    msg = text || msg;
+                }
+                throw new Error(msg);
+            }
+
+            const data = await response.json();
+            const restarted = !!data?.restarted;
+            this.showTempMessage(restarted ? 'Obfuscation updated and server restarted.' : 'Obfuscation updated (server was not running).', 'success');
+            this.loadServers();
+            // Refresh the modal contents
+            this.closeModal();
+            this.showServerConfig(serverId);
+        } catch (error) {
+            console.error('Error updating server obfuscation params:', error);
+            this.showTempMessage('Failed to update obfuscation params: ' + (error?.message || error), 'error');
         }
     }
 
@@ -1551,8 +1686,97 @@ class AmneziaApp {
         const existingModal = document.getElementById('configModal') || document.getElementById('rawConfigModal');
         if (existingModal) existingModal.remove();
 
+        const logsModal = document.getElementById('logsModal');
+        if (logsModal) logsModal.remove();
+
+        if (this.logPoller) {
+            clearInterval(this.logPoller);
+            this.logPoller = null;
+        }
+
         // Also close the create-server modal (this one is part of the DOM)
         this.closeCreateServerModal();
+    }
+
+    async showServerLogs(serverId, iface) {
+        const safe = (v) => this.escapeHtml(v);
+        const interfaceName = String(iface || '').trim();
+
+        // Close any existing modal first
+        this.closeModal();
+
+        const modalHtml = `
+            <div id="logsModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+                <div class="relative top-12 mx-auto p-5 border w-11/12 md:w-4/5 lg:w-3/4 shadow-lg rounded-md bg-white">
+                    <div class="mt-2">
+                        <div class="flex justify-between items-center mb-3">
+                            <div>
+                                <h3 class="text-lg font-medium text-gray-900">Server Logs</h3>
+                                <div class="text-xs text-gray-500">Interface: <span class="font-mono">${safe(interfaceName || 'unknown')}</span></div>
+                            </div>
+                            <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="text-xs text-gray-500">Auto-refresh: 10s</div>
+                            <div class="flex items-center gap-2">
+                                <button id="logsManualRefresh"
+                                    class="w-7 h-7 rounded-full bg-white/80 text-blue-600 hover:text-blue-700 shadow-sm border border-blue-200/70 hover:border-blue-300/80 backdrop-blur flex items-center justify-center transition dark:bg-gray-800/80 dark:text-blue-300 dark:border-gray-700/80 dark:hover:border-blue-400/60"
+                                        title="Refresh logs">
+                                    <span class="text-[12px] leading-none">↻</span>
+                                </button>
+                                <div id="logsLastUpdate" class="text-xs text-gray-400">Last update: —</div>
+                            </div>
+                        </div>
+
+                        <pre id="serverLogContent" class="bg-gray-900 text-emerald-200 p-3 rounded text-xs overflow-x-auto max-h-[60vh] overflow-y-auto"></pre>
+
+                        <div class="flex justify-end space-x-3 pt-4 border-t mt-4">
+                            <button onclick="amneziaApp.closeModal()" class="btn-pill bg-gray-600 text-white px-4 py-2 rounded text-sm hover:bg-gray-700">
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+        const refreshLogs = async () => {
+            const logEl = document.getElementById('serverLogContent');
+            const tsEl = document.getElementById('logsLastUpdate');
+            if (!logEl) return;
+
+            try {
+                const url = `/api/system/awg-log?interface=${encodeURIComponent(interfaceName)}&lines=400`;
+                const resp = await this.apiFetch(url);
+                if (!resp.ok) {
+                    const text = await resp.text();
+                    throw new Error(text || `HTTP ${resp.status}`);
+                }
+                const data = await resp.json();
+                const lines = Array.isArray(data?.lines) ? data.lines : [];
+                logEl.textContent = lines.join('\n') || 'No log lines yet.';
+                if (tsEl) tsEl.textContent = `Last update: ${new Date().toLocaleTimeString()}`;
+            } catch (error) {
+                logEl.textContent = `Failed to load logs: ${error?.message || error}`;
+                if (tsEl) tsEl.textContent = `Last update: error`;
+            }
+        };
+
+        const btn = document.getElementById('logsManualRefresh');
+        if (btn) {
+            btn.addEventListener('click', () => refreshLogs());
+        }
+
+        // Initial load + 10s polling
+        await refreshLogs();
+        this.logPoller = setInterval(refreshLogs, 10000);
     }
 
     showClientQRCode(serverId, clientId) {

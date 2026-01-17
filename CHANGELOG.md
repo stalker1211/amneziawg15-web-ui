@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## Version 1.5 (2026-01-16)
+
+### Obfuscation
+- Server config modal now allows editing server obfuscation parameters and applies changes by rewriting the server config and restarting the server when it is running.
+- Added support for additional padding parameters `S3`/`S4` (AWG 2.0?) across UI + API + config generation.
+- Due to observed connectivity issues on some AmneziaWG builds when `S3`/`S4` are set, the UI now leaves `S3`/`S4` EMPTY by default (empty means the line is omitted from configs). I did not figured out a way how to make it work on server side with current amneziawg-go implementation. Keep for the future. 
+- Finding: `S1`/`S2` appear to be the only parameters whcih require exact match between server and client; other obfuscation parameters may be more tolerant depending on the AmneziaWG version.
+
+### Container / Build
+- Docker image now builds `amneziawg-go` and `amneziawg-tools` from source (multi-stage build with pinned refs by default).
+- Added `wg`/`wg-quick` compatibility symlinks to `awg`/`awg-quick` inside the container.
+- Container startup logs now print detected AmneziaWG binary paths/versions for easier debugging.
+- Added optional userspace `amneziawg-go` internal logging:
+  - Set `AWG_LOG_LEVEL=debug|verbose|error|silent` to enable (or `off`/empty to disable).
+  - Logs are written to `/var/log/amnezia/amneziawg-go.log` (override with `AWG_LOG_FILE`).
+
+### Monitoring / UX
+- Added per-server “View Logs” with auto-refresh and interface-aware log filtering (includes related startup banner lines).
+
+### Security
+- Updated Go builder patch version used for `amneziawg-go` to reduce/avoid known Go stdlib CVEs.
+
 ## Version 1.4.3 (2026-01-15)
 
 ### Networking / IPTables
