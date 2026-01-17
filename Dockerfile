@@ -1,5 +1,5 @@
-ARG ALPINE_VERSION=3.20
-ARG GO_VERSION=1.24.11
+ARG ALPINE_VERSION=3.23
+ARG GO_VERSION=1.25.6
 
 ############################
 # Build: amneziawg-go
@@ -14,6 +14,8 @@ RUN apk add --no-cache git make build-base
 WORKDIR /src/amneziawg-go
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git . \
     && git checkout "${AWG_GO_REF}" \
+    && go get golang.org/x/crypto@v0.47.0 \
+    && go mod tidy \
     && make
 
 RUN install -Dm755 ./amneziawg-go /out/usr/bin/amneziawg-go
