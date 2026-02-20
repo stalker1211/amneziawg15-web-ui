@@ -1,5 +1,5 @@
-ARG ALPINE_VERSION=3.23
-ARG GO_VERSION=1.25.6
+ARG ALPINE_VERSION=latest
+ARG GO_VERSION=1.26
 
 ############################
 # Build: amneziawg-go
@@ -65,7 +65,17 @@ RUN apk add --no-cache \
     openresolv \
     ca-certificates
 
-RUN pip3 install flask flask_socketio flask-wtf requests python-socketio eventlet --break-system-packages
+RUN pip3 install --no-cache-dir --break-system-packages \
+        flask \
+        flask_socketio \
+        flask-wtf \
+        requests \
+        python-socketio \
+        eventlet \
+    && apk del --no-network py3-pip py3-wheel py3-setuptools || true \
+    && rm -f /usr/lib/python*/ensurepip/_bundled/wheel-*.whl \
+    && rm -rf /usr/lib/python*/site-packages/setuptools/_vendor/wheel \
+              /usr/lib/python*/site-packages/setuptools/_vendor/wheel-*.dist-info
 
 # Install AmneziaWG components built from source
 COPY --from=awg_go_builder /out/usr/bin/amneziawg-go /usr/bin/amneziawg-go
@@ -76,11 +86,10 @@ COPY --from=awg_tools_builder /out/usr/ /usr/
 RUN ln -sf /usr/bin/awg /usr/bin/wg \
     && ln -sf /usr/bin/awg-quick /usr/bin/wg-quick
 
-RUN mkdir -p /app/web-ui /var/log/supervisor /var/log/webui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg
+RUN mkdir -p /app/web-ui /var/log/supervisor /var/log/webui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg /run/nginx
 
 COPY web-ui /app/web-ui/
 
-RUN mkdir -p /run/nginx
 COPY config/nginx.conf /etc/nginx/http.d/default.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
