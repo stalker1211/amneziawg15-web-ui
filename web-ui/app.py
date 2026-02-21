@@ -99,6 +99,7 @@ if ALLOWED_ORIGINS:
     socketio = SocketIO(
         app,
         async_mode='eventlet',
+        manage_session=False,
         cors_allowed_origins=ALLOWED_ORIGINS,
         path='/socket.io'
     )
@@ -107,6 +108,7 @@ else:
     socketio = SocketIO(
         app,
         async_mode='eventlet',
+        manage_session=False,
         path='/socket.io'
     )
 
