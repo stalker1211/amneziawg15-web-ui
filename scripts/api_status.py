@@ -63,6 +63,17 @@ def _get_json(s, url, timeout):
         return None, f"invalid response: {e}"
 
 
+def _post_json(s, url, timeout):
+    """POST request returning JSON as (payload, error)."""
+    try:
+        resp = s.post(url, timeout=timeout)
+        if resp.status_code >= 400:
+            return None, f"HTTP {resp.status_code}"
+        return resp.json(), None
+    except (requests.RequestException, ValueError) as e:
+        return None, f"invalid response: {e}"
+
+
 def _val(v):
     """Normalize None to '-' for display."""
     return "-" if v is None else str(v)
@@ -71,6 +82,18 @@ def _val(v):
 def _compact_transfer(v):
     """Make traffic fields shorter."""
     return _val(v).replace(" received", "").replace(" sent", "")
+
+
+def _format_geo(geo, country_code):
+    """Format geo pair as '<CC> / <geo>' or fallbacks."""
+    g, c = _val(geo), _val(country_code)
+    if c != "-" and g != "-":
+        return f"{c} / {g}"
+    if c != "-":
+        return c
+    if g != "-":
+        return g
+    return "-"
 
 
 def _print_client(client, traffic, color_enabled):
@@ -91,18 +114,21 @@ def _print_client(client, traffic, color_enabled):
 
     hs_val = _val(tinfo.get("latest_handshake"))
     hs = _colorize(hs_val, _handshake_color(hs_val), enabled=color_enabled)
-    rx = _colorize(_compact_transfer(tinfo.get("received")), _Ansi.BLUE, enabled=color_enabled)
-    tx = _colorize(_compact_transfer(tinfo.get("sent")), _Ansi.BLUE, enabled=color_enabled)
+    rx = _colorize(_compact_transfer(tinfo.get("received")), _Ansi.MAGENTA, enabled=color_enabled)
+    tx = _colorize(_compact_transfer(tinfo.get("sent")), _Ansi.MAGENTA, enabled=color_enabled)
     print(f"\t  last handshake: {hs}  rx = {rx}  tx = {tx}")
 
 
 def main():
+    """Main entry point."""
     p = argparse.ArgumentParser(description="Show AmneziaWG Web UI server/client status")
     p.add_argument("--base-url", required=True, help="Base URL (e.g. http://192.168.1.3:8080)")
     p.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout (default: 5s)")
     p.add_argument("--user", default=os.getenv("AMNEZIA_API_USER"), help="Basic auth user (or AMNEZIA_API_USER)")
-    p.add_argument("--password", default=os.getenv("AMNEZIA_API_PASSWORD"), help="Basic auth password (or AMNEZIA_API_PASSWORD)")
+    p.add_argument("--password", default=os.getenv("AMNEZIA_API_PASSWORD"),
+                    help="Basic auth password (or AMNEZIA_API_PASSWORD)")
     p.add_argument("--token", default=os.getenv("AMNEZIA_API_TOKEN"), help="Bearer token (or AMNEZIA_API_TOKEN)")
+    p.add_argument("--refresh-egress", action="store_true", help="Refresh per-server egress IP before showing status")
     args = p.parse_args()
 
     color_enabled = sys.stdout.isatty()
@@ -127,9 +153,33 @@ def main():
             continue
 
         sid = server.get("id")
+        if args.refresh_egress and sid:
+            refreshed_probe, refresh_err = _post_json(s, f"{base}/api/servers/{sid}/egress-ip", args.timeout)
+            if not refresh_err and isinstance(refreshed_probe, dict):
+                server["egress_probe"] = {
+                    "external_ip": refreshed_probe.get("external_ip"),
+                    "checked_at": refreshed_probe.get("checked_at"),
+                    "service": refreshed_probe.get("service"),
+                    "error": refreshed_probe.get("error"),
+                }
+
         sname = _colorize(server.get("name", "-"), _Ansi.BOLD, _Ansi.CYAN, enabled=color_enabled)
-        sstatus = _colorize(server.get("status", "-"), _status_color(server.get("status", "")), _Ansi.BOLD, enabled=color_enabled)
-        print(f"{sname} ({sid}) : {sstatus}  [{server.get('public_ip', '-')}:{server.get('port', '-')}]")
+        sstatus = _colorize(server.get("status", "-"), _status_color(server.get("status", "")),
+                             _Ansi.BOLD, enabled=color_enabled)
+        server_public = server.get("public_ip", "-")
+        server_port = server.get("port", "-")
+        probe = server.get("egress_probe") if isinstance(server.get("egress_probe"), dict) else None
+        external_ip = _val((probe or {}).get("external_ip") or "No external access")
+        egress = _colorize(external_ip, _Ansi.BLUE, enabled=color_enabled)
+        server_geo = _format_geo(server.get("public_ip_geo"), server.get("public_ip_geo_country_code"))
+        server_geo_str = _colorize(f" ({server_geo})", _Ansi.GRAY, enabled=color_enabled) if server_geo != "-" else ""
+
+        egress_geo = _format_geo((probe or {}).get("external_ip_geo"), (probe or {}).get("external_ip_geo_country_code"))
+        egress_geo_str = _colorize(f" ({egress_geo})", _Ansi.GRAY, enabled=color_enabled) if egress_geo != "-" else ""
+
+        print(f"{sname} ({sid}) : {sstatus}")
+        print(f"\tServer IP = {server_public}  port = {server_port}{server_geo_str}")
+        print(f"\tEgress IP = {egress}{egress_geo_str}")
 
         clients, err = _get_json(s, f"{base}/api/servers/{sid}/clients", args.timeout)
         if err:
@@ -137,7 +187,6 @@ def main():
             continue
 
         traffic, _ = _get_json(s, f"{base}/api/servers/{sid}/traffic", args.timeout)
-        
         if not clients:
             print("\t<no clients>")
             continue

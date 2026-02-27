@@ -45,6 +45,27 @@ body.dark #refreshIpBtn:hover {
     color: #dbeafe;
 }
 
+body.dark .egress-refresh-btn {
+    background-color: rgba(30, 58, 95, 0.9) !important;
+    color: #bfdbfe !important;
+    border-color: rgba(59, 130, 246, 0.45) !important;
+}
+body.dark .egress-refresh-btn:hover {
+    background-color: rgba(37, 75, 122, 0.95) !important;
+    color: #dbeafe !important;
+    border-color: rgba(147, 197, 253, 0.65) !important;
+}
+
+.egress-probe-updating .egress-probe-value,
+.egress-probe-updating .egress-probe-ts {
+    color: #9ca3af !important;
+}
+
+body.dark .egress-probe-updating .egress-probe-value,
+body.dark .egress-probe-updating .egress-probe-ts {
+    color: #94a3b8 !important;
+}
+
 body.dark .border-gray-200 { border-color: #1f2937 !important; }
 body.dark .border-gray-300 { border-color: #334155 !important; }
 body.dark .border-blue-200 { border-color: #1e3a5f !important; }

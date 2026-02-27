@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## Version 1.5.1 (2026-02-26)
+
+### New
+- Added per-server egress/public IP probing from inside the container (source-bound probe), so each server card can show the final outbound external IP seen for that server.
+- Added API endpoint `POST /api/servers/<server_id>/egress-ip` and persisted probe result metadata (`external_ip`, route details, timestamp, and errors).
+- Added shared backend GeoIP lookup/cache path for all IP enrichment flows (client endpoint IP, server public IP, and server egress IP).
+- Added GeoIP fields to server payloads for UI/CLI consumption: `public_ip_geo`, `public_ip_geo_country_code`, `egress_probe.external_ip_geo`, and `egress_probe.external_ip_geo_country_code`.
+
+### Refactor / Cleanup
+- Refactored backend structure by splitting monolithic logic into dedicated modules:
+  - `web-ui/services/amnezia_manager.py`
+  - `web-ui/routes/system.py`
+  - `web-ui/routes/servers.py`
+  - `web-ui/core/runtime.py`, `web-ui/core/helpers.py`
+- Refactored frontend JavaScript into smaller modules:
+  - `web-ui/static/js/api.js`
+  - `web-ui/static/js/server-ui.js`
+  - streamlined `web-ui/static/js/app.js`.
+- General lint/style cleanup across Python files (manual fixes, formatting and line-length cleanup).
+
+### UX
+- Added inline per-server egress IP refresh action and clearer egress status rendering in the server card.
+- Improved dark-theme styling for new egress UI controls.
+- Server cards now show Geo metadata for both server public IP and egress IP (country flag + location when available).
+- Header public IP badge now includes country flag (when GeoIP is available).
+
+### Tooling
+- `scripts/api_status.py` now prints `Server IP` and `Egress IP` on dedicated lines and includes optional Geo info for both.
+
 ## Version 1.5 (2026-01-16)
 
 ### Obfuscation

@@ -3,7 +3,7 @@
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
 Most server configuration is done via the web interface or API endpoints. However, some defaults are controlled only via environment variables at container startup: `NGINX_PORT`, `API_TOKEN`, `ENABLE_GEOIP`,`WAN_IF`, `ALLOWED_ORIGINS`, (NAT/LAN settings `ENABLE_NAT` and `BLOCK_LAN_CIDRS` are defaults per-server and can be overridden in the UI).
 
-Current version: **1.5**
+Current version: **1.5.1**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
@@ -13,7 +13,7 @@ Current version: **1.5**
 *   **AmneziaWG Integration**: Full support for AmneziaWG's obfuscation features
 *   **Client Management**: Generate and download client configurations
 *   **Real-time Monitoring**: Live server status and connection monitoring
-*   **Client endpoint + Geo**: Shows connected client public endpoint (`IP:PORT`) with optional country flag + location
+*   **Geo for endpoint/server/egress IPs**: Shows client endpoint (`IP:PORT`), server public IP, and egress IP with country flag/location when available
 *   **Auto-start**: Automatic server startup on container restart
 *   **IPTables Automation**: Automatic firewall configuration
 *   **Custom values**: MTU and other connection settings can be customized
@@ -22,6 +22,8 @@ Current version: **1.5**
 *   **Client-only I1–I5**: I1–I5 are stored and applied to client configs only (server has defaults; each client can override)
 *   **S3/S4 supported (experimental)**: UI/API support `S3`/`S4`, but current AmneziaWG build (amneziavpn/amneziawg-go) appear to reject/ignore connections when `S3`/`S4` are set to non-empty values. This UI leaves `S3`/`S4` empty by default.
 *   **AWG logs viewer**: Per-server “View Logs” modal with auto-refresh and interface-aware filtering.
+*   **Per-server egress IP probe**: Shows each server's final outbound external IP as seen from inside the container, with one-click refresh.
+*   **Refactored codebase**: Backend and frontend split into clearer modules for easier maintenance.
 
 ## 📝 Logs (amneziawg-go)
 
@@ -36,18 +38,19 @@ Once enabled, use **Server → View Logs** in the UI. The log view filters by th
 
 ### Components
 
-**Flask Backend** (`app.py`)
+**Flask Backend**
 
-*   RESTful API for server management
-*   WebSocket support for real-time updates
-*   AmneziaWG configuration generation
-*   Client config management
+*   Entry point and app wiring in `web-ui/app.py`
+*   Core service logic in `web-ui/services/amnezia_manager.py`
+*   API route modules in `web-ui/routes/servers.py` and `web-ui/routes/system.py`
+*   Runtime/helpers in `web-ui/core/runtime.py` and `web-ui/core/helpers.py`
 
-**Frontend** (`static/js/app.js`)
+**Frontend**
 
-*   Responsive web interface (vanilla JS)
-*   Real-time status updates
-*   Form validation and error handling
+*   Main app logic in `web-ui/static/js/app.js`
+*   API utilities in `web-ui/static/js/api.js`
+*   Server/client rendering helpers in `web-ui/static/js/server-ui.js`
+*   Responsive vanilla-JS UI with real-time status/traffic updates
 
 ## 🧩 I1–I5 (Client-only) behavior
 
@@ -103,12 +106,22 @@ WireGuard configs can become too large to fit into a single QR code (especially 
 
 ```
 /app/web-ui/
-├── app.py # Flask application
+├── app.py # Flask application entrypoint/wiring
+├── core/
+│ ├── runtime.py # Flask/Socket.IO runtime helpers
+│ └── helpers.py # shared utility helpers
+├── routes/
+│ ├── servers.py # server/client API routes
+│ └── system.py # system/status/log routes
+├── services/
+│ └── amnezia_manager.py # core business logic
 ├── templates/
 │ └── index.html # Main web interface
 └── static/
 ├── js/
-│ └── app.js # Frontend JavaScript
+│ ├── app.js # Main frontend logic
+│ ├── api.js # API/auth/download helpers
+│ └── server-ui.js # server/client rendering helpers
 └── css/
 └── style.css # Custom styles
 ```
@@ -328,7 +341,7 @@ Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg
 | `ENABLE_NAT` | `1` | Default NAT/MASQUERADE setting for new servers (set `0` to disable). Per-server override is available in the UI. |
 | `WAN_IF` | *(auto)* | Outbound/WAN interface used for NAT and forwarding rules. Auto-detected from the default route if unset (set explicitly if detection fails). |
 | `BLOCK_LAN_CIDRS` | `1` | Default LAN-blocking for new servers. Blocks private LAN ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12). Set `0` to allow LAN access. Per-server override is available in the UI. |
-| `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoints (adds country flag + location). Set `0` to disable external requests. |
+| `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoint IPs plus server public/egress IPs (adds country flag + location). Set `0` to disable external requests. |
 | `API_TOKEN` | *(empty)* | Optional API token for `/api/*` endpoints (defense-in-depth). If set, all API requests must include either `X-API-Token: <token>` (recommended when using Nginx Basic Auth) or `Authorization: Bearer <token>`. Generate with: `openssl rand -hex 32` |
 | `ALLOWED_ORIGINS` | *(empty)* | Socket.IO CORS allowed origins. Empty = same-origin only (recommended). Use `*` for development/all origins, or comma-separated list: `http://localhost:3000,https://vpn.example.com` |
 

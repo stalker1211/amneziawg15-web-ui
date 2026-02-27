@@ -224,6 +224,8 @@
 
     </div>
 
+    <script src="{{ url_for('static', filename='js/api.js') }}?v={{ cache_bust }}"></script>
+    <script src="{{ url_for('static', filename='js/server-ui.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>
