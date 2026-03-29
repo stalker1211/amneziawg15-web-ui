@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 import uuid
+from urllib.parse import urlparse
 
 import requests
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
@@ -23,6 +24,17 @@ from requests.adapters import HTTPAdapter
 
 class AmneziaManager:
     """Manage VPN server lifecycle, clients, configs, and runtime telemetry."""
+
+    DEFAULT_PROTOCOL = "AWG 1.5"
+    SUPPORTED_PROTOCOLS = ("AWG 1.5", "AWG 2.0")
+    CLIENT_ONLY_PARAM_KEYS = ("Jc", "Jmin", "Jmax", "I1", "I2", "I3", "I4", "I5")
+    TRANSPORT_PARAM_KEYS = ("S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4")
+
+    EGRESS_PROBE_SERVICES = (
+        "https://api.ipify.org",
+        "https://ident.me",
+        "https://icanhazip.com",
+    )
 
     def __init__(
         self,
@@ -132,34 +144,56 @@ class AmneziaManager:
             proxy_kwargs["source_address"] = (self._source_ip, 0)
             return super().proxy_manager_for(proxy, **proxy_kwargs)
 
-    def detect_public_ip_from_source(self, source_ip):
+    def detect_public_ip_from_source(self, source_ip, service):
         """Detect external IP for traffic originating from a specific source IP."""
         if not self.is_valid_ip(source_ip):
             raise ValueError(f"Invalid source IP: {source_ip}")
+
+        if service not in self.EGRESS_PROBE_SERVICES:
+            raise ValueError(f"Unsupported egress probe service: {service}")
 
         with requests.Session() as session:
             adapter = self._SourceAddressAdapter(source_ip)
             session.mount("http://", adapter)
             session.mount("https://", adapter)
-            service = "https://1.1.1.1/cdn-cgi/trace"
             try:
                 response = session.get(service, timeout=8)
                 if response.status_code != 200:
                     raise RuntimeError(f"{service}: HTTP {response.status_code}")
 
                 body = response.text.strip()
-                ip = None
-                for line in body.splitlines():
-                    if line.startswith("ip="):
-                        ip = line.split("=", 1)[1].strip()
-                        break
+                if body and self.is_valid_ip(body):
+                    return body, service
 
-                if ip and self.is_valid_ip(ip):
-                    return ip, service
-
-                raise RuntimeError(f"{service}: invalid trace response")
+                raise RuntimeError(f"{service}: invalid IP response '{body[:120]}'")
             except Exception as e:
                 raise RuntimeError(f"{service}: {e}") from e
+
+    def get_next_egress_probe_service(self, server):
+        """Rotate egress probe services for a server across refreshes."""
+        previous_service = None
+        probe = server.get("egress_probe") if isinstance(server, dict) else None
+        if isinstance(probe, dict):
+            previous_service = probe.get("service")
+
+        services = list(self.EGRESS_PROBE_SERVICES)
+        if previous_service in services:
+            previous_index = services.index(previous_service)
+            return services[(previous_index + 1) % len(services)]
+
+        return services[0]
+
+    def format_probe_service_name(self, service):
+        """Return a short host label for a probe service URL."""
+        if not service or not isinstance(service, str):
+            return None
+
+        try:
+            parsed = urlparse(service)
+            host = (parsed.hostname or "").strip().lower()
+            return host or service.strip()
+        except Exception:
+            return service.strip()
 
     def get_route_for_source_ip(self, source_ip, destination="1.1.1.1"):
         """Return Linux route decision for destination when source IP is forced."""
@@ -206,18 +240,19 @@ class AmneziaManager:
 
         source_ip = server.get("server_ip")
         route = self.get_route_for_source_ip(source_ip)
+        service = self.get_next_egress_probe_service(server)
 
         probe = {
             "source_ip": source_ip,
             "route": route,
             "checked_at": int(time.time()),
             "external_ip": None,
-            "service": None,
+            "service": service,
             "error": None,
         }
 
         try:
-            external_ip, service = self.detect_public_ip_from_source(source_ip)
+            external_ip, service = self.detect_public_ip_from_source(source_ip, service)
             probe["external_ip"] = external_ip
             probe["service"] = service
             geo_label, geo_country_code = self.lookup_geoip(external_ip)
@@ -260,7 +295,7 @@ class AmneziaManager:
         def format_geo_label(raw):
             if not isinstance(raw, dict):
                 return None
-            country = raw.get("country") or raw.get("country_name") or raw.get("countryCode")
+            country = raw.get("country_name") or raw.get("country") or raw.get("countryCode")
             city = raw.get("city")
             region = raw.get("region") or raw.get("regionName")
 
@@ -278,7 +313,7 @@ class AmneziaManager:
         def extract_country_code(raw):
             if not isinstance(raw, dict):
                 return None
-            cc = raw.get("country") or raw.get("country_code") or raw.get("countryCode")
+            cc = raw.get("country_code") or raw.get("countryCode") or raw.get("country")
             if isinstance(cc, str):
                 cc = cc.strip().upper()
                 if re.fullmatch(r"[A-Z]{2}", cc):
@@ -335,11 +370,220 @@ class AmneziaManager:
                         server_name = server.get("name", server.get("id"))
                         print(f"Auto-start failed for server '{server_name}': {e}")
 
+    def normalize_protocol(self, value):
+        if not isinstance(value, str):
+            return self.DEFAULT_PROTOCOL
+
+        normalized = value.strip().upper().replace("_", " ")
+        if normalized in {"AWG 1.5", "1.5", "AWG1.5"}:
+            return "AWG 1.5"
+        if normalized in {"AWG 2.0", "2.0", "AWG2.0"}:
+            return "AWG 2.0"
+        return self.DEFAULT_PROTOCOL
+
+    def protocol_supports_s34(self, protocol):
+        return self.normalize_protocol(protocol) == "AWG 2.0"
+
+    def protocol_supports_header_ranges(self, protocol):
+        return self.normalize_protocol(protocol) == "AWG 2.0"
+
+    def extract_transport_params(self, params, protocol=None):
+        if not isinstance(params, dict):
+            return {}
+
+        normalized_protocol = self.normalize_protocol(protocol)
+        result = {}
+        for key in self.TRANSPORT_PARAM_KEYS:
+            if key in ("S3", "S4") and not self.protocol_supports_s34(normalized_protocol):
+                continue
+            value = params.get(key)
+            if value is None or value == "":
+                continue
+            result[key] = value
+        return result
+
+    def extract_client_params(self, params):
+        if not isinstance(params, dict):
+            return {}
+
+        result = {}
+        for key in self.CLIENT_ONLY_PARAM_KEYS:
+            value = params.get(key)
+            if key.startswith("I"):
+                result[key] = sanitize_config_value(value or "")
+            elif value is not None and value != "":
+                result[key] = value
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            result.setdefault(key, "")
+        return result
+
+    def default_client_defaults(self):
+        return {
+            "Jc": 8,
+            "Jmin": 8,
+            "Jmax": 80,
+            "I1": "",
+            "I2": "",
+            "I3": "",
+            "I4": "",
+            "I5": "",
+        }
+
+    def parse_header_value(self, value, protocol):
+        protocol = self.normalize_protocol(protocol)
+        raw = str(value).strip()
+        if not raw:
+            raise ValueError("Header value cannot be empty")
+
+        if self.protocol_supports_header_ranges(protocol) and re.fullmatch(r"\d+\s*-\s*\d+", raw):
+            start_raw, end_raw = [part.strip() for part in raw.split("-", 1)]
+            start, end = int(start_raw), int(end_raw)
+            if start > end:
+                raise ValueError(f"Invalid header range '{raw}': start must be <= end")
+            return {"raw": f"{start}-{end}", "start": start, "end": end}
+
+        if re.fullmatch(r"\d+", raw):
+            number = int(raw)
+            return {"raw": str(number), "start": number, "end": number}
+
+        if self.protocol_supports_header_ranges(protocol):
+            raise ValueError(f"Header value '{raw}' must be an integer or range x-y for {protocol}")
+        raise ValueError(f"Header value '{raw}' must be a single integer for {protocol}")
+
+    def validate_transport_params(self, protocol, params, _mtu):
+        del _mtu
+        protocol = self.normalize_protocol(protocol)
+        if not isinstance(params, dict):
+            raise ValueError("Transport params payload must be an object")
+
+        def as_opt_int(key):
+            value = params.get(key)
+            if value is None:
+                return None
+            if isinstance(value, str) and not value.strip():
+                return None
+            try:
+                return int(value)
+            except Exception as exc:
+                raise ValueError(f"'{key}' must be an integer or empty") from exc
+
+        transport = {
+            "S1": as_opt_int("S1"),
+            "S2": as_opt_int("S2"),
+            "S3": as_opt_int("S3"),
+            "S4": as_opt_int("S4"),
+            "H1": self.parse_header_value(params.get("H1", ""), protocol)["raw"],
+            "H2": self.parse_header_value(params.get("H2", ""), protocol)["raw"],
+            "H3": self.parse_header_value(params.get("H3", ""), protocol)["raw"],
+            "H4": self.parse_header_value(params.get("H4", ""), protocol)["raw"],
+        }
+
+        for key in ("S1", "S2", "S3", "S4"):
+            if transport[key] is not None and transport[key] < 0:
+                raise ValueError(f"{key} must be non-negative, got {transport[key]}")
+        if transport["S1"] is not None and transport["S2"] is not None and transport["S1"] + 56 == transport["S2"]:
+            raise ValueError("S1 + 56 must not equal S2")
+
+        if protocol == "AWG 1.5":
+            transport.pop("S3", None)
+            transport.pop("S4", None)
+        else:
+            parsed_headers = [self.parse_header_value(transport[key], protocol) for key in ("H1", "H2", "H3", "H4")]
+            for index, current in enumerate(parsed_headers):
+                for other in parsed_headers[index + 1:]:
+                    if current["start"] <= other["end"] and other["start"] <= current["end"]:
+                        raise ValueError("H1-H4 ranges must not intersect for AWG 2.0")
+
+        return transport
+
+    def validate_client_params(self, params, _mtu):
+        del _mtu
+        if not isinstance(params, dict):
+            raise ValueError("Client params payload must be an object")
+
+        merged = self.default_client_defaults()
+        merged.update(self.extract_client_params(params))
+
+        try:
+            jc = int(merged.get("Jc", 0))
+            jmin = int(merged.get("Jmin", 0))
+            jmax = int(merged.get("Jmax", 0))
+        except Exception as exc:
+            raise ValueError("Jc, Jmin and Jmax must be integers") from exc
+
+        if jc <= 0:
+            raise ValueError(f"Jc must be positive, got {jc}")
+        if jmin <= 0:
+            raise ValueError(f"Jmin must be positive, got {jmin}")
+        if jmax <= 0:
+            raise ValueError(f"Jmax must be positive, got {jmax}")
+        if jmin > jmax:
+            raise ValueError(f"Jmin must be less than or equal to Jmax, got Jmin={jmin}, Jmax={jmax}")
+
+        merged["Jc"] = jc
+        merged["Jmin"] = jmin
+        merged["Jmax"] = jmax
+        return merged
+
+    def build_effective_client_params(self, server, client_params=None):
+        transport_params = self.extract_transport_params(server.get("transport_params") or {}, server.get("protocol"))
+        effective = dict(transport_params)
+        effective.update(self.extract_client_params(client_params or {}))
+        return effective
+
+    def migrate_config_schema(self, config):
+        if not isinstance(config, dict):
+            return {"servers": [], "clients": {}}
+
+        config.setdefault("servers", [])
+        config.setdefault("clients", {})
+
+        for server in config.get("servers", []):
+            if not isinstance(server, dict):
+                continue
+
+            server["protocol"] = self.normalize_protocol(server.get("protocol"))
+
+            legacy_params = server.get("obfuscation_params") if isinstance(server.get("obfuscation_params"), dict) else {}
+            transport_params = server.get("transport_params")
+            if not isinstance(transport_params, dict):
+                transport_params = self.extract_transport_params(legacy_params, server.get("protocol"))
+            else:
+                transport_params = self.extract_transport_params(transport_params, server.get("protocol"))
+            server["transport_params"] = transport_params
+
+            server.setdefault("client_defaults", self.default_client_defaults())
+
+            for client in server.get("clients", []) or []:
+                if not isinstance(client, dict):
+                    continue
+                client_params = client.get("client_params")
+                if not isinstance(client_params, dict):
+                    client_params = self.extract_client_params(client.get("obfuscation_params") or legacy_params)
+                else:
+                    client_params = self.extract_client_params(client_params)
+                client["client_params"] = client_params
+                client["obfuscation_enabled"] = True
+                client["obfuscation_params"] = self.build_effective_client_params(server, client_params)
+
+                client_id = client.get("id")
+                if client_id and isinstance(config.get("clients"), dict):
+                    global_client = config["clients"].get(client_id)
+                    if isinstance(global_client, dict):
+                        global_client["client_params"] = dict(client_params)
+                        global_client["obfuscation_enabled"] = True
+                        global_client["obfuscation_params"] = self.build_effective_client_params(server, client_params)
+
+            server["obfuscation_enabled"] = True
+            server["obfuscation_params"] = self.build_effective_client_params(server, server.get("client_defaults"))
+
+        return config
+
     def load_config(self):
         if os.path.exists(self.config_file):
             with open(self.config_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"servers": [], "clients": {}}
+                return self.migrate_config_schema(json.load(f))
+        return self.migrate_config_schema({"servers": [], "clients": {}})
 
     def save_config(self):
         with open(self.config_file, "w", encoding="utf-8") as f:
@@ -376,35 +620,34 @@ class AmneziaManager:
         except Exception:
             return base64.b64encode(os.urandom(32)).decode("utf-8")
 
-    def generate_obfuscation_params(self, mtu=1420):
+    def generate_transport_params(self, protocol, mtu=1420):
         S1 = random.randint(15, min(150, mtu - 148))
-        # S2 must not be S1+56
         s2_candidates = [s for s in range(15, min(150, mtu - 92) + 1) if s != S1 + 56]
         S2 = random.choice(s2_candidates)
-        # S3/S4: message paddings (same value-space as S1/S2)
-        S3 = random.randint(15, 150)
-        S4 = random.randint(15, 150)
-        Jmin = random.randint(4, mtu - 2)
-        Jmax = random.randint(Jmin + 1, mtu)
-        return {
-            "Jc": random.randint(4, 12),
-            "Jmin": Jmin,
-            "Jmax": Jmax,
+        params = {
             "S1": S1,
             "S2": S2,
-            "S3": S3,
-            "S4": S4,
             "H1": random.randint(10000, 100000),
             "H2": random.randint(100000, 200000),
             "H3": random.randint(200000, 300000),
             "H4": random.randint(300000, 400000),
-            "I1": "",
-            "I2": "",
-            "I3": "",
-            "I4": "",
-            "I5": "",
             "MTU": mtu,
         }
+        if self.protocol_supports_s34(protocol):
+            params["S3"] = random.randint(15, 150)
+            params["S4"] = random.randint(0, 32)
+        return params
+
+    def generate_client_defaults(self, mtu=1420):
+        jmin = random.randint(4, mtu - 2)
+        jmax = random.randint(jmin + 1, mtu)
+        defaults = self.default_client_defaults()
+        defaults.update({
+            "Jc": random.randint(4, 12),
+            "Jmin": jmin,
+            "Jmax": jmax,
+        })
+        return defaults
 
     def create_wireguard_server(self, server_data):
         """Create a new WireGuard server configuration with environment defaults"""
@@ -435,8 +678,7 @@ class AmneziaManager:
             if not self.is_valid_ip(dns):
                 raise ValueError(f"Invalid DNS server IP: {dns}")
 
-        # Fixed values for other settings
-        enable_obfuscation = server_data.get("obfuscation", self.enable_obfuscation)
+        protocol = self.normalize_protocol(server_data.get("protocol"))
         auto_start = server_data.get("auto_start", self.auto_start_servers_enabled)
         enable_nat = to_bool(server_data.get("enable_nat"), self.default_enable_nat)
         block_lan_cidrs = to_bool(server_data.get("block_lan_cidrs"), self.default_block_lan_cidrs)
@@ -448,18 +690,15 @@ class AmneziaManager:
         # Generate server keys
         server_keys = self.generate_wireguard_keys()
 
-        # Generate and use provided obfuscation parameters if enabled
-        obfuscation_params = None
-        if enable_obfuscation:
-            if "obfuscation_params" in server_data:
-                obfuscation_params = server_data["obfuscation_params"]
-            else:
-                obfuscation_params = self.generate_obfuscation_params(mtu)
+        raw_transport_params = server_data.get("transport_params")
+        if not isinstance(raw_transport_params, dict):
+            raw_transport_params = self.generate_transport_params(protocol, mtu)
+        transport_params = self.validate_transport_params(protocol, raw_transport_params, mtu)
 
-            # Ensure new I1-I5 keys exist (empty defaults are OK)
-            if isinstance(obfuscation_params, dict):
-                for key in ("I1", "I2", "I3", "I4", "I5"):
-                    obfuscation_params.setdefault(key, "")
+        raw_client_defaults = server_data.get("client_defaults")
+        if not isinstance(raw_client_defaults, dict):
+            raw_client_defaults = self.generate_client_defaults(mtu)
+        client_defaults = self.validate_client_params(raw_client_defaults, mtu)
 
         # Parse subnet for server IP
         subnet_parts = subnet.split("/")
@@ -476,30 +715,25 @@ SaveConfig = false
 MTU = {mtu}
 """
 
-        # Add obfuscation parameters if enabled
-        if enable_obfuscation and obfuscation_params:
+        if transport_params:
 
             def _opt_line(key):
-                # Allow empty/omitted S params: AWG treats missing as 0.
-                v = obfuscation_params.get(key, None)
+                v = transport_params.get(key, None)
                 if v is None or v == "":
                     return ""
                 return f"{key} = {v}\n"
 
-            server_config_content += f"""Jc = {obfuscation_params["Jc"]}
-Jmin = {obfuscation_params["Jmin"]}
-Jmax = {obfuscation_params["Jmax"]}
-{_opt_line("S1")}{_opt_line("S2")}{_opt_line("S3")}{_opt_line("S4")}H1 = {obfuscation_params["H1"]}
-H1 = {obfuscation_params["H1"]}
-H2 = {obfuscation_params["H2"]}
-H3 = {obfuscation_params["H3"]}
-H4 = {obfuscation_params["H4"]}
+            server_config_content += f"""{_opt_line("S1")}{_opt_line("S2")}{_opt_line("S3")}{_opt_line("S4")}
+H1 = {transport_params["H1"]}
+H2 = {transport_params["H2"]}
+H3 = {transport_params["H3"]}
+H4 = {transport_params["H4"]}
 """
 
         server_config = {
             "id": server_id,
             "name": server_name,
-            "protocol": "wireguard",
+            "protocol": protocol,
             "port": port,
             "status": "stopped",
             "interface": interface_name,
@@ -510,8 +744,8 @@ H4 = {obfuscation_params["H4"]}
             "server_ip": server_ip,
             "mtu": mtu,
             "public_ip": self.public_ip,
-            "obfuscation_enabled": enable_obfuscation,
-            "obfuscation_params": obfuscation_params,
+            "transport_params": transport_params,
+            "client_defaults": client_defaults,
             "auto_start": auto_start,
             "enable_nat": enable_nat,
             "block_lan_cidrs": block_lan_cidrs,
@@ -552,8 +786,8 @@ SaveConfig = false
 MTU = {mtu}
 """
 
-        if server.get("obfuscation_enabled") and isinstance(server.get("obfuscation_params"), dict):
-            p = server.get("obfuscation_params") or {}
+        p = self.extract_transport_params(server.get("transport_params") or {}, server.get("protocol"))
+        if p:
 
             def _opt_line(key):
                 v = p.get(key, None)
@@ -561,16 +795,15 @@ MTU = {mtu}
                     return ""
                 return f"{key} = {v}\n"
 
-            content += f"""Jc = {p.get("Jc", 0)}
-Jmin = {p.get("Jmin", 0)}
-Jmax = {p.get("Jmax", 0)}
-{_opt_line("S1")}{_opt_line("S2")}{_opt_line("S3")}{_opt_line("S4")}H1 = {p.get("H1", 0)}
+            content += f"""{_opt_line("S1")}{_opt_line("S2")}{_opt_line("S3")}{_opt_line("S4")}H1 = {p.get("H1", 0)}
 H2 = {p.get("H2", 0)}
 H3 = {p.get("H3", 0)}
 H4 = {p.get("H4", 0)}
 """
 
         for client in server.get("clients") or []:
+            if client.get("suspended"):
+                continue
             try:
                 content += f"""
 
@@ -585,123 +818,28 @@ AllowedIPs = {client["client_ip"]}/32
 
         return content
 
-    def update_server_obfuscation_params(self, server_id, params):
-        """Update server obfuscation params, rewrite server config file, and restart if running.
-
-        This updates server AND all existing clients' shared obfuscation params (J/S/H).
-        Per-client I1-I5 are preserved.
-        """
+    def update_server_transport_params(self, server_id, params):
+        """Update server protocol and transport params, rewrite config, and restart if running."""
         server = self.get_server(server_id)
         if not server:
             return None
-
-        if not server.get("obfuscation_enabled"):
-            raise ValueError("Obfuscation is disabled for this server")
 
         if not isinstance(params, dict):
             raise ValueError("Invalid payload")
 
         mtu = int(server.get("mtu", self.default_mtu))
 
-        def as_int(key):
-            if key not in params:
-                raise ValueError(f"Missing '{key}'")
-            try:
-                return int(params.get(key))
-            except Exception as exc:
-                raise ValueError(f"'{key}' must be an integer") from exc
+        next_protocol = self.normalize_protocol(params.get("protocol", server.get("protocol")))
+        next_transport_params = self.validate_transport_params(next_protocol, params, mtu)
 
-        def as_opt_int(key):
-            # Allow null/empty string to mean “unset” (omit from config)
-            if key not in params:
-                return None
-            value = params.get(key)
-            if value is None:
-                return None
-            if isinstance(value, str) and value.strip() == "":
-                return None
-            try:
-                return int(value)
-            except Exception as exc:
-                raise ValueError(f"'{key}' must be an integer or empty") from exc
+        server["protocol"] = next_protocol
+        server["transport_params"] = dict(next_transport_params)
 
-        next_params = {
-            "Jc": as_int("Jc"),
-            "Jmin": as_int("Jmin"),
-            "Jmax": as_int("Jmax"),
-            "S1": as_opt_int("S1"),
-            "S2": as_opt_int("S2"),
-            "S3": as_opt_int("S3"),
-            "S4": as_opt_int("S4"),
-            "H1": as_int("H1"),
-            "H2": as_int("H2"),
-            "H3": as_int("H3"),
-            "H4": as_int("H4"),
-        }
-
-        # Validation (aligned with frontend rules)
-        if not 4 <= next_params["Jc"] <= 12:
-            raise ValueError(f"Jc must be in [4, 12], got {next_params['Jc']}")
-
-        if not next_params["Jmin"] < next_params["Jmax"] <= mtu and next_params["Jmin"] < mtu:
-            raise ValueError(
-                f"Jmin/Jmax invalid for MTU {mtu}: "
-                f"Jmin={next_params['Jmin']}, Jmax={next_params['Jmax']}"
-            )
-
-        if next_params["S1"] is not None:
-            if not 15 <= next_params["S1"] <= 150 and next_params["S1"] <= (mtu - 148):
-                raise ValueError(
-                    f"S1 must be in [15, 150] and ≤ (MTU - 148) ({mtu - 148}), "
-                    f"got {next_params['S1']}"
-                )
-
-        if next_params["S2"] is not None:
-            if not 15 <= next_params["S2"] <= 150 and next_params["S2"] <= (mtu - 92):
-                raise ValueError(
-                    f"S2 must be in [15, 150] and ≤ (MTU - 92) ({mtu - 92}), "
-                    f"got {next_params['S2']}"
-                )
-
-        if next_params["S1"] is not None and next_params["S2"] is not None:
-            if next_params["S1"] + 56 == next_params["S2"]:
-                raise ValueError(
-                    "S1 + 56 must not equal S2 "
-                    f"(S1={next_params['S1']}, S2={next_params['S2']})"
-                )
-
-        for k in ("S3", "S4"):
-            if next_params[k] is not None and not 15 <= next_params[k] <= 150:
-                raise ValueError(f"{k} must be in [15, 150], got {next_params[k]}")
-
-        for k in ("H1", "H2", "H3", "H4"):
-            if next_params[k] < 0:
-                raise ValueError(f"{k} must be non-negative")
-
-        # Apply to server (preserve I1-I5). Allow clearing S params.
-        if not isinstance(server.get("obfuscation_params"), dict):
-            server["obfuscation_params"] = {}
-        for k, v in next_params.items():
-            if k in ("S1", "S2", "S3", "S4") and v is None:
-                server["obfuscation_params"].pop(k, None)
-            else:
-                server["obfuscation_params"][k] = v
-        for key in ("I1", "I2", "I3", "I4", "I5"):
-            server["obfuscation_params"].setdefault(key, "")
-
-        # Apply to embedded server clients + global client dict (preserve per-client I1-I5)
         def apply_to_client_obj(client_obj):
             if not isinstance(client_obj, dict):
                 return
-            if not isinstance(client_obj.get("obfuscation_params"), dict):
-                client_obj["obfuscation_params"] = {}
-            for k, v in next_params.items():
-                if k in ("S1", "S2", "S3", "S4") and v is None:
-                    client_obj["obfuscation_params"].pop(k, None)
-                else:
-                    client_obj["obfuscation_params"][k] = v
-            for key in ("I1", "I2", "I3", "I4", "I5"):
-                client_obj["obfuscation_params"].setdefault(key, "")
+            client_params = self.extract_client_params(client_obj.get("client_params") or {})
+            client_obj["client_params"] = client_params
 
         for embedded in server.get("clients") or []:
             apply_to_client_obj(embedded)
@@ -758,11 +896,15 @@ AllowedIPs = {client["client_ip"]}/32
         return "10.0.0.1"
 
     def get_client_ip(self, server, client_index):
-        """Get client IP from server subnet"""
+        """Get the first unused client IP in the server's subnet."""
         parts = server["server_ip"].split(".")
-        if len(parts) == 4:
-            return f"{parts[0]}.{parts[1]}.{parts[2]}.{client_index + 2}"
-        return f"10.0.0.{client_index + 2}"
+        prefix = f"{parts[0]}.{parts[1]}.{parts[2]}" if len(parts) == 4 else "10.0.0"
+        used_ips = {c.get("client_ip") for c in server.get("clients", [])}
+        for host in range(2, 255):
+            candidate = f"{prefix}.{host}"
+            if candidate not in used_ips:
+                return candidate
+        return f"{prefix}.{client_index + 2}"
 
     def get_server(self, server_id):
         return next((s for s in self.config.get("servers", []) if s.get("id") == server_id), None)
@@ -813,7 +955,7 @@ AllowedIPs = {client["client_ip"]}/32
         self.save_config()
         return True
 
-    def add_wireguard_client(self, server_id, client_name, i_params=None):
+    def add_wireguard_client(self, server_id, client_name, client_params=None, copy_from_client_id=None):
         """Add a client to a WireGuard server"""
         server = self.get_server(server_id)
         if not server:
@@ -828,22 +970,22 @@ AllowedIPs = {client["client_ip"]}/32
         # Assign client IP
         client_ip = self.get_client_ip(server, len(server["clients"]))
 
-        # Copy server defaults so future edits to the server do not affect existing clients.
-        server_obf_params = (
-            server.get("obfuscation_params")
-            if server.get("obfuscation_enabled")
-            else None
-        )
-        if isinstance(server_obf_params, dict):
-            client_obf_params = dict(server_obf_params)
-        else:
-            client_obf_params = server_obf_params
+        base_client_params = self.default_client_defaults()
+        base_client_params.update(self.extract_client_params(server.get("client_defaults") or {}))
 
-        # Optional per-client I1-I5 overrides (client-only)
-        if isinstance(client_obf_params, dict) and isinstance(i_params, dict):
-            for key in ("I1", "I2", "I3", "I4", "I5"):
-                if key in i_params:
-                    client_obf_params[key] = sanitize_config_value(i_params.get(key, ""))
+        if copy_from_client_id:
+            source_client = next(
+                (client for client in (server.get("clients") or []) if client.get("id") == copy_from_client_id),
+                None,
+            )
+            if source_client:
+                source_params = self.extract_client_params(source_client.get("client_params") or {})
+                base_client_params.update(source_params)
+
+        if isinstance(client_params, dict):
+            base_client_params.update(self.extract_client_params(client_params))
+
+        base_client_params = self.validate_client_params(base_client_params, int(server.get("mtu", self.default_mtu)))
 
         client_config = {
             "id": client_id,
@@ -856,8 +998,9 @@ AllowedIPs = {client["client_ip"]}/32
             "client_public_key": client_keys["public_key"],
             "preshared_key": preshared_key,
             "client_ip": client_ip,
-            "obfuscation_enabled": server["obfuscation_enabled"],
-            "obfuscation_params": client_obf_params,
+            "protocol": server.get("protocol", self.DEFAULT_PROTOCOL),
+            "suspended": False,
+            "client_params": dict(base_client_params),
         }
 
         # Add client to server config
@@ -890,33 +1033,8 @@ AllowedIPs = {client_ip}/32
         )
         return client_config, config_content
 
-    def update_server_i_params(self, server_id, i_params):
-        """Update server-level default I1-I5 parameters (used for NEW clients only).
-
-        These parameters are NOT written to the server config file and do not
-        require restarting the server. Existing clients are NOT modified.
-        """
-        server = self.get_server(server_id)
-        if not server:
-            return None
-
-        if (
-            not server.get("obfuscation_params")
-            or not isinstance(server.get("obfuscation_params"), dict)
-        ):
-            server["obfuscation_params"] = {}
-
-        for key in ("I1", "I2", "I3", "I4", "I5"):
-            if key in i_params:
-                server["obfuscation_params"][key] = sanitize_config_value(i_params.get(key, ""))
-            else:
-                server["obfuscation_params"].setdefault(key, "")
-
-        self.save_config()
-        return server
-
-    def update_client_i_params(self, server_id, client_id, i_params):
-        """Update client-only I1-I5 parameters for a specific client."""
+    def update_client_params(self, server_id, client_id, params):
+        """Update full client-side J/I parameters for a specific client."""
         server = self.get_server(server_id)
         if not server:
             return None
@@ -925,32 +1043,85 @@ AllowedIPs = {client_ip}/32
         if not client or client.get("server_id") != server_id:
             return None
 
-        if (
-            not client.get("obfuscation_params")
-            or not isinstance(client.get("obfuscation_params"), dict)
-        ):
-            client["obfuscation_params"] = {}
+        raw_client_params = self.default_client_defaults()
+        raw_client_params.update(self.extract_client_params(client.get("client_params") or {}))
+        if isinstance(params, dict):
+            raw_client_params.update(self.extract_client_params(params))
 
-        for key in ("I1", "I2", "I3", "I4", "I5"):
-            if key in i_params:
-                client["obfuscation_params"][key] = sanitize_config_value(i_params.get(key, ""))
-            else:
-                client["obfuscation_params"].setdefault(key, "")
+        client_params = self.validate_client_params(raw_client_params, int(server.get("mtu", self.default_mtu)))
+
+        client["client_params"] = client_params
 
         # Mirror update into the server-embedded client list too
         for embedded in server.get("clients", []):
             if embedded.get("id") != client_id:
                 continue
-            if (
-                not embedded.get("obfuscation_params")
-                or not isinstance(embedded.get("obfuscation_params"), dict)
-            ):
-                embedded["obfuscation_params"] = {}
-            for key in ("I1", "I2", "I3", "I4", "I5"):
-                embedded["obfuscation_params"][key] = client["obfuscation_params"].get(key, "")
+            embedded["client_params"] = dict(client_params)
             break
 
         self.save_config()
+        return client
+
+    def rename_server(self, server_id, new_name):
+        """Rename a server (display name only)."""
+        server = self.get_server(server_id)
+        if not server:
+            return None
+        server["name"] = new_name
+        for client in server.get("clients", []):
+            client["server_name"] = new_name
+            global_client = self.config.get("clients", {}).get(client["id"])
+            if global_client:
+                global_client["server_name"] = new_name
+        self.save_config()
+        return server
+
+    def rename_client(self, server_id, client_id, new_name):
+        """Rename a client and rewrite server .conf to keep comment markers in sync."""
+        server = self.get_server(server_id)
+        if not server:
+            return None
+        client = self.get_client(client_id)
+        if not client or client.get("server_id") != server_id:
+            return None
+        client["name"] = new_name
+        for embedded in server.get("clients", []):
+            if embedded.get("id") == client_id:
+                embedded["name"] = new_name
+                break
+        content = self._build_server_config_content(server)
+        with open(server["config_path"], "w", encoding="utf-8") as f:
+            f.write(content)
+        self.save_config()
+        return client
+
+    def toggle_client_suspend(self, server_id, client_id):
+        """Toggle the suspended state of a client."""
+        server = self.get_server(server_id)
+        if not server:
+            return None
+
+        client = self.get_client(client_id)
+        if not client or client.get("server_id") != server_id:
+            return None
+
+        new_state = not client.get("suspended", False)
+        client["suspended"] = new_state
+
+        for embedded in server.get("clients", []):
+            if embedded.get("id") == client_id:
+                embedded["suspended"] = new_state
+                break
+
+        content = self._build_server_config_content(server)
+        with open(server["config_path"], "w", encoding="utf-8") as f:
+            f.write(content)
+
+        self.save_config()
+
+        if server["status"] == "running":
+            self.apply_live_config(server["interface"])
+
         return client
 
     def delete_client(self, server_id, client_id):
@@ -1041,9 +1212,11 @@ DNS = {", ".join(server["dns"])}
 MTU = {server["mtu"]}
 """
 
-        # Add obfuscation parameters if enabled
-        if client_config["obfuscation_enabled"] and client_config["obfuscation_params"]:
-            params = client_config["obfuscation_params"]
+        params = self.build_effective_client_params(
+            server,
+            client_config.get("client_params") or {},
+        )
+        if params:
 
             def _opt_line(key):
                 v = params.get(key, None)

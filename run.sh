@@ -45,7 +45,7 @@ docker run "${RUN_FLAGS[@]}" \
 	--sysctl net.ipv4.ip_forward=1 \
 	--sysctl net.ipv4.conf.all.src_valid_mark=1 \
 	-p 8090:8090/tcp \
-	-p 51820:51820/udp \
+	-p 51820-51830:51820-51830/udp \
 	-e ENABLE_NAT=1 \
 	-e NGINX_PORT=8090 \
 	-e NGINX_USER=admin \

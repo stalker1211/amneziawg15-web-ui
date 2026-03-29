@@ -44,38 +44,54 @@ RUN git clone https://github.com/amnezia-vpn/amneziawg-tools.git . \
 
 
 ############################
-# Runtime
+# Build: Python dependencies
 ############################
-FROM alpine:${ALPINE_VERSION}
+FROM alpine:${ALPINE_VERSION} AS python_deps_builder
 
-# Runtime deps:
-# - bash/openresolv/iproute2/iptables: required by awg-quick and our iptables scripts
-# - ca-certificates/curl: healthcheck + external IP/Geo lookups
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    nginx \
-    supervisor \
-    curl \
-    apache2-utils \
-    bash \
-    iproute2 \
-    iptables \
-    nftables \
-    openresolv \
-    ca-certificates
+RUN apk add --no-cache python3 py3-pip
 
-RUN pip3 install --no-cache-dir --break-system-packages \
+RUN python3 -m venv /opt/venv
+
+RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/pip install --no-cache-dir \
         flask \
         flask_socketio \
         flask-wtf \
         requests \
         python-socketio \
         eventlet \
-    && apk del --no-network py3-pip py3-wheel py3-setuptools || true \
-    && rm -f /usr/lib/python*/ensurepip/_bundled/wheel-*.whl \
+    && rm -f /opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.* \
+    && rm -rf /opt/venv/lib/python*/site-packages/pip \
+              /opt/venv/lib/python*/site-packages/pip-*.dist-info \
+              /opt/venv/lib/python*/site-packages/wheel \
+              /opt/venv/lib/python*/site-packages/wheel-*.dist-info
+
+
+############################
+# Runtime
+############################
+FROM alpine:${ALPINE_VERSION}
+
+# Runtime deps:
+# - bash/openresolv/iproute2/iptables: required by awg-quick and our iptables scripts
+# - ca-certificates: required for external IP/Geo lookups
+RUN apk upgrade --no-cache expat zlib \
+    && apk add --no-cache \
+    python3 \
+    nginx \
+    supervisor \
+    apache2-utils \
+    bash \
+    iproute2 \
+    iptables \
+    nftables \
+    openresolv \
+    ca-certificates \
+    && rm -f /usr/lib/python*/ensurepip/_bundled/pip-*.whl \
     && rm -rf /usr/lib/python*/site-packages/setuptools/_vendor/wheel \
               /usr/lib/python*/site-packages/setuptools/_vendor/wheel-*.dist-info
+
+COPY --from=python_deps_builder /opt/venv /opt/venv
 
 # Install AmneziaWG components built from source
 COPY --from=awg_go_builder /out/usr/bin/amneziawg-go /usr/bin/amneziawg-go
@@ -106,9 +122,10 @@ EXPOSE 80
 EXPOSE 51820/udp
 
 ENV NGINX_PORT=80
+ENV PATH="/opt/venv/bin:${PATH}"
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:$NGINX_PORT/status || exit 1
+    CMD python3 -c "import os, sys, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"NGINX_PORT\", \"80\")}/status', timeout=10).read(); sys.exit(0)" || exit 1
 
 ENTRYPOINT ["/app/scripts/start.sh"]

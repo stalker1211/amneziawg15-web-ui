@@ -21,6 +21,28 @@ def register_server_routes(
     """Register server/client management routes on the Flask app."""
     server_bp = Blueprint('server_routes', __name__)
 
+    def serialize_client(client):
+        if not isinstance(client, dict):
+            return client
+        payload = dict(client)
+        payload.pop('obfuscation_enabled', None)
+        payload.pop('obfuscation_params', None)
+        payload['client_params'] = payload.get('client_params', {})
+        return payload
+
+    def serialize_server(server):
+        if not isinstance(server, dict):
+            return server
+        payload = dict(server)
+        payload.pop('obfuscation_enabled', None)
+        payload.pop('obfuscation_params', None)
+        payload.pop('config_preview', None)
+        payload['transport_params'] = payload.get('transport_params', {})
+        payload['client_defaults'] = payload.get('client_defaults', {})
+        payload['protocol'] = payload.get('protocol', 'AWG 1.5')
+        payload['clients'] = [serialize_client(client) for client in payload.get('clients', [])]
+        return payload
+
     @server_bp.route('/api/servers', methods=['POST'])
     @require_token
     def create_server():
@@ -53,7 +75,7 @@ def register_server_routes(
     @require_token
     def get_server_clients(server_id):
         clients = amnezia_manager.get_client_configs(server_id)
-        return jsonify(clients)
+        return jsonify([serialize_client(client) for client in clients])
 
     @server_bp.route('/api/servers/<server_id>/clients', methods=['POST'])
     @require_token
@@ -61,19 +83,24 @@ def register_server_routes(
         data = request.get_json(silent=True) or {}
         client_name = data.get('name', 'New Client')
 
-        i_params = None
+        client_params = None
+        copy_from_client_id = None
         if isinstance(data, dict):
-            raw = data.get('i_params')
-            if raw is None:
-                raw = data.get('obfuscation_params')
+            raw = data.get('client_params')
             if isinstance(raw, dict):
-                i_params = {k: raw.get(k, "") for k in ("I1", "I2", "I3", "I4", "I5") if k in raw}
+                client_params = raw
+            copy_from_client_id = data.get('copy_from_client_id')
 
-        result = amnezia_manager.add_wireguard_client(server_id, client_name, i_params=i_params)
+        result = amnezia_manager.add_wireguard_client(
+            server_id,
+            client_name,
+            client_params=client_params,
+            copy_from_client_id=copy_from_client_id,
+        )
         if result:
             client_config, config_content = result
             return jsonify({
-                "client": client_config,
+                "client": serialize_client(client_config),
                 "config": config_content
             })
         return jsonify({"error": "Server not found"}), 404
@@ -126,7 +153,7 @@ def register_server_routes(
     @require_token
     def get_all_clients():
         clients = amnezia_manager.get_client_configs()
-        return jsonify(clients)
+        return jsonify([serialize_client(client) for client in clients])
 
     @server_bp.route('/api/servers/<server_id>/egress-ip', methods=['POST'])
     @require_token
@@ -197,15 +224,6 @@ def register_server_routes(
         current_status = amnezia_manager.get_server_status(server_id)
         server['current_status'] = current_status
 
-        config_preview = ""
-        if os.path.exists(server['config_path']):
-            try:
-                with open(server['config_path'], 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    config_preview = ''.join(lines[:min(10, len(lines))])
-            except Exception:
-                config_preview = "Unable to read config file"
-
         mtu_value = server.get('mtu', 1420)
 
         server_info = {
@@ -220,32 +238,31 @@ def register_server_routes(
             "server_ip": server['server_ip'],
             "subnet": server['subnet'],
             "mtu": mtu_value,
-            "obfuscation_enabled": server['obfuscation_enabled'],
-            "obfuscation_params": server.get('obfuscation_params', {}),
+            "transport_params": server.get('transport_params', {}),
+            "client_defaults": server.get('client_defaults', {}),
             "enable_nat": server.get('enable_nat', default_enable_nat),
             "block_lan_cidrs": server.get('block_lan_cidrs', default_block_lan_cidrs),
             "clients_count": len(server['clients']),
             "created_at": server['created_at'],
-            "config_preview": config_preview,
             "public_key": server['server_public_key'],
             "dns": server['dns']
         }
 
         return jsonify(server_info)
 
-    @server_bp.route('/api/servers/<server_id>/obfuscation-params', methods=['POST'])
+    @server_bp.route('/api/servers/<server_id>/transport-params', methods=['POST'])
     @require_token
-    def update_server_obfuscation_params(server_id):
+    def update_server_transport_params(server_id):
         data = request.get_json(silent=True) or {}
         try:
-            result = amnezia_manager.update_server_obfuscation_params(server_id, data)
+            result = amnezia_manager.update_server_transport_params(server_id, data)
             if not result:
                 return jsonify({"error": "Server not found"}), 404
             return jsonify(result)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
-            return jsonify({"error": f"Failed to update obfuscation params: {str(e)}"}), 500
+            return jsonify({"error": f"Failed to update protocol/transport params: {str(e)}"}), 500
 
     @server_bp.route('/api/servers/<server_id>/networking', methods=['POST'])
     @require_token
@@ -281,35 +298,15 @@ def register_server_routes(
             "iptables": iptables_status
         })
 
-    @server_bp.route('/api/servers/<server_id>/i-params', methods=['POST'])
+    @server_bp.route('/api/servers/<server_id>/clients/<client_id>/client-params', methods=['POST'])
     @require_token
-    def update_server_i_params(server_id):
+    def update_client_params(server_id, client_id):
         data = request.json or {}
-        i_params = {}
-        for key in ("I1", "I2", "I3", "I4", "I5"):
-            if key in data:
-                i_params[key] = data.get(key, "")
+        client_params = data.get('client_params') if isinstance(data, dict) else None
+        if not isinstance(client_params, dict):
+            return jsonify({"error": "client_params must be an object"}), 400
 
-        updated_server = amnezia_manager.update_server_i_params(server_id, i_params)
-        if not updated_server:
-            return jsonify({"error": "Server not found"}), 404
-
-        return jsonify({
-            "status": "updated",
-            "server_id": server_id,
-            "obfuscation_params": updated_server.get('obfuscation_params', {})
-        })
-
-    @server_bp.route('/api/servers/<server_id>/clients/<client_id>/i-params', methods=['POST'])
-    @require_token
-    def update_client_i_params(server_id, client_id):
-        data = request.json or {}
-        i_params = {}
-        for key in ("I1", "I2", "I3", "I4", "I5"):
-            if key in data:
-                i_params[key] = data.get(key, "")
-
-        updated_client = amnezia_manager.update_client_i_params(server_id, client_id, i_params)
+        updated_client = amnezia_manager.update_client_params(server_id, client_id, client_params)
         if not updated_client:
             return jsonify({"error": "Client not found"}), 404
 
@@ -317,7 +314,47 @@ def register_server_routes(
             "status": "updated",
             "server_id": server_id,
             "client_id": client_id,
-            "obfuscation_params": updated_client.get('obfuscation_params', {})
+            "client_params": updated_client.get('client_params', {}),
+            "client": serialize_client(updated_client),
+        })
+
+    @server_bp.route('/api/servers/<server_id>/rename', methods=['POST'])
+    @require_token
+    def rename_server(server_id):
+        data = request.get_json(force=True)
+        new_name = (data.get('name') or '').strip()
+        if not new_name:
+            return jsonify({"error": "Name cannot be empty"}), 400
+        updated = amnezia_manager.rename_server(server_id, new_name)
+        if not updated:
+            return jsonify({"error": "Server not found"}), 404
+        return jsonify({"status": "renamed", "server_id": server_id, "name": new_name})
+
+    @server_bp.route('/api/servers/<server_id>/clients/<client_id>/rename', methods=['POST'])
+    @require_token
+    def rename_client(server_id, client_id):
+        data = request.get_json(force=True)
+        new_name = (data.get('name') or '').strip()
+        if not new_name:
+            return jsonify({"error": "Name cannot be empty"}), 400
+        updated = amnezia_manager.rename_client(server_id, client_id, new_name)
+        if not updated:
+            return jsonify({"error": "Client not found"}), 404
+        return jsonify({"status": "renamed", "server_id": server_id, "client_id": client_id, "name": new_name})
+
+    @server_bp.route('/api/servers/<server_id>/clients/<client_id>/suspend', methods=['POST'])
+    @require_token
+    def toggle_client_suspend(server_id, client_id):
+        updated_client = amnezia_manager.toggle_client_suspend(server_id, client_id)
+        if not updated_client:
+            return jsonify({"error": "Client not found"}), 404
+
+        return jsonify({
+            "status": "updated",
+            "server_id": server_id,
+            "client_id": client_id,
+            "suspended": updated_client.get('suspended', False),
+            "client": serialize_client(updated_client),
         })
 
     @server_bp.route('/api/servers', methods=['GET'])
@@ -333,6 +370,12 @@ def register_server_routes(
                 server['block_lan_cidrs'] = default_block_lan_cidrs
             if 'egress_probe' not in server:
                 server['egress_probe'] = None
+            if 'protocol' not in server:
+                server['protocol'] = 'AWG 1.5'
+            if 'transport_params' not in server:
+                server['transport_params'] = {}
+            if 'client_defaults' not in server:
+                server['client_defaults'] = {}
 
             public_geo, public_geo_cc = amnezia_manager.lookup_geoip(server.get("public_ip"))
             server["public_ip_geo"] = public_geo
@@ -343,9 +386,10 @@ def register_server_routes(
                 egress_geo, egress_geo_cc = amnezia_manager.lookup_geoip(probe.get("external_ip"))
                 probe["external_ip_geo"] = egress_geo
                 probe["external_ip_geo_country_code"] = egress_geo_cc
+                probe["service_name"] = amnezia_manager.format_probe_service_name(probe.get("service"))
 
         amnezia_manager.save_config()
-        return jsonify(amnezia_manager.config["servers"])
+        return jsonify([serialize_server(server) for server in amnezia_manager.config["servers"]])
 
     @server_bp.route('/api/servers/<server_id>/clients/<client_id>/config-both')
     @require_token

@@ -3,9 +3,16 @@ class AmneziaApp {
     constructor() {
         this.api = new window.ApiClient();
         this.socket = null;
+        this.socketHealthTimer = null;
+        this.socketReconnectFailures = 0;
+        this.socketLastRebuildAt = 0;
+        this.socketLifecycleHandlersInstalled = false;
         this.lastServers = [];
         this.serverClients = new Map();
         this.lastTrafficByServer = new Map();
+        this.serverTransportModalState = null;
+        this.clientParamsModalState = null;
+        this.serverNetworkingModalState = null;
         this.currentPublicIp = '';
         this.currentPublicIpCountryCode = '';
         this.logPoller = null;
@@ -44,6 +51,7 @@ class AmneziaApp {
             console.log("AmneziaWG Web UI initializing...");
             this.applyTheme(this.getPreferredTheme(), false);
             this.setupEventListeners();
+            this.setupSocketLifecycleHandlers();
             this.setupSocketIO();
             this.loadInitialData();
         });
@@ -66,6 +74,117 @@ class AmneziaApp {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    collectServerTransportFormState(serverId, fallbackProtocol = 'AWG 1.5') {
+        const toOptionalInt = (raw) => {
+            const s = String(raw ?? '').trim();
+            if (!s) return null;
+            const n = parseInt(s, 10);
+            return Number.isFinite(n) ? n : null;
+        };
+
+        return {
+            protocol: document.getElementById(`serverProtocol-${serverId}`)?.value || fallbackProtocol,
+            S1: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S1`)?.value),
+            S2: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S2`)?.value),
+            S3: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S3`)?.value),
+            S4: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S4`)?.value),
+            H1: (document.getElementById(`serverTransportParam-${serverId}-H1`)?.value || '').trim(),
+            H2: (document.getElementById(`serverTransportParam-${serverId}-H2`)?.value || '').trim(),
+            H3: (document.getElementById(`serverTransportParam-${serverId}-H3`)?.value || '').trim(),
+            H4: (document.getElementById(`serverTransportParam-${serverId}-H4`)?.value || '').trim(),
+        };
+    }
+
+    formatTransportParamsSummary(protocol, transportParams = {}) {
+        const orderedKeys = protocol === 'AWG 2.0'
+            ? ['S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4']
+            : ['S1', 'S2', 'H1', 'H2', 'H3', 'H4'];
+        const parts = orderedKeys
+            .filter((key) => transportParams[key] !== undefined && transportParams[key] !== null && transportParams[key] !== '')
+            .map((key) => `${key}=${transportParams[key]}`);
+        return parts.length > 0 ? parts.join(', ') : 'No transport parameters set';
+    }
+
+    updateServerConfigPrimaryAction(serverId) {
+        const button = document.getElementById(`serverConfigPrimaryAction-${serverId}`);
+        if (!button || !this.serverTransportModalState || String(this.serverTransportModalState.serverId) !== String(serverId)) {
+            return;
+        }
+
+        const currentState = this.collectServerTransportFormState(serverId, this.serverTransportModalState.initial.protocol);
+        const isDirty = JSON.stringify(currentState) !== JSON.stringify(this.serverTransportModalState.initial);
+
+        if (isDirty) {
+            button.textContent = 'Update & Restart Server';
+            button.className = 'btn-pill bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700';
+            button.onclick = () => this.saveServerTransportParams(serverId);
+        } else {
+            button.textContent = 'Close';
+            button.className = 'btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600';
+            button.onclick = () => this.closeModal();
+        }
+    }
+
+    setupServerTransportDirtyTracking(serverId, fallbackProtocol = 'AWG 1.5') {
+        const initial = this.collectServerTransportFormState(serverId, fallbackProtocol);
+        this.serverTransportModalState = { serverId: String(serverId), initial };
+
+        const fieldIds = [
+            `serverProtocol-${serverId}`,
+            `serverTransportParam-${serverId}-S1`,
+            `serverTransportParam-${serverId}-S2`,
+            `serverTransportParam-${serverId}-S3`,
+            `serverTransportParam-${serverId}-S4`,
+            `serverTransportParam-${serverId}-H1`,
+            `serverTransportParam-${serverId}-H2`,
+            `serverTransportParam-${serverId}-H3`,
+            `serverTransportParam-${serverId}-H4`,
+        ];
+
+        fieldIds.forEach((id) => {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.addEventListener('input', () => this.updateServerConfigPrimaryAction(serverId));
+            element.addEventListener('change', () => this.updateServerConfigPrimaryAction(serverId));
+        });
+
+        this.updateServerConfigPrimaryAction(serverId);
+    }
+
+    updateClientConfigPrimaryAction(clientId) {
+        const button = document.getElementById(`clientConfigPrimaryAction-${clientId}`);
+        if (!button || !this.clientParamsModalState || String(this.clientParamsModalState.clientId) !== String(clientId)) {
+            return;
+        }
+
+        const currentState = this.collectClientParamsFormState(`clientParam-${clientId}`);
+        const isDirty = JSON.stringify(currentState) !== JSON.stringify(this.clientParamsModalState.initial);
+
+        if (isDirty) {
+            button.textContent = 'Update Client Config';
+            button.className = 'btn-pill bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700';
+            button.onclick = () => this.saveClientParams(this.clientParamsModalState.serverId, clientId);
+        } else {
+            button.textContent = 'Close';
+            button.className = 'btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600';
+            button.onclick = () => this.closeModal();
+        }
+    }
+
+    setupClientParamsDirtyTracking(serverId, clientId) {
+        const initial = this.collectClientParamsFormState(`clientParam-${clientId}`);
+        this.clientParamsModalState = { serverId: String(serverId), clientId: String(clientId), initial };
+
+        ['Jc', 'Jmin', 'Jmax', 'I1', 'I2', 'I3', 'I4', 'I5'].forEach((key) => {
+            const element = document.getElementById(`clientParam-${clientId}-${key}`);
+            if (!element) return;
+            element.addEventListener('input', () => this.updateClientConfigPrimaryAction(clientId));
+            element.addEventListener('change', () => this.updateClientConfigPrimaryAction(clientId));
+        });
+
+        this.updateClientConfigPrimaryAction(clientId);
     }
 
     getApiToken() {
@@ -232,14 +351,12 @@ class AmneziaApp {
             });
         }
 
-        // Obfuscation toggle
-        const obfuscationCheckbox = this.getElement('enableObfuscation');
-        if (obfuscationCheckbox) {
-            obfuscationCheckbox.addEventListener('change', (e) => {
-                this.toggleObfuscationParams(e.target.checked);
+        const protocolSelect = this.getElement('serverProtocol');
+        if (protocolSelect) {
+            protocolSelect.addEventListener('change', (e) => {
+                this.toggleProtocolFields(e.target.value, 'param');
             });
-            // Initialize visibility
-            this.toggleObfuscationParams(obfuscationCheckbox.checked);
+            this.toggleProtocolFields(protocolSelect.value, 'param');
         }
 
         // Form validation listeners
@@ -294,6 +411,28 @@ class AmneziaApp {
         if (!modal) return;
         modal.classList.remove('hidden');
 
+        // Auto-propose next free port starting from 51820
+        const usedPorts = new Set((this.lastServers || []).map(s => Number(s.port)));
+        let nextPort = 51820;
+        while (usedPorts.has(nextPort)) nextPort++;
+        const portEl = this.getElement('serverPort');
+        if (portEl) portEl.value = nextPort;
+
+        // Auto-propose next free subnet from 10.10.X.0/24
+        const usedThirdOctets = new Set(
+            (this.lastServers || [])
+                .map(s => s.subnet || '')
+                .map(sub => {
+                    const m = sub.match(/^10\.10\.(\d+)\./);
+                    return m ? Number(m[1]) : null;
+                })
+                .filter(v => v !== null)
+        );
+        let thirdOctet = 0;
+        while (usedThirdOctets.has(thirdOctet) && thirdOctet < 255) thirdOctet++;
+        const subnetEl = this.getElement('serverSubnet');
+        if (subnetEl) subnetEl.value = `10.10.${thirdOctet}.0/24`;
+
         const nameElement = this.getElement('serverName');
         if (nameElement) nameElement.focus();
     }
@@ -335,52 +474,313 @@ class AmneziaApp {
         }
     }
 
-    toggleObfuscationParams(show) {
-        const obfuscationParams = this.getElement('obfuscationParams');
-        if (obfuscationParams) {
-            obfuscationParams.style.display = show ? 'block' : 'none';
+    getTransportDescriptionHtml(protocol, variant = 'create') {
+        const containerClass = variant === 'modal'
+            ? 'text-[12px] text-blue-800/80 space-y-1 mb-3'
+            : 'text-xs text-gray-700 space-y-1 mb-4';
+
+        const baseLines = [
+            '<p>S1: Padding for handshake initial traffic. Common starting range is 15-150 but =< (MTU - 148)</p>',
+            '<p>S2: Padding for handshake response traffic. Common starting range is 15-150 but =< (MTU - 92); S1 + 56 ≠ S2</p>',
+            protocol === 'AWG 2.0'
+                ? '<p>S3: Padding of handshake cookie message.</p>'
+                : '',
+            protocol === 'AWG 2.0'
+                ? '<p>S4: Padding for data packets, increase packet size by S4 bytes. Values >32 likely to trigger \'message too long\' errors.</p>'
+                : '',
+            protocol === 'AWG 2.0'
+                ? '<p>H1-H4: header signature values. Change packet fingerprint, can be single int32 values or ranges (like 1200-1400). Ranges must not overlap.</p>'
+                : '<p>H1-H4: header signature values. Change packet fingerprint, can be single int32 values.</p>'
+        ];
+
+        return `<div class="${containerClass}">${baseLines.join('')}</div>`;
+    }
+
+    getClientParamDescriptionHtml() {
+        return `
+            <div class="text-[13px] leading-relaxed text-blue-800/80 space-y-1 mb-3">
+                <p>Jc: number of junk packets sent before the handshake starts. Usual range: 4-12</p>
+                <p>Jmin / Jmax: minimum and maximum size range for those pre-handshake junk packets. Jmin =< Jmax.</p>
+                <p>I1-I5: Optional custom signature packets; see AWG docs for syntax.</p>
+                <p>J and I affect handshake camouflage only. They do not change established tunnel transport packets.</p>
+            </div>
+        `;
+    }
+
+    getClientTransportSummaryHtml(protocolValue, transportSummary) {
+        const protocol = this.escapeHtml(protocolValue || 'AWG 1.5');
+        const summary = this.escapeHtml(transportSummary || 'Default');
+
+        return `
+            <div class="text-sm text-gray-800 space-y-1 mb-3">
+                <div><span class="font-semibold text-gray-900">Protocol:</span> <span class="font-mono text-gray-800">${protocol}</span></div>
+                <div><span class="font-semibold text-gray-900">Parameters:</span> <span class="font-mono text-gray-800">${summary}</span></div>
+            </div>
+        `;
+    }
+
+    updateTransportDescription(protocol, prefix = 'param') {
+        let descriptionId = 'transportParameterDescription';
+        if (prefix !== 'param') {
+            const serverId = String(prefix).replace(/^serverTransportParam-/, '').replace(/-$/, '');
+            descriptionId = `serverTransportDescription-${serverId}`;
+        }
+
+        const description = document.getElementById(descriptionId);
+        if (!description) return;
+        description.innerHTML = this.getTransportDescriptionHtml(protocol, prefix === 'param' ? 'create' : 'modal');
+    }
+
+    collectServerNetworkingFormState(serverId) {
+        return {
+            enable_nat: !!document.getElementById(`serverEnableNat-${serverId}`)?.checked,
+            block_lan_cidrs: !!document.getElementById(`serverBlockLan-${serverId}`)?.checked,
+        };
+    }
+
+    updateServerNetworkingPrimaryAction(serverId) {
+        const button = document.getElementById(`serverNetworkingPrimaryAction-${serverId}`);
+        if (!button || !this.serverNetworkingModalState || String(this.serverNetworkingModalState.serverId) !== String(serverId)) {
+            return;
+        }
+
+        const currentState = this.collectServerNetworkingFormState(serverId);
+        const isDirty = JSON.stringify(currentState) !== JSON.stringify(this.serverNetworkingModalState.initial);
+
+        if (isDirty) {
+            button.textContent = 'Update Network Settings';
+            button.className = 'btn-pill bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700';
+            button.onclick = () => this.saveServerNetworking(serverId);
+        } else {
+            button.textContent = '';
+            button.className = 'hidden';
+            button.onclick = null;
         }
     }
 
-    setupSocketIO() {
-        // Use the exact same URL as the current page to avoid CORS issues
-        const socketUrl = window.location.origin;
+    setupServerNetworkingDirtyTracking(serverId) {
+        this.serverNetworkingModalState = {
+            serverId: String(serverId),
+            initial: this.collectServerNetworkingFormState(serverId),
+        };
 
-        this.socket = io(socketUrl, {
+        [`serverEnableNat-${serverId}`, `serverBlockLan-${serverId}`].forEach((id) => {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.addEventListener('change', () => this.updateServerNetworkingPrimaryAction(serverId));
+            element.addEventListener('input', () => this.updateServerNetworkingPrimaryAction(serverId));
+        });
+
+        this.updateServerNetworkingPrimaryAction(serverId);
+    }
+
+    toggleProtocolFields(protocol, prefix = 'param') {
+        const allowS34 = protocol === 'AWG 2.0';
+        const allowRanges = protocol === 'AWG 2.0';
+
+        ['S3', 'S4'].forEach((key) => {
+            const element = document.getElementById(`${prefix}${key}`);
+            if (!element) return;
+            element.disabled = !allowS34;
+            if (!allowS34) {
+                element.value = '';
+            }
+            const container = element.closest('label, div');
+            if (container) {
+                container.style.display = allowS34 ? '' : 'none';
+            }
+        });
+
+        ['H1', 'H2', 'H3', 'H4'].forEach((key) => {
+            const element = document.getElementById(`${prefix}${key}`);
+            if (!element) return;
+            element.placeholder = allowRanges ? '123 or 123-456' : '123';
+        });
+
+        this.updateTransportDescription(protocol, prefix);
+    }
+
+    setupSocketLifecycleHandlers() {
+        if (this.socketLifecycleHandlersInstalled) return;
+        this.socketLifecycleHandlersInstalled = true;
+
+        window.addEventListener('pageshow', () => {
+            this.handleSocketResume('pageshow');
+        });
+
+        window.addEventListener('focus', () => {
+            this.handleSocketResume('focus');
+        });
+
+        window.addEventListener('online', () => {
+            this.handleSocketResume('online');
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                this.handleSocketResume('visibilitychange');
+            }
+        });
+    }
+
+    clearSocketHealthTimer() {
+        if (this.socketHealthTimer) {
+            clearTimeout(this.socketHealthTimer);
+            this.socketHealthTimer = null;
+        }
+    }
+
+    teardownSocket() {
+        this.clearSocketHealthTimer();
+
+        if (!this.socket) return;
+
+        try {
+            this.socket.off();
+        } catch (_) {
+            // ignore
+        }
+
+        try {
+            this.socket.disconnect();
+        } catch (_) {
+            // ignore
+        }
+
+        this.socket = null;
+    }
+
+    createSocket() {
+        const socketUrl = window.location.origin;
+        return io(socketUrl, {
             path: '/socket.io',
             transports: ['websocket'],
+            forceNew: true,
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 5000,
         });
+    }
 
-        this.socket.on('connect', () => {
+    resyncAppState() {
+        this.loadServers();
+        this.loadPublicIp();
+    }
+
+    scheduleSocketHealthCheck(reason, delayMs = 3000) {
+        this.clearSocketHealthTimer();
+        this.socketHealthTimer = setTimeout(() => {
+            if (!this.socket || this.socket.connected) {
+                return;
+            }
+
+            console.warn(`Socket health check failed after ${reason}, rebuilding connection`);
+            this.rebuildSocket(`health-check:${reason}`);
+        }, delayMs);
+    }
+
+    bindSocketHandlers(socket) {
+        socket.on('connect', () => {
+            if (socket !== this.socket) return;
+
+            this.socketReconnectFailures = 0;
+            this.clearSocketHealthTimer();
             console.log("✅ Connected to server via WebSocket");
             this.updateStatus('Connected to AmneziaWG Web UI', true);
+            this.resyncAppState();
         });
 
-        this.socket.on('disconnect', () => {
-            console.log("❌ Disconnected from server");
-            this.updateStatus('Disconnected from AmneziaWG Web UI', false);
+        socket.on('disconnect', (reason) => {
+            if (socket !== this.socket) return;
+
+            console.log("❌ Disconnected from server", reason ? `(${reason})` : '');
+            this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
+
+            if (reason !== 'io client disconnect') {
+                this.scheduleSocketHealthCheck(`disconnect:${reason || 'unknown'}`);
+            }
         });
 
-        this.socket.on('connect_error', (error) => {
+        socket.on('connect_error', (error) => {
+            if (socket !== this.socket) return;
+
+            this.socketReconnectFailures += 1;
             console.error("❌ WebSocket connection error:", error);
             this.updateStatus('Connection error - retrying...', false);
+
+            if (document.visibilityState === 'visible' && this.socketReconnectFailures >= 2) {
+                this.rebuildSocket(`connect-error:${error?.message || 'unknown'}`);
+                return;
+            }
+
+            this.scheduleSocketHealthCheck(`connect-error:${error?.message || 'unknown'}`, 2500);
         });
 
-        this.socket.on('status', (data) => {
+        socket.on('status', (data) => {
+            if (socket !== this.socket) return;
+
             console.log("Status update:", data);
             if (data.public_ip) {
                 this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
             }
         });
 
-        this.socket.on('server_status', (data) => {
+        socket.on('server_status', (data) => {
+            if (socket !== this.socket) return;
+
             console.log("Server status update:", data);
             this.loadServers();
         });
 
-        this.socket.on('traffic_update', (data) => {
+        socket.on('traffic_update', (data) => {
+            if (socket !== this.socket) return;
             this.updateServerTraffic(data.server_id, data.traffic);
         });
+    }
+
+    rebuildSocket(reason = 'manual') {
+        const now = Date.now();
+        if ((now - this.socketLastRebuildAt) < 1500) {
+            return;
+        }
+
+        this.socketLastRebuildAt = now;
+        this.teardownSocket();
+        this.socket = this.createSocket();
+        this.bindSocketHandlers(this.socket);
+
+        console.log(`Rebuilt Socket.IO connection (${reason})`);
+        this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
+    }
+
+    handleSocketResume(trigger) {
+        if (this.socket && this.socket.connected) {
+            this.resyncAppState();
+            return;
+        }
+
+        if (!this.socket) {
+            this.rebuildSocket(`resume:${trigger}`);
+            return;
+        }
+
+        console.log(`Socket resume check triggered by ${trigger}`);
+        this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
+
+        try {
+            this.socket.connect();
+        } catch (_) {
+            this.rebuildSocket(`resume-connect:${trigger}`);
+            return;
+        }
+
+        this.scheduleSocketHealthCheck(`resume:${trigger}`, 2500);
+    }
+
+    setupSocketIO() {
+        this.rebuildSocket('initial');
     }
 
     updateStatus(message, isConnected = null) {
@@ -475,8 +875,7 @@ class AmneziaApp {
     }
 
     generateRandomParams() {
-        // Generate random values within recommended ranges
-        const jcElement = this.getElement('paramJc');
+        const protocol = this.getElement('serverProtocol')?.value || 'AWG 1.5';
         const s1Element = this.getElement('paramS1');
         const s2Element = this.getElement('paramS2');
         const s3Element = this.getElement('paramS3');
@@ -486,11 +885,15 @@ class AmneziaApp {
         const h3Element = this.getElement('paramH3');
         const h4Element = this.getElement('paramH4');
         
-        if (jcElement) jcElement.value = Math.floor(Math.random() * 9) + 4; // 4-12
-        if (s1Element) s1Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
-        if (s2Element) s2Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
-        if (s3Element) s3Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
-        if (s4Element) s4Element.value = Math.floor(Math.random() * 136) + 15; // 15-150
+        if (s1Element) s1Element.value = Math.floor(Math.random() * 136) + 15;
+        if (s2Element) s2Element.value = Math.floor(Math.random() * 136) + 15;
+        if (protocol === 'AWG 2.0') {
+            if (s3Element) s3Element.value = Math.floor(Math.random() * 136) + 15;
+            if (s4Element) s4Element.value = Math.floor(Math.random() * 33);
+        } else {
+            if (s3Element) s3Element.value = '';
+            if (s4Element) s4Element.value = '';
+        }
         
         // Generate unique H values
         const hValues = new Set();
@@ -518,49 +921,211 @@ class AmneziaApp {
         }
     }
 
-    validateObfuscationParamsJS(params, mtu) {
+    parseHeaderValueJS(value, protocol) {
+        const raw = String(value ?? '').trim();
+        if (!raw) {
+            return { error: 'Header value cannot be empty' };
+        }
+
+        if (protocol === 'AWG 2.0' && /^\d+\s*-\s*\d+$/.test(raw)) {
+            const [startRaw, endRaw] = raw.split('-', 2).map((part) => part.trim());
+            const start = parseInt(startRaw, 10);
+            const end = parseInt(endRaw, 10);
+            if (start > end) {
+                return { error: `Invalid range ${raw}: start must be <= end` };
+            }
+            return { raw: `${start}-${end}`, start, end };
+        }
+
+        if (/^\d+$/.test(raw)) {
+            const number = parseInt(raw, 10);
+            return { raw: String(number), start: number, end: number };
+        }
+
+        return { error: protocol === 'AWG 2.0' ? `Header value '${raw}' must be an integer or range x-y` : `Header value '${raw}' must be a single integer` };
+    }
+
+    validateTransportParamsJS(protocol, params, mtu) {
         let errors = [];
-
-        // Jc in recommended range 4-12
-        if (!(params.Jc >= 4 && params.Jc <= 12)) {
-            errors.push(`Jc (${params.Jc}) must be in [4, 12]`);
-        }
-
-        // Jmin < Jmax ≤ mtu
-        if (!(params.Jmin < params.Jmax && params.Jmax <= mtu)) {
-            errors.push(`Jmin (${params.Jmin}) must be less than Jmax (${params.Jmax}), and Jmax ≤ MTU (${mtu})`);
-        }
-        // Jmax > Jmin < mtu
-        if (!(params.Jmax > params.Jmin && params.Jmin < mtu)) {
-            errors.push(`Jmax (${params.Jmax}) must be greater than Jmin (${params.Jmin}), and Jmin < MTU (${mtu})`);
-        }
         const hasS1 = Number.isFinite(params.S1);
         const hasS2 = Number.isFinite(params.S2);
         const hasS3 = Number.isFinite(params.S3);
         const hasS4 = Number.isFinite(params.S4);
 
-        // S1 ≤ (mtu - 148) and in the range from 15 to 150 (optional)
-        if (hasS1 && !(params.S1 <= (mtu - 148) && params.S1 >= 15 && params.S1 <= 150)) {
-            errors.push(`S1 (${params.S1}) must be in [15, 150] and ≤ (MTU - 148) (${mtu - 148})`);
+        if (hasS1 && params.S1 < 0) {
+            errors.push(`S1 (${params.S1}) must be non-negative`);
         }
-        // S2 ≤ (mtu - 92) and in the range from 15 to 150 (optional)
-        if (hasS2 && !(params.S2 <= (mtu - 92) && params.S2 >= 15 && params.S2 <= 150)) {
-            errors.push(`S2 (${params.S2}) must be in [15, 150] and ≤ (MTU - 92) (${mtu - 92})`);
+        if (hasS2 && params.S2 < 0) {
+            errors.push(`S2 (${params.S2}) must be non-negative`);
         }
-        // S3 in the range from 15 to 150 (optional)
-        if (hasS3 && !(params.S3 >= 15 && params.S3 <= 150)) {
-            errors.push(`S3 (${params.S3}) must be in [15, 150]`);
+        if (hasS3 && params.S3 < 0) {
+            errors.push(`S3 (${params.S3}) must be non-negative`);
         }
-        // S4 in the range from 15 to 150 (optional)
-        if (hasS4 && !(params.S4 >= 15 && params.S4 <= 150)) {
-            errors.push(`S4 (${params.S4}) must be in [15, 150]`);
+        if (hasS4 && params.S4 < 0) {
+            errors.push(`S4 (${params.S4}) must be non-negative`);
         }
         // S1 + 56 ≠ S2 (only when both present)
         if (hasS1 && hasS2 && (params.S1 + 56 === params.S2)) {
             errors.push(`S1 + 56 (${params.S1 + 56}) must not equal S2 (${params.S2})`);
         }
 
+        if (protocol !== 'AWG 2.0' && (hasS3 || hasS4)) {
+            errors.push('S3 and S4 are supported only by AWG 2.0');
+        }
+
+        const headers = ['H1', 'H2', 'H3', 'H4'].map((key) => ({ key, parsed: this.parseHeaderValueJS(params[key], protocol) }));
+        headers.forEach(({ key, parsed }) => {
+            if (parsed.error) {
+                errors.push(`${key}: ${parsed.error}`);
+            }
+        });
+
+        if (protocol === 'AWG 2.0' && !headers.some(({ parsed }) => parsed.error)) {
+            for (let i = 0; i < headers.length; i += 1) {
+                for (let j = i + 1; j < headers.length; j += 1) {
+                    const left = headers[i].parsed;
+                    const right = headers[j].parsed;
+                    if (left.start <= right.end && right.start <= left.end) {
+                        errors.push(`${headers[i].key} and ${headers[j].key} ranges must not intersect`);
+                    }
+                }
+            }
+        }
+
         return errors;
+    }
+
+    getTransportParamWarningsJS(protocol, params, mtu) {
+        const warnings = [];
+        const hasS1 = Number.isFinite(params.S1);
+        const hasS2 = Number.isFinite(params.S2);
+        const hasS3 = Number.isFinite(params.S3);
+        const hasS4 = Number.isFinite(params.S4);
+
+        if (hasS1 && (params.S1 < 15 || params.S1 > 150)) {
+            warnings.push(`S1 (${params.S1}) is outside the common 15-150 range.`);
+        }
+        if (hasS1 && params.S1 > (mtu - 148)) {
+            warnings.push(`S1 (${params.S1}) is above the previous rule-of-thumb bound MTU - 148 (${mtu - 148}). This is practical guidance, not a protocol limit.`);
+        }
+        if (hasS2 && (params.S2 < 15 || params.S2 > 150)) {
+            warnings.push(`S2 (${params.S2}) is outside the common 15-150 range.`);
+        }
+        if (hasS2 && params.S2 > (mtu - 92)) {
+            warnings.push(`S2 (${params.S2}) is above the previous rule-of-thumb bound MTU - 92 (${mtu - 92}). This is practical guidance, not a protocol limit.`);
+        }
+        if (protocol === 'AWG 2.0' && hasS3 && (params.S3 < 15 || params.S3 > 150)) {
+            warnings.push(`S3 (${params.S3}) is outside the common 15-150 range.`);
+        }
+        if (protocol === 'AWG 2.0' && hasS4 && params.S4 > 32) {
+            warnings.push(`S4 (${params.S4}) is above a conservative safe range (0-32) and may cause 'message too long' errors.`);
+        }
+
+        return warnings;
+    }
+
+    validateClientParamsJS(params, mtu) {
+        let errors = [];
+        if (!(params.Jc > 0)) {
+            errors.push(`Jc (${params.Jc}) must be positive`);
+        }
+        if (!(params.Jmin > 0)) {
+            errors.push(`Jmin (${params.Jmin}) must be positive`);
+        }
+        if (!(params.Jmax > 0)) {
+            errors.push(`Jmax (${params.Jmax}) must be positive`);
+        }
+        if (!(params.Jmin <= params.Jmax)) {
+            errors.push(`Jmin (${params.Jmin}) must be less than or equal to Jmax (${params.Jmax})`);
+        }
+        return errors;
+    }
+
+    getClientParamWarningsJS(params, mtu) {
+        const warnings = [];
+        if (!(params.Jc >= 4 && params.Jc <= 12)) {
+            warnings.push(`Jc (${params.Jc}) is outside the documented recommended range 4-12.`);
+        }
+        if (params.Jmax >= mtu) {
+            warnings.push(`Jmax (${params.Jmax}) is at or above MTU (${mtu}) and may fragment junk packets.`);
+        }
+        return warnings;
+    }
+
+    collectClientParamsFormState(prefix) {
+        return {
+            Jc: parseInt(document.getElementById(`${prefix}-Jc`)?.value || '8', 10),
+            Jmin: parseInt(document.getElementById(`${prefix}-Jmin`)?.value || '8', 10),
+            Jmax: parseInt(document.getElementById(`${prefix}-Jmax`)?.value || '80', 10),
+            I1: document.getElementById(`${prefix}-I1`)?.value || '',
+            I2: document.getElementById(`${prefix}-I2`)?.value || '',
+            I3: document.getElementById(`${prefix}-I3`)?.value || '',
+            I4: document.getElementById(`${prefix}-I4`)?.value || '',
+            I5: document.getElementById(`${prefix}-I5`)?.value || '',
+        };
+    }
+
+    renderClientParamsFormHtml(prefix, params) {
+        const safe = (value) => this.escapeHtml(value);
+        return `
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-3">
+                <label class="block">
+                    <div class="text-xs font-medium text-blue-900">Jc</div>
+                    <input id="${prefix}-Jc" type="number" min="1" class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-sm" value="${safe(params.Jc ?? 8)}">
+                </label>
+                <label class="block">
+                    <div class="text-xs font-medium text-blue-900">Jmin</div>
+                    <input id="${prefix}-Jmin" type="number" min="1" class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-sm" value="${safe(params.Jmin ?? 8)}">
+                </label>
+                <label class="block">
+                    <div class="text-xs font-medium text-blue-900">Jmax</div>
+                    <input id="${prefix}-Jmax" type="number" min="1" class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-sm" value="${safe(params.Jmax ?? 80)}">
+                </label>
+            </div>
+            <div class="grid grid-cols-1 gap-2">
+                ${['I1', 'I2', 'I3', 'I4', 'I5'].map((key) => `
+                    <label class="block text-xs">
+                        <div class="font-semibold text-blue-900 mb-1">${safe(key)}</div>
+                        <textarea id="${prefix}-${key}" rows="1" class="w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70">${safe(params[key] ?? '')}</textarea>
+                    </label>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    autosizeClientParamTextareas(prefix, maxHeightPx = 260) {
+        ['I1', 'I2', 'I3', 'I4', 'I5'].forEach((key) => {
+            const el = document.getElementById(`${prefix}-${key}`);
+            this.enableTextareaAutosize(el, maxHeightPx);
+        });
+    }
+
+    populateNewClientParamsFromExisting(serverId, clientId) {
+        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
+        const defaults = server?.client_defaults || {};
+        const existingClient = (this.serverClients.get(serverId) || []).find((client) => String(client.id) === String(clientId));
+        const params = existingClient?.client_params || defaults;
+
+        const values = {
+            Jc: params.Jc ?? defaults.Jc ?? 8,
+            Jmin: params.Jmin ?? defaults.Jmin ?? 8,
+            Jmax: params.Jmax ?? defaults.Jmax ?? 80,
+            I1: params.I1 ?? defaults.I1 ?? '',
+            I2: params.I2 ?? defaults.I2 ?? '',
+            I3: params.I3 ?? defaults.I3 ?? '',
+            I4: params.I4 ?? defaults.I4 ?? '',
+            I5: params.I5 ?? defaults.I5 ?? '',
+        };
+
+        Object.entries(values).forEach(([key, value]) => {
+            const el = document.getElementById(`newClientParam-${serverId}-${key}`);
+            if (el) {
+                el.value = value;
+                if (el.tagName === 'TEXTAREA') {
+                    this.autosizeTextarea(el, 200);
+                }
+            }
+        });
     }
 
     validateForm() {
@@ -690,7 +1255,7 @@ class AmneziaApp {
         const subnetElement = this.getElement('serverSubnet');
         const mtuElement = this.getElement('serverMTU');
         const dnsElement = this.getElement('serverDNS');
-        const obfuscationElement = this.getElement('enableObfuscation');
+        const protocolElement = this.getElement('serverProtocol');
         const autoStartElement = this.getElement('autoStart');
         const enableNatElement = this.getElement('enableNat');
         const blockLanElement = this.getElement('blockLanCidrs');
@@ -701,7 +1266,7 @@ class AmneziaApp {
             subnet: subnetElement ? subnetElement.value : '10.0.0.0/24',
             mtu: mtuElement ? parseInt(mtuElement.value) : 1420,
             dns: dnsElement ? dnsElement.value.trim() : '8.8.8.8,1.1.1.1',
-            obfuscation: obfuscationElement ? obfuscationElement.checked : true,
+            protocol: protocolElement ? protocolElement.value : 'AWG 1.5',
             auto_start: autoStartElement ? autoStartElement.checked : true,
             enable_nat: enableNatElement ? enableNatElement.checked : true,
             block_lan_cidrs: blockLanElement ? blockLanElement.checked : true
@@ -709,40 +1274,37 @@ class AmneziaApp {
 
         console.log("Form data:", formData);
 
-        // Add obfuscation parameters if enabled
-        if (formData.obfuscation) {
-            const toOptionalInt = (raw) => {
-                const s = String(raw ?? '').trim();
-                if (!s) return null;
-                const n = parseInt(s, 10);
-                return Number.isFinite(n) ? n : null;
-            };
+        const toOptionalInt = (raw) => {
+            const s = String(raw ?? '').trim();
+            if (!s) return null;
+            const n = parseInt(s, 10);
+            return Number.isFinite(n) ? n : null;
+        };
 
-            formData.obfuscation_params = {
-                Jc: parseInt(this.getElement('paramJc')?.value || '8'),
-                Jmin: parseInt(this.getElement('paramJmin')?.value || '8'),
-                Jmax: parseInt(this.getElement('paramJmax')?.value || '80'),
-                S1: toOptionalInt(this.getElement('paramS1')?.value),
-                S2: toOptionalInt(this.getElement('paramS2')?.value),
-                S3: toOptionalInt(this.getElement('paramS3')?.value),
-                S4: toOptionalInt(this.getElement('paramS4')?.value),
-                H1: parseInt(this.getElement('paramH1')?.value || '1000'),
-                H2: parseInt(this.getElement('paramH2')?.value || '2000'),
-                H3: parseInt(this.getElement('paramH3')?.value || '3000'),
-                H4: parseInt(this.getElement('paramH4')?.value || '4000'),
-                I1: (this.getElement('paramI1')?.value || '').trim(),
-                I2: (this.getElement('paramI2')?.value || '').trim(),
-                I3: (this.getElement('paramI3')?.value || '').trim(),
-                I4: (this.getElement('paramI4')?.value || '').trim(),
-                I5: (this.getElement('paramI5')?.value || '').trim(),
-            };
+        formData.transport_params = {
+            S1: toOptionalInt(this.getElement('paramS1')?.value),
+            S2: toOptionalInt(this.getElement('paramS2')?.value),
+            S3: toOptionalInt(this.getElement('paramS3')?.value),
+            S4: toOptionalInt(this.getElement('paramS4')?.value),
+            H1: (this.getElement('paramH1')?.value || '').trim(),
+            H2: (this.getElement('paramH2')?.value || '').trim(),
+            H3: (this.getElement('paramH3')?.value || '').trim(),
+            H4: (this.getElement('paramH4')?.value || '').trim(),
+        };
 
-            const obfErrors = this.validateObfuscationParamsJS(formData.obfuscation_params, formData.mtu);
-            if (obfErrors.length > 0) {
-                this.showError('obfuscationError', obfErrors.join(' '));
+        const transportErrors = this.validateTransportParamsJS(formData.protocol, formData.transport_params, formData.mtu);
+        if (transportErrors.length > 0) {
+            this.showError('obfuscationError', transportErrors.join(' '));
+            return;
+        } else {
+            this.hideError('obfuscationError');
+        }
+
+        const transportWarnings = this.getTransportParamWarningsJS(formData.protocol, formData.transport_params, formData.mtu);
+        if (transportWarnings.length > 0) {
+            const proceed = confirm(`Transport parameter warnings:\n\n- ${transportWarnings.join('\n- ')}\n\nCreate server anyway?`);
+            if (!proceed) {
                 return;
-            } else {
-                this.hideError('obfuscationError');
             }
         }
 
@@ -976,6 +1538,76 @@ class AmneziaApp {
         }
     }
 
+    renameServer(serverId) {
+        const server = (this.lastServers || []).find(s => s.id === serverId);
+        const currentName = server ? server.name : '';
+        const newName = prompt('Rename server:', currentName);
+        if (newName === null || newName.trim() === '' || newName.trim() === currentName) return;
+        this.apiFetch(`/api/servers/${serverId}/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName.trim() })
+        })
+            .then(() => {
+                this.loadServers();
+                this.closeModal();
+                // Reopen with fresh data from API
+                this.showServerConfig(serverId);
+            })
+            .catch(error => {
+                console.error('Error renaming server:', error);
+                alert('Error renaming server: ' + error.message);
+            });
+    }
+
+    renameClient(serverId, clientId) {
+        const server = (this.lastServers || []).find(s => s.id === serverId);
+        const client = server ? (server.clients || []).find(c => c.id === clientId) : null;
+        const currentName = client ? client.name : '';
+        const newName = prompt('Rename client:', currentName);
+        if (newName === null || newName.trim() === '' || newName.trim() === currentName) return;
+        this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName.trim() })
+        })
+            .then(() => {
+                this.loadServers();
+                this.closeModal();
+                // Update cached client name so modal shows it immediately
+                const cachedClients = this.serverClients.get(serverId);
+                if (cachedClients) {
+                    const c = cachedClients.find(cl => cl.id === clientId);
+                    if (c) c.name = newName.trim();
+                }
+                this.showClientParamsModal(serverId, clientId);
+            })
+            .catch(error => {
+                console.error('Error renaming client:', error);
+                alert('Error renaming client: ' + error.message);
+            });
+    }
+
+    toggleClientSuspend(serverId, clientId) {
+        this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/suspend`, { method: 'POST' })
+            .then(() => this.loadServers())
+            .catch(error => {
+                console.error('Error toggling client suspend:', error);
+                alert('Error toggling client suspend: ' + error.message);
+            });
+    }
+
+    toggleServer(serverId, shouldRun) {
+        const action = shouldRun ? 'start' : 'stop';
+        this.apiFetch(`/api/servers/${serverId}/${action}`, { method: 'POST' })
+            .then(() => this.loadServers())
+            .catch(error => {
+                console.error(`Error ${action}ing server:`, error);
+                alert(`Error ${action}ing server: ` + error.message);
+                this.loadServers();
+            });
+    }
+
     startServer(serverId) {
         this.apiFetch(`/api/servers/${serverId}/start`, { method: 'POST' })
             .then(() => this.loadServers())
@@ -995,20 +1627,159 @@ class AmneziaApp {
     }
 
     addClient(serverId) {
-        const clientName = prompt('Enter client name:');
-        if (clientName) {
-            this.apiFetch(`/api/servers/${serverId}/clients`, {
+        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
+        if (!server) {
+            this.showTempMessage('Server not found', 'error');
+            return;
+        }
+
+        const defaults = server.client_defaults || {};
+        const clients = this.serverClients.get(serverId) || [];
+        this.closeModal();
+
+        const safe = (value) => this.escapeHtml(value);
+        const modalHtml = `
+            <div id="configModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+                <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+                    <div class="mt-3">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-bold text-gray-900">Add Client to Server: <span class="text-purple-600">${safe(server.name)}</span></h3>
+                            <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Client name</label>
+                                <input id="newClientName-${serverId}" type="text" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" placeholder="New Client">
+                            </div>
+
+                            ${this.getClientTransportSummaryHtml(
+                                server.protocol || 'AWG 1.5',
+                                this.formatTransportParamsSummary(server.protocol || 'AWG 1.5', server.transport_params || {})
+                            )}
+
+                            <div class="bg-blue-50 rounded p-3">
+                                <div class="text-sm font-medium text-blue-900 mb-2">Client-side parameters</div>
+
+                                <div class="mb-3">
+                                    <label class="block text-xs font-medium text-blue-900">Copy from existing client</label>
+                                    <select id="newClientCopyFrom-${serverId}" class="mt-1 block w-full border border-blue-200 rounded-md px-2 py-1 text-sm bg-white/70" onchange="amneziaApp.populateNewClientParamsFromExisting('${serverId}', this.value)">
+                                        <option value="">Use defaults</option>
+                                        ${clients.map((client) => `<option value="${safe(client.id)}">${safe(client.name)} (${safe(client.client_ip)})</option>`).join('')}
+                                    </select>
+                                </div>
+
+                                ${this.getClientParamDescriptionHtml()}
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-3">
+                                    <label class="block">
+                                        <div class="text-xs font-medium text-blue-900">Jc</div>
+                                        <input id="newClientParam-${serverId}-Jc" type="number" min="4" max="12" class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-sm" value="${safe(defaults.Jc ?? 8)}">
+                                    </label>
+                                    <label class="block">
+                                        <div class="text-xs font-medium text-blue-900">Jmin</div>
+                                        <input id="newClientParam-${serverId}-Jmin" type="number" class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-sm" value="${safe(defaults.Jmin ?? 8)}">
+                                    </label>
+                                    <label class="block">
+                                        <div class="text-xs font-medium text-blue-900">Jmax</div>
+                                        <input id="newClientParam-${serverId}-Jmax" type="number" class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-sm" value="${safe(defaults.Jmax ?? 80)}">
+                                    </label>
+                                </div>
+                                <div class="grid grid-cols-1 gap-2">
+                                    ${['I1', 'I2', 'I3', 'I4', 'I5'].map((key) => `
+                                        <label class="block text-xs">
+                                            <div class="font-semibold text-blue-900 mb-1">${safe(key)}</div>
+                                            <textarea id="newClientParam-${serverId}-${key}" rows="1" class="w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70">${safe(defaults[key] ?? '')}</textarea>
+                                        </label>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-end space-x-3 pt-4 border-t mt-4">
+                            <button onclick="amneziaApp.submitAddClient('${serverId}')" class="btn-pill bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">Create Client</button>
+                            <button onclick="amneziaApp.closeModal()" class="btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">Close</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        ['I1', 'I2', 'I3', 'I4', 'I5'].forEach((key) => {
+            const el = document.getElementById(`newClientParam-${serverId}-${key}`);
+            this.enableTextareaAutosize(el, 200);
+        });
+    }
+
+    async submitAddClient(serverId) {
+        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
+        const mtu = Number(server?.mtu) || 1420;
+        const clientName = (document.getElementById(`newClientName-${serverId}`)?.value || '').trim();
+        const copyFromClientId = document.getElementById(`newClientCopyFrom-${serverId}`)?.value || '';
+        const clientParams = {
+            Jc: parseInt(document.getElementById(`newClientParam-${serverId}-Jc`)?.value || '8', 10),
+            Jmin: parseInt(document.getElementById(`newClientParam-${serverId}-Jmin`)?.value || '8', 10),
+            Jmax: parseInt(document.getElementById(`newClientParam-${serverId}-Jmax`)?.value || '80', 10),
+            I1: document.getElementById(`newClientParam-${serverId}-I1`)?.value || '',
+            I2: document.getElementById(`newClientParam-${serverId}-I2`)?.value || '',
+            I3: document.getElementById(`newClientParam-${serverId}-I3`)?.value || '',
+            I4: document.getElementById(`newClientParam-${serverId}-I4`)?.value || '',
+            I5: document.getElementById(`newClientParam-${serverId}-I5`)?.value || '',
+        };
+
+        if (!clientName) {
+            this.showTempMessage('Client name is required', 'error');
+            return;
+        }
+
+        const errors = this.validateClientParamsJS(clientParams, mtu);
+        if (errors.length > 0) {
+            this.showTempMessage(errors.join(' '), 'error');
+            return;
+        }
+
+        const warnings = this.getClientParamWarningsJS(clientParams, mtu);
+        if (warnings.length > 0) {
+            const proceed = confirm(`Client parameter warnings:\n\n- ${warnings.join('\n- ')}\n\nCreate client anyway?`);
+            if (!proceed) {
+                return;
+            }
+        }
+
+        try {
+            const response = await this.apiFetch(`/api/servers/${serverId}/clients`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ name: clientName })
-            })
-            .then(() => this.loadServers())
-            .catch(error => {
-                console.error('Error adding client:', error);
-                alert('Error adding client: ' + error.message);
+                body: JSON.stringify({
+                    name: clientName,
+                    client_params: clientParams,
+                    copy_from_client_id: copyFromClientId || null,
+                })
             });
+
+            if (!response.ok) {
+                let msg = 'Failed to add client';
+                try {
+                    const err = await response.json();
+                    msg = err?.error || msg;
+                } catch (_) {
+                    // ignore
+                }
+                throw new Error(msg);
+            }
+
+            this.closeModal();
+            this.loadServers();
+            this.showTempMessage('Client created.', 'success');
+        } catch (error) {
+            console.error('Error adding client:', error);
+            this.showTempMessage('Error adding client: ' + error.message, 'error');
         }
     }
 
@@ -1083,16 +1854,16 @@ class AmneziaApp {
 
     displayServerConfigModal(serverInfo) {
         const safe = (v) => this.escapeHtml(v);
-
-        const obfParams = serverInfo.obfuscation_params || {};
-        const iKeys = ['I1', 'I2', 'I3', 'I4', 'I5'];
+        const transportParams = serverInfo.transport_params || {};
+        const protocol = serverInfo.protocol || 'AWG 1.5';
 
         const modalHtml = `
             <div id="configModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
                 <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-medium text-gray-900">Server Configuration: ${safe(serverInfo.name)}</h3>
+                            <h3 class="text-xl font-bold text-gray-900">Server: <span class="text-purple-600 cursor-pointer hover:underline" title="Click to rename"
+                                onclick="amneziaApp.renameServer('${serverInfo.id}')">${safe(serverInfo.name)}</span></h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -1121,7 +1892,6 @@ class AmneziaApp {
                                 <h4 class="font-semibold text-sm text-gray-700 mb-2">Configuration</h4>
                                 <div class="space-y-1 text-sm">
                                     <div><span class="font-medium">Protocol:</span> ${serverInfo.protocol}</div>
-                                    <div><span class="font-medium">Obfuscation:</span> ${serverInfo.obfuscation_enabled ? 'Enabled' : 'Disabled'}</div>
                                     <div><span class="font-medium">Clients:</span> ${serverInfo.clients_count}</div>
                                     <div><span class="font-medium">DNS:</span> ${safe(serverInfo.dns.join(', '))}</div>
                                     <div><span class="font-medium">MTU:</span> ${serverInfo.mtu}</div>
@@ -1145,93 +1915,52 @@ class AmneziaApp {
                                 </label>
                                 <div class="text-xs text-gray-500">Requires iptables reapply if the server is running.</div>
                                 <div>
-                                        <button onclick="amneziaApp.saveServerNetworking('${serverInfo.id}')"
-                                            class="btn-pill bg-indigo-600 text-white px-3 py-1 rounded text-xs hover:bg-indigo-700">
-                                        Save Networking
+                                        <button id="serverNetworkingPrimaryAction-${serverInfo.id}"
+                                            class="hidden">
                                     </button>
                                 </div>
                             </div>
                         </div>
 
-                        ${serverInfo.obfuscation_enabled ? `
                         <div class="bg-blue-50 p-3 rounded mb-4">
                             <div class="flex items-center justify-between mb-2">
-                                <h4 class="font-semibold text-sm text-blue-700">Obfuscation Parameters</h4>
-                                <button onclick="amneziaApp.saveServerObfuscationParams('${serverInfo.id}')"
-                                    class="btn-pill bg-blue-700 text-white px-3 py-1 rounded text-xs hover:bg-blue-800">
-                                    Save + Rewrite/Restart
-                                </button>
+                                <h4 class="font-semibold text-sm text-blue-700">Protocol and Transport</h4>
                             </div>
 
-                            <div class="text-[11px] text-blue-800/80 mb-3">
-                                Updates server + all existing clients, rewrites the server config file, and restarts the server if it is running.
+                            <div class="mb-3 text-xs">
+                                <label class="block">
+                                    <select id="serverProtocol-${serverInfo.id}"
+                                        class="w-full md:w-56 px-2 py-1 border border-blue-200 rounded text-xs bg-white/70"
+                                        onchange="amneziaApp.toggleProtocolFields(this.value, 'serverTransportParam-${serverInfo.id}-')">
+                                        <option value="AWG 1.5" ${protocol === 'AWG 1.5' ? 'selected' : ''}>AWG 1.5</option>
+                                        <option value="AWG 2.0" ${protocol === 'AWG 2.0' ? 'selected' : ''}>AWG 2.0</option>
+                                    </select>
+                                </label>
                             </div>
 
-                            <div class="flex flex-wrap items-end gap-3 text-xs mb-3">
-                                ${['Jc','Jmin','Jmax'].map((key) => `
-                                    <label class="flex flex-col">
-                                        <div class="font-medium text-blue-900">${safe(key)}</div>
-                                        <input id="serverObfParam-${serverInfo.id}-${key}" type="number"
-                                            class="mt-1 px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70 w-24"
-                                            value="${safe(obfParams[key] ?? 0)}" />
-                                    </label>
-                                `).join('')}
-                            </div>
+                            <div id="serverTransportDescription-${serverInfo.id}">${this.getTransportDescriptionHtml(protocol, 'modal')}</div>
 
                             <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mb-3">
                                 ${['S1','S2','S3','S4'].map((key) => `
                                     <label class="block">
-                                        <div class="font-medium text-blue-900">${safe(key)}</div>
-                                        <input id="serverObfParam-${serverInfo.id}-${key}" type="number"
+                                        <div class="font-medium text-blue-800/80">${safe(key)}</div>
+                                        <input id="serverTransportParam-${serverInfo.id}-${key}" type="number"
                                             class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70"
-                                            value="${safe(obfParams[key] ?? '')}" />
+                                            value="${safe(transportParams[key] ?? '')}" />
                                     </label>
                                 `).join('')}
                             </div>
 
-                            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs mb-3">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs mb-3">
                                 ${['H1','H2','H3','H4'].map((key) => `
                                     <label class="block">
-                                        <div class="font-medium text-blue-900">${safe(key)}</div>
-                                        <input id="serverObfParam-${serverInfo.id}-${key}" type="number"
+                                        <div class="font-medium text-blue-800/80">${safe(key)}</div>
+                                        <input id="serverTransportParam-${serverInfo.id}-${key}" type="text"
                                             class="mt-1 w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70"
-                                            value="${safe(obfParams[key] ?? 0)}" />
+                                            value="${safe(transportParams[key] ?? '')}" />
                                     </label>
                                 `).join('')}
                             </div>
-
-                            <div class="mt-3">
-                                <div class="flex items-center justify-between mb-1">
-                                    <h5 class="font-semibold text-xs text-blue-800">I Parameters (client-only)</h5>
-                                        <button onclick="amneziaApp.saveServerIParams('${serverInfo.id}')"
-                                            class="btn-pill bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700">
-                                        Save I1–I5
-                                    </button>
-                                </div>
-
-                                <div class="text-[11px] text-blue-800/80 mb-2">
-                                    Defaults for NEW clients only (no server restart).
-                                </div>
-
-                                <div class="grid grid-cols-1 gap-2">
-                                    ${iKeys.map((key) => `
-                                        <label class="block text-xs">
-                                            <div class="flex items-center justify-between mb-1">
-                                                <span class="font-semibold text-blue-900">${safe(key)}</span>
-                                            </div>
-                                            <textarea id="serverIParam-${serverInfo.id}-${key}" rows="1"
-                                                class="w-full px-2 py-1 border border-blue-200 rounded text-xs font-mono bg-white/70 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                                                placeholder="${safe(key)} =">${safe(obfParams[key] ?? '')}</textarea>
-                                        </label>
-                                    `).join('')}
-                                </div>
-                            </div>
-                        </div>
-                        ` : ''}
-
-                        <div class="mb-4">
-                            <h4 class="font-semibold text-sm text-gray-700 mb-2">Configuration Preview</h4>
-                            <pre class="bg-gray-800 text-green-400 p-3 rounded text-xs overflow-x-auto max-h-40 overflow-y-auto">${safe(serverInfo.config_preview)}</pre>
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t">
@@ -1239,11 +1968,7 @@ class AmneziaApp {
                                     class="btn-pill bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600">
                                 View Full Config
                             </button>
-                                <button onclick="amneziaApp.downloadServerConfig('${serverInfo.id}')"
-                                    class="btn-pill bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">
-                                Download Config
-                            </button>
-                                <button onclick="amneziaApp.closeModal()"
+                                <button id="serverConfigPrimaryAction-${serverInfo.id}"
                                     class="btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
                                 Close
                             </button>
@@ -1254,40 +1979,9 @@ class AmneziaApp {
         `;
 
         document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-        // Auto-resize I1–I5 textareas to fit content
-        setTimeout(() => {
-            for (const key of ['I1', 'I2', 'I3', 'I4', 'I5']) {
-                const el = document.getElementById(`serverIParam-${serverInfo.id}-${key}`);
-                this.enableTextareaAutosize(el, 260);
-            }
-        }, 0);
-    }
-
-    async saveServerIParams(serverId) {
-        const iParams = {};
-        for (const key of ['I1', 'I2', 'I3', 'I4', 'I5']) {
-            const el = document.getElementById(`serverIParam-${serverId}-${key}`);
-            iParams[key] = el ? el.value : '';
-        }
-
-        try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/i-params`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(iParams)
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Failed to update I parameters');
-            }
-
-            this.showTempMessage('I1–I5 updated (client-only).', 'success');
-        } catch (error) {
-            console.error('Error updating server I params:', error);
-            this.showTempMessage('Failed to update I1–I5: ' + (error?.message || error), 'error');
-        }
+        this.toggleProtocolFields(protocol, `serverTransportParam-${serverInfo.id}-`);
+        this.setupServerTransportDirtyTracking(serverInfo.id, protocol);
+        this.setupServerNetworkingDirtyTracking(serverInfo.id);
     }
 
     async saveServerNetworking(serverId) {
@@ -1323,10 +2017,11 @@ class AmneziaApp {
         }
     }
 
-    async saveServerObfuscationParams(serverId) {
+    async saveServerTransportParams(serverId) {
         // Pull MTU from cached server list if possible (fallback to 1420)
         const server = (this.lastServers || []).find((s) => String(s.id) === String(serverId));
         const mtu = Number(server?.mtu) || 1420;
+        const protocol = document.getElementById(`serverProtocol-${serverId}`)?.value || server?.protocol || 'AWG 1.5';
 
         const toOptionalInt = (raw) => {
             const s = String(raw ?? '').trim();
@@ -1336,37 +2031,41 @@ class AmneziaApp {
         };
 
         const params = {
-            Jc: parseInt(document.getElementById(`serverObfParam-${serverId}-Jc`)?.value || '0', 10),
-            Jmin: parseInt(document.getElementById(`serverObfParam-${serverId}-Jmin`)?.value || '0', 10),
-            Jmax: parseInt(document.getElementById(`serverObfParam-${serverId}-Jmax`)?.value || '0', 10),
-            S1: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S1`)?.value),
-            S2: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S2`)?.value),
-            S3: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S3`)?.value),
-            S4: toOptionalInt(document.getElementById(`serverObfParam-${serverId}-S4`)?.value),
-            H1: parseInt(document.getElementById(`serverObfParam-${serverId}-H1`)?.value || '0', 10),
-            H2: parseInt(document.getElementById(`serverObfParam-${serverId}-H2`)?.value || '0', 10),
-            H3: parseInt(document.getElementById(`serverObfParam-${serverId}-H3`)?.value || '0', 10),
-            H4: parseInt(document.getElementById(`serverObfParam-${serverId}-H4`)?.value || '0', 10),
+            protocol,
+            S1: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S1`)?.value),
+            S2: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S2`)?.value),
+            S3: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S3`)?.value),
+            S4: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S4`)?.value),
+            H1: (document.getElementById(`serverTransportParam-${serverId}-H1`)?.value || '').trim(),
+            H2: (document.getElementById(`serverTransportParam-${serverId}-H2`)?.value || '').trim(),
+            H3: (document.getElementById(`serverTransportParam-${serverId}-H3`)?.value || '').trim(),
+            H4: (document.getElementById(`serverTransportParam-${serverId}-H4`)?.value || '').trim(),
         };
 
-        const errors = this.validateObfuscationParamsJS(params, mtu);
+        const errors = this.validateTransportParamsJS(protocol, params, mtu);
         if (errors.length > 0) {
             this.showTempMessage(errors.join(' '), 'error');
             return;
         }
 
-        const ok = confirm('Update obfuscation parameters and restart the server if it is running? Existing clients will be updated too.');
+        const warnings = this.getTransportParamWarningsJS(protocol, params, mtu);
+        if (warnings.length > 0) {
+            const proceed = confirm(`Transport parameter warnings:\n\n- ${warnings.join('\n- ')}\n\nSave anyway?`);
+            if (!proceed) return;
+        }
+
+        const ok = confirm('Update protocol and transport parameters and restart the server if it is running? Existing clients will inherit the updated transport profile.');
         if (!ok) return;
 
         try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/obfuscation-params`, {
+            const response = await this.apiFetch(`/api/servers/${serverId}/transport-params`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(params)
             });
 
             if (!response.ok) {
-                let msg = 'Failed to update obfuscation parameters';
+                let msg = 'Failed to update server transport parameters';
                 try {
                     const data = await response.json();
                     msg = data?.error || msg;
@@ -1379,20 +2078,21 @@ class AmneziaApp {
 
             const data = await response.json();
             const restarted = !!data?.restarted;
-            this.showTempMessage(restarted ? 'Obfuscation updated and server restarted.' : 'Obfuscation updated (server was not running).', 'success');
+            this.showTempMessage(restarted ? 'Protocol and transport updated; server restarted.' : 'Protocol and transport updated.', 'success');
             this.loadServers();
             // Refresh the modal contents
             this.closeModal();
             this.showServerConfig(serverId);
         } catch (error) {
-            console.error('Error updating server obfuscation params:', error);
-            this.showTempMessage('Failed to update obfuscation params: ' + (error?.message || error), 'error');
+            console.error('Error updating server transport params:', error);
+            this.showTempMessage('Failed to update protocol/transport: ' + (error?.message || error), 'error');
         }
     }
 
-    async showClientIParamsModal(serverId, clientId) {
+    async showClientParamsModal(serverId, clientId) {
         const cached = (this.serverClients.get(serverId) || []).find((c) => c.id === clientId);
         const safeName = this.escapeHtml(cached?.name || clientId);
+        const safe = (value) => this.escapeHtml(value);
 
         // Close any existing modal first
         this.closeModal();
@@ -1402,7 +2102,8 @@ class AmneziaApp {
                 <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-medium text-gray-900">Client I1–I5: ${safeName}</h3>
+                            <h3 class="text-xl font-bold text-gray-900">Client: <span class="text-sky-600 cursor-pointer hover:underline" title="Click to rename"
+                                onclick="amneziaApp.renameClient('${serverId}', '${clientId}')">${safeName}</span></h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -1410,20 +2111,12 @@ class AmneziaApp {
                             </button>
                         </div>
 
-                        <div class="text-sm text-gray-600 mb-3">
-                            Client-only parameters; different clients can have different values.
-                        </div>
-
                         <div id="clientIParamsBody" class="space-y-3">
                             <div class="text-sm text-gray-500">Loading…</div>
                         </div>
 
                         <div class="flex justify-end space-x-3 pt-4 border-t mt-4">
-                                <button onclick="amneziaApp.saveClientIParams('${serverId}', '${clientId}')"
-                                    class="btn-pill bg-blue-600 text-white px-4 py-2 rounded text-sm hover:bg-blue-700">
-                                Save I1–I5
-                            </button>
-                                <button onclick="amneziaApp.closeModal()"
+                                <button id="clientConfigPrimaryAction-${clientId}"
                                     class="btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600">
                                 Close
                             </button>
@@ -1440,28 +2133,27 @@ class AmneziaApp {
             if (!res.ok) throw new Error('Failed to load client list');
             const clients = await res.json();
             const client = (clients || []).find((c) => c.id === clientId);
-            const obf = client?.obfuscation_params || {};
+            const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
+            const defaults = server?.client_defaults || {};
+            const params = client?.client_params || defaults;
+            const transportSummary = this.formatTransportParamsSummary(
+                client?.protocol || server?.protocol || 'AWG 1.5',
+                server?.transport_params || {}
+            );
+            const protocolValue = client?.protocol || server?.protocol || 'AWG 1.5';
 
             const body = document.getElementById('clientIParamsBody');
             if (!body) return;
-            const keys = ['I1', 'I2', 'I3', 'I4', 'I5'];
-            body.innerHTML = keys.map((key) => {
-                const value = obf[key] ?? '';
-                return `
-                    <label class="block text-sm">
-                        <div class="font-semibold text-gray-800 mb-1">${this.escapeHtml(key)}</div>
-                        <textarea id="clientIParam-${clientId}-${key}" rows="1"
-                            class="w-full px-3 py-2 border border-gray-200 rounded text-xs font-mono bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="${this.escapeHtml(key)} =">${this.escapeHtml(value)}</textarea>
-                    </label>
-                `;
-            }).join('');
-
-            // Auto-resize after insertion
-            for (const key of keys) {
-                const el = document.getElementById(`clientIParam-${clientId}-${key}`);
-                this.enableTextareaAutosize(el, 260);
-            }
+            body.innerHTML = `
+                ${this.getClientTransportSummaryHtml(protocolValue, transportSummary)}
+                <div class="bg-blue-50 rounded p-3">
+                    <div class="text-sm font-medium text-blue-900 mb-2">Client-side parameters</div>
+                    ${this.getClientParamDescriptionHtml()}
+                    ${this.renderClientParamsFormHtml(`clientParam-${clientId}`, params)}
+                </div>
+            `;
+            this.autosizeClientParamTextareas(`clientParam-${clientId}`, 260);
+            this.setupClientParamsDirtyTracking(serverId, clientId);
         } catch (e) {
             const body = document.getElementById('clientIParamsBody');
             if (body) {
@@ -1470,27 +2162,41 @@ class AmneziaApp {
         }
     }
 
-    async saveClientIParams(serverId, clientId) {
-        const iParams = {};
-        for (const key of ['I1', 'I2', 'I3', 'I4', 'I5']) {
-            const el = document.getElementById(`clientIParam-${clientId}-${key}`);
-            iParams[key] = el ? el.value : '';
+    async saveClientParams(serverId, clientId) {
+        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
+        const mtu = Number(server?.mtu) || 1420;
+        const clientParams = this.collectClientParamsFormState(`clientParam-${clientId}`);
+
+        const errors = this.validateClientParamsJS(clientParams, mtu);
+        if (errors.length > 0) {
+            this.showTempMessage(errors.join(' '), 'error');
+            return;
+        }
+
+        const warnings = this.getClientParamWarningsJS(clientParams, mtu);
+        if (warnings.length > 0) {
+            const proceed = confirm(`Client parameter warnings:\n\n- ${warnings.join('\n- ')}\n\nSave anyway?`);
+            if (!proceed) {
+                return;
+            }
         }
 
         try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/i-params`, {
+            const response = await this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/client-params`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(iParams)
+                body: JSON.stringify({ client_params: clientParams })
             });
             if (!response.ok) {
                 const text = await response.text();
-                throw new Error(text || 'Failed to update client I params');
+                throw new Error(text || 'Failed to update client params');
             }
-            this.showTempMessage('Client I1–I5 updated.', 'success');
+            this.closeModal();
+            this.loadServers();
+            this.showTempMessage('Client parameters updated.', 'success');
         } catch (error) {
-            console.error('Error updating client I params:', error);
-            this.showTempMessage('Failed to update client I1–I5: ' + (error?.message || error), 'error');
+            console.error('Error updating client params:', error);
+            this.showTempMessage('Failed to update client params: ' + (error?.message || error), 'error');
         }
     }
 
@@ -1501,7 +2207,7 @@ class AmneziaApp {
                 <div class="relative top-10 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-2/3 shadow-lg rounded-md bg-white">
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
-                            <h3 class="text-lg font-medium text-gray-900">Raw Configuration: ${safe(config.server_name)}</h3>
+                            <h3 class="text-xl font-bold text-gray-900">Raw Configuration: ${safe(config.server_name)}</h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -1541,6 +2247,9 @@ class AmneziaApp {
     }
 
     closeModal() {
+        this.serverTransportModalState = null;
+        this.clientParamsModalState = null;
+        this.serverNetworkingModalState = null;
         const existingModal = document.getElementById('configModal') || document.getElementById('rawConfigModal');
         if (existingModal) existingModal.remove();
 
@@ -1569,7 +2278,7 @@ class AmneziaApp {
                     <div class="mt-2">
                         <div class="flex justify-between items-center mb-3">
                             <div>
-                                <h3 class="text-lg font-medium text-gray-900">Server Logs</h3>
+                                <h3 class="text-xl font-bold text-gray-900">Server Logs</h3>
                                 <div class="text-xs text-gray-500">Interface: <span class="font-mono">${safe(interfaceName || 'unknown')}</span></div>
                             </div>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
@@ -1646,7 +2355,7 @@ class AmneziaApp {
                 <div class="relative p-8 border w-11/12 md:w-3/4 lg:w-2/3 xl:w-1/2 shadow-2xl rounded-2xl bg-white">
                     <div class="flex flex-col">
                         <div class="flex justify-between items-center w-full mb-6">
-                            <h3 class="text-xl font-bold text-gray-900">QR Code for ${safeClientName}</h3>
+                            <h3 class="text-xl font-bold text-gray-900">QR Code for Client: <span class="text-sky-600">${safeClientName}</span></h3>
                             <button onclick="amneziaApp.closeQRModal()"
                                     class="text-gray-400 hover:text-gray-600 transition-colors duration-200 p-1 rounded-full hover:bg-gray-100">
                                 <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1678,25 +2387,13 @@ class AmneziaApp {
                             <div class="lg:w-3/5">
                                 <div class="mb-4">
                                     <div class="flex items-center justify-between mb-2">
-                                        <label class="block text-sm font-medium text-gray-700">Configuration Text</label>
-                                        <div class="flex space-x-2">
-                                                <button onclick="amneziaApp.toggleConfigView()"
-                                                    class="btn-pill text-blue-500 hover:text-blue-700 text-sm font-medium px-3 py-1.5 rounded-lg border border-blue-200 hover:bg-blue-50 transition-colors duration-200">
-                                                Toggle View
-                                            </button>
-                                                <button onclick="amneziaApp.copyConfigText()"
-                                                    class="btn-pill bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-200 shadow hover:shadow-md">
-                                                Copy Config
-                                            </button>
-                                        </div>
+                                        <label class="block text-sm font-medium text-gray-700">Configuration</label>
+                                        <button onclick="amneziaApp.copyConfigText()"
+                                            class="btn-pill bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium transition-colors duration-200 shadow hover:shadow-md">
+                                            Copy Config
+                                        </button>
                                     </div>
-                                    <textarea id="configText" rows="12"
-                                        class="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-sm font-mono bg-gray-50 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200"
-                                        readonly
-                                        placeholder="Loading configuration..."></textarea>
-                                    <div class="flex justify-between items-center mt-3">
-                                        <span id="configType" class="text-xs font-medium text-blue-500">Clean Config</span>
-                                    </div>
+                                    <pre id="configText" class="bg-gray-900 text-green-400 p-4 rounded text-sm font-mono overflow-x-auto max-h-96 overflow-y-auto whitespace-pre-wrap">Loading configuration...</pre>
                                 </div>
                             </div>
                         </div>
@@ -1748,20 +2445,18 @@ class AmneziaApp {
             const data = await response.json();
             this.currentCleanConfig = data.clean_config;
             this.currentFullConfig = data.full_config;
-            this.currentConfigType = 'clean';
             this.currentClientName = data.client_name;
             
-            // Display clean config text
-            const configTextArea = document.getElementById('configText');
-            if (configTextArea) {
-                configTextArea.value = this.currentCleanConfig;
-                this.updateConfigTypeLabel();
+            // Display full config text
+            const configTextEl = document.getElementById('configText');
+            if (configTextEl) {
+                configTextEl.textContent = this.currentFullConfig;
             }
             
-            // Generate QR code from clean config
+            // Generate QR code from full config
             const qrContainer = document.getElementById('qrcode');
             if (qrContainer) {
-                this.generateQrIntoContainer(qrContainer, this.currentCleanConfig);
+                this.generateQrIntoContainer(qrContainer, this.currentFullConfig);
             }
         } catch (error) {
             console.error('Error fetching config for QR code:', error);
@@ -1824,23 +2519,21 @@ class AmneziaApp {
     }
 
     copyConfigText() {
-        const configTextArea = document.getElementById('configText');
-        if (configTextArea) {
-            configTextArea.select();
-            configTextArea.setSelectionRange(0, 99999); // For mobile devices
-            
-            try {
-                navigator.clipboard.writeText(configTextArea.value).then(() => {
-                    this.showTempMessage('Configuration copied to clipboard!', 'success');
-                }).catch(err => {
-                    // Fallback for older browsers
-                    document.execCommand('copy');
-                    this.showTempMessage('Configuration copied to clipboard!', 'success');
-                });
-            } catch (err) {
-                document.execCommand('copy');
+        const configTextEl = document.getElementById('configText');
+        if (configTextEl) {
+            const text = configTextEl.textContent || '';
+            navigator.clipboard.writeText(text).then(() => {
                 this.showTempMessage('Configuration copied to clipboard!', 'success');
-            }
+            }).catch(() => {
+                // Fallback: use a temporary textarea
+                const tmp = document.createElement('textarea');
+                tmp.value = text;
+                document.body.appendChild(tmp);
+                tmp.select();
+                document.execCommand('copy');
+                tmp.remove();
+                this.showTempMessage('Configuration copied to clipboard!', 'success');
+            });
         }
     }
 

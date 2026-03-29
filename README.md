@@ -3,15 +3,15 @@
 A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
 Most server configuration is done via the web interface or API endpoints. However, some defaults are controlled only via environment variables at container startup: `NGINX_PORT`, `API_TOKEN`, `ENABLE_GEOIP`,`WAN_IF`, `ALLOWED_ORIGINS`, (NAT/LAN settings `ENABLE_NAT` and `BLOCK_LAN_CIDRS` are defaults per-server and can be overridden in the UI).
 
-Current version: **1.5.1**
+Current version: **1.6**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
 ## 🚀 Features
 
 *   **Web-based Management**: Intuitive UI for managing VPN servers and clients
-*   **AmneziaWG Integration**: Full support for AmneziaWG's obfuscation features
-*   **Client Management**: Generate and download client configurations
+*   **Full AWG 2.0 support**: Clear separation of server transport params (S1–S4, H1–H4) and client-only params (Jc, Jmin, Jmax, I1–I5). Supports H header ranges (`x-y`), S3/S4 padding (AWG 2.0 only; silently ignored for AWG 1.5), and custom signature packets (I1–I5) with full tag syntax.
+*   **Client Management**: Generate and download client configurations; click any server or client name to rename it inline
 *   **Real-time Monitoring**: Live server status and connection monitoring
 *   **Geo for endpoint/server/egress IPs**: Shows client endpoint (`IP:PORT`), server public IP, and egress IP with country flag/location when available
 *   **Auto-start**: Automatic server startup on container restart
@@ -19,10 +19,13 @@ Current version: **1.5.1**
 *   **Custom values**: MTU and other connection settings can be customized
 *   **QR code**: Client can be viewed, copied and downloaded via text, file or QR code (with size limits)
 *   **Config view**: Both servers' and clients' configs can be viewed directly from UI
-*   **Client-only I1–I5**: I1–I5 are stored and applied to client configs only (server has defaults; each client can override)
-*   **S3/S4 supported (experimental)**: UI/API support `S3`/`S4`, but current AmneziaWG build (amneziavpn/amneziawg-go) appear to reject/ignore connections when `S3`/`S4` are set to non-empty values. This UI leaves `S3`/`S4` empty by default.
+*   **Client-only params**: Jc, Jmin, Jmax and I1–I5 are stored per-client and written to client configs only (not to the server `.conf`). Each client can override the server defaults.
 *   **AWG logs viewer**: Per-server “View Logs” modal with auto-refresh and interface-aware filtering.
 *   **Per-server egress IP probe**: Shows each server's final outbound external IP as seen from inside the container, with one-click refresh.
+*   **Dark theme**: Full dark mode support with toggle switch.
+*   **Client Suspend/Reactivate**: Toggle client access on/off without deleting — keys and settings are preserved.
+*   **Smart Defaults**: Auto-proposes next free port and subnet when creating servers; smart IP allocation avoids collisions.
+*   **Compact UI**: Server controls as icon buttons, client controls as icon+label pills, toggle switches for server on/off and client suspend.
 *   **Refactored codebase**: Backend and frontend split into clearer modules for easier maintenance.
 
 ## 📝 Logs (amneziawg-go)
@@ -52,34 +55,35 @@ Once enabled, use **Server → View Logs** in the UI. The log view filters by th
 *   Server/client rendering helpers in `web-ui/static/js/server-ui.js`
 *   Responsive vanilla-JS UI with real-time status/traffic updates
 
-## 🧩 I1–I5 (Client-only) behavior
+## 🧩 I1–I5 (Custom Signature Packets)
 
-In AmneziaWG 1.5, `I1`–`I5` are *signature-chain* packets used for protocol imitation (“CPS” / Custom Protocol Signature). Before initiating a **special handshake** (periodic; see official docs), the client may send up to five user-described UDP packets:
+`I1`–`I5` are custom signature packets sent prior to every handshake. They do not carry actual data, so they only need to be configured on the client side.
 
-- `I1` is the primary packet (typically a hex snapshot of a real protocol, e.g. QUIC Initial; can include randomization).
-- `I2`–`I5` are optional and increase entropy (counters, timestamps, random bytes).
+- `I1` is the primary packet (if `I1` is empty, the entire I1–I5 chain is skipped).
+- `I2`–`I5` are optional follow-up packets (sent in order; empty values are skipped).
 
-Official reference: https://docs.amnezia.org/documentation/amnezia-wg/
+Official reference: https://github.com/amnezia-vpn/amneziawg-go#custom-signature-packets
 
-This Web UI treats AmneziaWG “I1–I5” as **client-only** parameters:
+This Web UI treats I1–I5 as **client-only** parameters:
 
 - Server has **default** I1–I5 values (used only when creating *new* clients).
 - Each client can override I1–I5 independently (different clients on the same server may have different values).
 - Existing clients are **not** modified when server defaults change.
 - If an I value is empty, the corresponding `I* = ...` line is **omitted** from generated client configs.
 
-### CPS format (quick summary)
+### Tag syntax (quick summary)
 
-I-values are CPS strings composed of tags like:
+I-values are strings composed of tags:
 
-- `b` — static bytes (hex blob)
-- `c` — packet counter (32-bit, network byte order)
-- `t` — unix timestamp (32-bit, network byte order)
-- `r` — cryptographically secure random bytes (with length)
+- `<b 0x[hex]>` — static bytes (hex-encoded, e.g. `<b 0xf6ab3267fa>`)
+- `<r [size]>` — random bytes (cryptographically secure)
+- `<rd [size]>` — random digits (`0-9`)
+- `<rc [size]>` — random chars (`a-zA-Z`)
+- `<t>` — unix timestamp (4 bytes)
 
-Example (from docs): `i1 = <b 0xf6ab3267fa><c><b 0xf6ab><t><r 10>`
+Example: `I1 = <b 0xf6ab3267fa><t><r 10>`
 
-Important compatibility note (from docs): if `I1` is missing, the whole `I2`–`I5` chain is skipped and AmneziaWG behaves like **AmneziaWG 1.0**.
+> **Note**: if the final size of any custom signature packet exceeds the system MTU, it may be fragmented, which can look suspicious to DPI.
 
 In the UI:
 
@@ -199,17 +203,13 @@ Content-Type: application/json
 }
 ```
 
-Note: `S3`/`S4` are optional. In this Web UI, `null`/empty means the parameter is omitted from generated configs. Due to observed connectivity issues with non-empty `S3`/`S4` on some AmneziaWG versions, leaving them empty is currently recommended.
+Note: `S3`/`S4` are AWG 2.0 parameters. For AWG 1.5 servers they are silently ignored even if provided.
 
-### Obfuscation compatibility notes (experimental)
+### Obfuscation parameter matching
 
-Official AmneziaWG documentation is somewhat vague about which obfuscation parameters must match between server and client.
-Based on experiments with this Web UI:
+**Must match** between server and client: `S1`, `S2`, `S3`, `S4`, `H1`–`H4`.
 
-- `S1` and `S2` appear to **require strict equality** between server and client. If `S1`/`S2` differ, the connection may fail.
-- Other parameters (`J*`, `H*`, `I*`) appear to be **more tolerant** (connections may still work even if values differ), but this may depend on the specific AmneziaWG build/version.
-
-If you observe different behavior on your AmneziaWG version, please share logs/output so this note can be refined.
+**Client-only** (not written to server config): `Jc`, `Jmin`, `Jmax`, `I1`–`I5`.
 
 #### List Servers
 
@@ -259,6 +259,12 @@ Body example:
 { "I1": "...", "I2": "...", "I3": "...", "I4": "...", "I5": "..." }
 ```
 
+#### Rename Server
+
+`POST /api/servers/{server_id}/rename`
+
+Body: `{ "name": "New Name" }`
+
 ### Client Management
 
 #### Add Client
@@ -299,6 +305,12 @@ Optional per-client I1–I5 overrides at creation time:
 #### Update a specific client's I1–I5
 
 `POST /api/servers/{server_id}/clients/{client_id}/i-params`
+
+#### Rename Client
+
+`POST /api/servers/{server_id}/clients/{client_id}/rename`
+
+Body: `{ "name": "New Name" }`
 
 #### List All Clients
 
@@ -415,56 +427,57 @@ AmneziaWG supports advanced traffic obfuscation to bypass censorship and DPI (De
 
 ## Parameter Reference
 
-| Parameter | Range | Default | Recommended | Description |
-| --- | --- | --- | --- | --- |
-| `Jc` | 1-128 | 8 | 4-12 | Controls connection pattern frequency |
-| `Jmin` | 1-1279 | 8 | 8 | Minimum padding size for packets |
-| `Jmax` | Jmin+1 to 1280 | 80 | 80 | Maximum padding size for packets |
-| `S1` | 1-1132 | 50 | 15-150 | Obfuscation pattern parameter 1 |
-| `S2` | 1-1188 | 60 | 15-150 | Obfuscation pattern parameter 2 |
-| `H1` | 5-2147483647 | 1000 | Unique | Header obfuscation parameter 1 |
-| `H2` | 5-2147483647 | 2000 | Unique | Header obfuscation parameter 2 |
-| `H3` | 5-2147483647 | 3000 | Unique | Header obfuscation parameter 3 |
-| `H4` | 5-2147483647 | 4000 | Unique | Header obfuscation parameter 4 |
-| `MTU` | 1280-1440 | 1280 | 1280-1420 | Maximum Transmission Unit |
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `Jc` | int | 8 | Number of junk packets sent prior to every handshake (client-only) |
+| `Jmin` | int | 8 | Minimum junk packet size in bytes |
+| `Jmax` | int | 80 | Maximum junk packet size in bytes (`Jmin` ≤ `Jmax`; should be < system MTU) |
+| `S1` | int | 50 | Padding of handshake initiation message |
+| `S2` | int | 60 | Padding of handshake response message |
+| `S3` | int | — | Padding of handshake cookie message (AWG 2.0 only) |
+| `S4` | int | — | Padding of transport messages (AWG 2.0 only) |
+| `H1` | int or range | 1000 | Header of handshake initiation message (AWG 2.0: range `x-y`) |
+| `H2` | int or range | 2000 | Header of handshake response message (AWG 2.0: range `x-y`) |
+| `H3` | int or range | 3000 | Header of handshake cookie message (AWG 2.0: range `x-y`) |
+| `H4` | int or range | 4000 | Header of transport message (AWG 2.0: range `x-y`) |
+| `I1`–`I5` | string | — | Custom signature packets sent before handshake (client-only; see tag syntax above) |
+| `MTU` | int | 1280 | Maximum Transmission Unit |
 
 ## Detailed Parameter Explanation
 
-### Jc (Connection Parameter)
+### Jc, Jmin, Jmax (Junk Packets) — client-only
 
-*   **Purpose**: Controls how frequently connection patterns are applied
-*   **Lower values**: More frequent pattern application (more obfuscation, lower performance)
-*   **Higher values**: Less frequent pattern application (less obfuscation, better performance)
-*   **Recommended**: 4-12 for optimal balance
+Before every handshake, the client generates `Jc` junk packets with random size between `Jmin` and `Jmax` bytes and sends them to the server. The server does not need these values.
 
-### Jmin and Jmax (Padding Parameters)
+*   **Jc**: Number of junk packets (recommended 4–12)
+*   **Jmin** ≤ **Jmax**: Size range in bytes
+*   If `Jmax` ≥ system MTU, packets may be fragmented (looks suspicious to DPI)
 
-*   **Jmin**: Minimum random padding added to each packet
-*   **Jmax**: Maximum random padding added to each packet
-*   **Relationship**: Jmax must be greater than Jmin
-*   **Note**: Values are constrained by MTU (typically 1280 for basic internet)
+### S1–S4 (Message Paddings) — server + client
 
-### S1 and S2 (Pattern Parameters)
+*   **S1**: Padding added to handshake initiation message
+*   **S2**: Padding added to handshake response message
+*   **S3**: Padding added to handshake cookie message (AWG 2.0 only)
+*   **S4**: Padding added to transport messages (AWG 2.0 only)
+*   **Constraint**: S1 + 56 ≠ S2
+*   S1/S2/S3/S4 must match between server and client
 
-*   **Purpose**: Define obfuscation patterns for traffic shaping
-*   **Constraints**:
-    *   S1 ≤ 1132 (1280 - 148 = 1132)
-    *   S2 ≤ 1188 (1280 - 92 = 1188)
-    *   S1 + 56 ≠ S2 (must be different with margin)
-*   **Recommended**: 15-150 for effective obfuscation
+### H1–H4 (Message Headers) — server + client
 
-### H1-H4 (Header Parameters)
+Every WireGuard message has a 32-bit type field at the beginning. H1–H4 let you replace the default header values:
 
-*   **Purpose**: Unique identifiers for header obfuscation
-*   **Requirement**: All four values must be unique
-*   **Recommended**: Use random values in range 1000-1000000
+*   **H1**: Header for handshake initiation messages
+*   **H2**: Header for handshake response messages
+*   **H3**: Header for cookie messages
+*   **H4**: Header for transport messages
+*   AWG 2.0 supports **range syntax** (`x-y`, where x ≤ y) — a random value from the range is used per packet
+*   AWG 1.5 accepts single integer values only
+*   All four values must be unique (ranges must not overlap in AWG 2.0)
+*   H1–H4 must match between server and client
 
-### MTU (Maximum Transmission Unit)
+### I1–I5 (Custom Signature Packets) — client-only
 
-*   **Purpose**: Defines maximum packet size
-*   **Standard Internet**: 1280 (safe for all connections)
-*   **Better Performance**: 1420-1440 (may have compatibility issues)
-*   **Trade-off**: Higher MTU = better performance but potential fragmentation
+See the [I1–I5 section](#-i1i5-custom-signature-packets) above for full details and tag syntax.
 
 ## 📝 Logs and Monitoring
 

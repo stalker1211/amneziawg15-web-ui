@@ -1,5 +1,36 @@
 # CHANGELOG
 
+## Version 1.6 (2026-03-29)
+
+### New Features
+- **Client suspend/reactivate**: Toggle client access without deleting — suspended clients have their `[Peer]` block removed from the WireGuard config and live-synced. Keys and settings are preserved for reactivation.
+- **Smart IP allocation**: New clients get the first unused IP in the subnet instead of relying on client count. Prevents IP collisions when clients are deleted from the middle.
+- **Smart port/subnet proposals**: "Create Server" dialog auto-proposes the next free port (starting 51820) and subnet (`10.10.X.0/24` pool), skipping values already used by existing servers.
+- **Full AWG 2.0 support**: S3/S4 padding parameters (cookie and transport messages), H1–H4 header ranges (`x-y` syntax), protocol-aware validation and config generation — S3/S4 are included for AWG 2.0 servers and silently ignored for AWG 1.5. Clear separation of server transport params (S1–S4, H1–H4) and client-only params (Jc, Jmin, Jmax, I1–I5). README rewritten to match upstream `amneziawg-go` docs (corrected I1–I5 tag reference, removed obsolete `<c>` tag, added `<rd>`/`<rc>`).
+- **Rename servers and clients**: Click the name in the Edit Config dialog to rename. No restart required — names are display-only metadata. Server renames propagate to all child clients.
+
+### UI Redesign
+- **Server controls**: Start/Stop buttons replaced with a compact on/off toggle switch next to the server name, with bold Running/Stopped status label.
+- **Server icon buttons**: Add Client, Edit Config, View Logs, and Delete are now compact icon buttons in the top-right of the server card (removed the separate button row).
+- **Client controls**: QR Code, Edit, and Delete redesigned as lightweight icon+label buttons with consistent styling. Delete uses icon-only with a visual divider.
+- **Client suspend toggle**: Mini toggle switch per client — green = active, amber = suspended. Suspended clients have their row dimmed (`opacity-50`) and status dot turned gray.
+- **Stopped server dimming**: Stopped server cards are dimmed (`opacity-60`) including all client rows.
+- **Name coloring**: Server names in purple (`text-purple-600`), client names in sky blue (`text-sky-600`) — consistent across dashboard and edit config dialogs.
+- **"New Server" button**: Purple pill with server+plus icon badge, shortened label.
+- **QR Code button**: Amber/yellow color scheme.
+
+### Dark Theme
+- Added comprehensive dark mode CSS overrides for all new icon button styles (purple, slate, amber, sky, red, green backgrounds, text colors, and borders).
+- Fixed dark mode for client edit config dialog — Protocol/Parameters and comment text now use classes with proper `body.dark` overrides instead of non-functional Tailwind `dark:` prefixes.
+
+### Docker / Security
+- Multi-stage Dockerfile hardened: removed `curl` and `py3-pip` from runtime, Python deps built in a venv builder stage, `expat`/`zlib` upgraded, vendored `pip`/`wheel` artifacts stripped from setuptools.
+- Healthcheck switched from `curl` to Python `urllib` (no curl in runtime image).
+
+### Bug Fixes
+- Fixed UDP port publishing in `run.sh` — changed from single port 51820 to range 51820-51830 for multi-server support.
+- Fixed light-theme readability of Protocol/Parameters text and comment descriptions in client edit config dialog.
+
 ## Version 1.5.1 (2026-02-26)
 
 ### New
