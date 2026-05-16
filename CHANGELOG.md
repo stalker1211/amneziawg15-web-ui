@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Version 1.6.1 (2026-05-16)
+
+- AWG 2.0 support: Updated `amneziawg-go` builder to latest commit (f4f4c99) with fixed S4 handling for keepalive packets. Updated awg-tools builder to latest release (tag v1.0.20260223).
+- Image rebuilded and versions bumped to address CVEs.
+
 ## Version 1.6 (2026-03-29)
 
 ### New Features

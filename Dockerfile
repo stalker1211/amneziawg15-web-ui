@@ -7,7 +7,7 @@ ARG GO_VERSION=1.26
 FROM golang:${GO_VERSION}-alpine AS awg_go_builder
 
 # Pin by default for reproducibility; override with --build-arg AWG_GO_REF=...
-ARG AWG_GO_REF=449d7cf
+ARG AWG_GO_REF=f4f4c99
 
 RUN apk add --no-cache git make build-base
 
@@ -15,6 +15,7 @@ WORKDIR /src/amneziawg-go
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git . \
     && git checkout "${AWG_GO_REF}" \
     && go get golang.org/x/crypto@v0.47.0 \
+    && go get golang.org/x/net@v0.53.0 \
     && go mod tidy \
     && make
 
@@ -27,7 +28,7 @@ RUN install -Dm755 ./amneziawg-go /out/usr/bin/amneziawg-go
 FROM alpine:${ALPINE_VERSION} AS awg_tools_builder
 
 # Latest release at the time of writing; override with --build-arg AWG_TOOLS_REF=...
-ARG AWG_TOOLS_REF=v1.0.20250903
+ARG AWG_TOOLS_REF=v1.0.20260223
 
 RUN apk add --no-cache git make build-base bash linux-headers
 
