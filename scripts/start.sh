@@ -11,7 +11,17 @@ fi
 
 : "${NGINX_USER:=admin}"
 : "${NGINX_PASSWORD:=changeme}"
-htpasswd -bc /etc/nginx/.htpasswd "$NGINX_USER" "$NGINX_PASSWORD"
+# Equivalent to `htpasswd -bc`, without needing apache2-utils (and its vulnerable
+# apr-util dependency): both emit the same $apr1$ hash that nginx auth_basic reads.
+if ! hash=$(openssl passwd -apr1 "$NGINX_PASSWORD"); then
+    echo "FATAL: failed to generate the nginx Basic Auth password hash" >&2
+    exit 1
+fi
+printf '%s:%s\n' "$NGINX_USER" "$hash" > /etc/nginx/.htpasswd
+# The nginx workers run as user `nginx` and must be able to read this file, so
+# keep it group-readable rather than 0600/0640-root (which yields HTTP 500s).
+chown root:nginx /etc/nginx/.htpasswd
+chmod 640 /etc/nginx/.htpasswd
 
 nginx -t
 

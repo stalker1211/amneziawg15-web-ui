@@ -1,5 +1,5 @@
 ARG ALPINE_VERSION=latest
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.5
 
 ############################
 # Build: amneziawg-go
@@ -7,15 +7,18 @@ ARG GO_VERSION=1.26
 FROM golang:${GO_VERSION}-alpine AS awg_go_builder
 
 # Pin by default for reproducibility; override with --build-arg AWG_GO_REF=...
-ARG AWG_GO_REF=f4f4c99
+ARG AWG_GO_REF=08d68cd
 
 RUN apk add --no-cache git make build-base
 
 WORKDIR /src/amneziawg-go
+# The x/* pins must be >= what upstream go.mod requires: Go's minimal version
+# selection takes the max of both, so pinning below upstream is a no-op.
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git . \
     && git checkout "${AWG_GO_REF}" \
-    && go get golang.org/x/crypto@v0.47.0 \
-    && go get golang.org/x/net@v0.53.0 \
+    && go get golang.org/x/crypto@v0.54.0 \
+    && go get golang.org/x/net@v0.57.0 \
+    && go get golang.org/x/sys@v0.47.0 \
     && go mod tidy \
     && make
 
@@ -27,8 +30,10 @@ RUN install -Dm755 ./amneziawg-go /out/usr/bin/amneziawg-go
 ############################
 FROM alpine:${ALPINE_VERSION} AS awg_tools_builder
 
-# Latest release at the time of writing; override with --build-arg AWG_TOOLS_REF=...
-ARG AWG_TOOLS_REF=v1.0.20260223
+# Must match the AmneziaWG protocol generation built above: AWG 3.0 changed the
+# UAPI wire format (range-valued keepalive, header protection, timings), so v1.x
+# tools cannot configure a v3 daemon. Override with --build-arg AWG_TOOLS_REF=...
+ARG AWG_TOOLS_REF=v3.0.20260805
 
 RUN apk add --no-cache git make build-base bash linux-headers
 
@@ -53,19 +58,22 @@ RUN apk add --no-cache python3 py3-pip
 
 RUN python3 -m venv /opt/venv
 
+# Versions are pinned in web-ui/requirements.txt so builds are reproducible.
+COPY web-ui/requirements.txt /tmp/requirements.txt
+
+# pip/wheel/setuptools are build-time only: the app imports none of them, so they
+# are removed to keep them out of the runtime image (and out of CVE scans).
 RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir \
-        flask \
-        flask_socketio \
-        flask-wtf \
-        requests \
-        python-socketio \
-        eventlet \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt \
     && rm -f /opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.* \
     && rm -rf /opt/venv/lib/python*/site-packages/pip \
               /opt/venv/lib/python*/site-packages/pip-*.dist-info \
               /opt/venv/lib/python*/site-packages/wheel \
-              /opt/venv/lib/python*/site-packages/wheel-*.dist-info
+              /opt/venv/lib/python*/site-packages/wheel-*.dist-info \
+              /opt/venv/lib/python*/site-packages/setuptools \
+              /opt/venv/lib/python*/site-packages/setuptools-*.dist-info \
+              /opt/venv/lib/python*/site-packages/pkg_resources
 
 
 ############################
@@ -76,12 +84,16 @@ FROM alpine:${ALPINE_VERSION}
 # Runtime deps:
 # - bash/openresolv/iproute2/iptables: required by awg-quick and our iptables scripts
 # - ca-certificates: required for external IP/Geo lookups
+# - openssl: generates the nginx Basic Auth hash in scripts/start.sh. Replaces
+#   apache2-utils/htpasswd, which pulled in apr-util (CVE-2026-34191,
+#   CVE-2026-32327, both critical and unfixed in Alpine as of 3.24).
+#   `openssl passwd -apr1` emits the identical $apr1$ format nginx expects.
 RUN apk upgrade --no-cache expat zlib \
     && apk add --no-cache \
     python3 \
     nginx \
     supervisor \
-    apache2-utils \
+    openssl \
     bash \
     iproute2 \
     iptables \
@@ -89,8 +101,9 @@ RUN apk upgrade --no-cache expat zlib \
     openresolv \
     ca-certificates \
     && rm -f /usr/lib/python*/ensurepip/_bundled/pip-*.whl \
-    && rm -rf /usr/lib/python*/site-packages/setuptools/_vendor/wheel \
-              /usr/lib/python*/site-packages/setuptools/_vendor/wheel-*.dist-info
+    && rm -rf /usr/lib/python*/site-packages/setuptools \
+              /usr/lib/python*/site-packages/setuptools-*.dist-info \
+              /usr/lib/python*/site-packages/pkg_resources
 
 COPY --from=python_deps_builder /opt/venv /opt/venv
 

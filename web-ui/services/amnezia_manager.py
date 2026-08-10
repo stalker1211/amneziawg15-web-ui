@@ -7,13 +7,14 @@ import os
 import random
 import re
 import subprocess
-import threading
+import tempfile
 import time
 import uuid
 from urllib.parse import urlparse
 
 import requests
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
+from core.logging_setup import get_logger
 from requests.adapters import HTTPAdapter
 
 # pylint: disable=broad-exception-caught,too-many-lines,too-many-instance-attributes,too-many-public-methods
@@ -21,14 +22,52 @@ from requests.adapters import HTTPAdapter
 # pylint: disable=too-many-branches,too-many-statements,too-many-return-statements
 # pylint: disable=too-many-boolean-expressions,no-else-return
 
+logger = get_logger(__name__)
+
 
 class AmneziaManager:
     """Manage VPN server lifecycle, clients, configs, and runtime telemetry."""
 
+    # Protocol table — the authoritative definition. Adding a generation means
+    # extending these tuples and nothing else on the backend; the frontend mirror
+    # lives in static/js/protocols.js.
     DEFAULT_PROTOCOL = "AWG 1.5"
-    SUPPORTED_PROTOCOLS = ("AWG 1.5", "AWG 2.0")
+    SUPPORTED_PROTOCOLS = ("AWG 1.5", "AWG 2.0", "AWG 3.0")
+
+    # Capabilities, keyed by the protocols that have them.
+    PROTOCOLS_WITH_S34 = ("AWG 2.0", "AWG 3.0")
+    PROTOCOLS_WITH_HEADER_RANGES = ("AWG 2.0", "AWG 3.0")
+    PROTOCOLS_WITH_AWG3 = ("AWG 3.0",)
+
+    # Client-side params: may differ between server and client, so they are only
+    # written into client configs.
     CLIENT_ONLY_PARAM_KEYS = ("Jc", "Jmin", "Jmax", "I1", "I2", "I3", "I4", "I5")
+
+    # AWG 3.0 client-side params. Range-valued ("a" or "a-b"); empty means unset,
+    # in which case amneziawg-go keeps its built-in WireGuard defaults.
+    CLIENT_TIMING_PARAM_KEYS = (
+        "RekeyAfterTime",
+        "RekeyTimeout",
+        "RejectAfterTime",
+        "KeepaliveTimeout",
+        "MaxHandshakeAttempts",
+    )
+    CLIENT_AWG3_PARAM_KEYS = ("ContentPaddingAddition",) + CLIENT_TIMING_PARAM_KEYS
+
+    # Server-side params: must be identical on both ends, so they are written into
+    # the server config and mirrored into every client config.
     TRANSPORT_PARAM_KEYS = ("S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4")
+    TRANSPORT_AWG3_PARAM_KEYS = ("HeaderProtectionKey",)
+
+    # amneziawg-go uses the first 12 bytes of each packet's S-padding as the header
+    # protection cipher nonce, so every S value must be at least this large once a
+    # HeaderProtectionKey is set (device/noise-types.go: HeaderCipherNonceSize).
+    HEADER_CIPHER_NONCE_SIZE = 12
+
+    # GeoIP lookups are cached to avoid rate limits; bounded so the dict cannot grow
+    # without limit as new client endpoints appear.
+    GEOIP_CACHE_TTL_SECONDS = 24 * 3600
+    GEOIP_CACHE_MAX_ENTRIES = 512
 
     EGRESS_PROBE_SERVICES = (
         "https://api.ipify.org",
@@ -50,7 +89,6 @@ class AmneziaManager:
         config_dir="/etc/amnezia",
         wireguard_config_dir=None,
         config_file=None,
-        enable_obfuscation=True,
         enable_geoip=True,
     ):
         self.socketio = socketio_instance
@@ -67,7 +105,6 @@ class AmneziaManager:
         self.wireguard_config_dir = wireguard_config_dir or os.path.join(config_dir, "amneziawg")
         self.config_file = config_file or os.path.join(config_dir, "web_config.json")
 
-        self.enable_obfuscation = enable_obfuscation
         self.enable_geoip = enable_geoip
 
         self.config = self.load_config()
@@ -106,28 +143,83 @@ class AmneziaManager:
                     if response.status_code == 200:
                         ip = response.text.strip()
                         if self.is_valid_ip(ip):
-                            print(f"Detected public IP: {ip}")
+                            logger.info("Detected public IP: %s", ip)
                             return ip
                 except Exception:
                     continue
 
-            # Fallback: try to get from network interfaces
-            try:
-                result = self.execute_command("ip route get 1 | awk '{print $7}' | head -1")
-                if result and self.is_valid_ip(result):
-                    print(f"Detected local IP: {result}")
-                    return result
-            except Exception:
-                pass
+            # Fallback: read the source address the kernel picks for outbound traffic.
+            # Parsed here instead of piping through awk/head so no shell is needed.
+            route = self.run_command(["ip", "route", "get", "1.1.1.1"])
+            if route:
+                match = re.search(r"\bsrc\s+(\S+)", route)
+                local_ip = match.group(1) if match else None
+                if local_ip and self.is_valid_ip(local_ip):
+                    logger.info("Detected local IP: %s", local_ip)
+                    return local_ip
 
         except Exception as e:
-            print(f"Failed to detect public IP: {e}")
-
+            logger.error("Failed to detect public IP: %s", e)
         return "YOUR_SERVER_IP"  # Fallback
 
     def is_valid_ip(self, ip):
         """Check if the string is a valid IP address"""
         return is_valid_ip(ip)
+
+    @staticmethod
+    def _config_line(params, key):
+        """Render 'Key = value' for a set param, or '' when unset/empty."""
+        value = params.get(key)
+        if value is None or value == "":
+            return ""
+        return f"{key} = {value}\n"
+
+    @staticmethod
+    def sanitize_name(value, fallback="unnamed"):
+        """Return a display name that is safe to embed in a .conf comment.
+
+        Server and client names are written into the generated configs as
+        `# Client: <name>` lines. A newline in the name would end the comment and let
+        the rest be parsed as configuration directives, so collapse whitespace and cap
+        the length.
+        """
+        cleaned = sanitize_config_value(value if value is not None else "")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned[:64] or fallback
+
+    @staticmethod
+    def validate_subnet(value):
+        """Return a normalized IPv4 CIDR, rejecting anything else.
+
+        The subnet is written into config files and passed to the iptables scripts,
+        so it must never carry shell metacharacters or stray whitespace.
+        """
+        raw = sanitize_config_value(value if value is not None else "")
+        try:
+            network = ipaddress.ip_network(raw, strict=False)
+        except ValueError as exc:
+            raise ValueError(f"Invalid subnet '{raw}': expected CIDR such as 10.0.0.0/24") from exc
+
+        if network.version != 4:
+            raise ValueError(f"Invalid subnet '{raw}': only IPv4 subnets are supported")
+        if network.prefixlen > 30:
+            raise ValueError(f"Subnet '{raw}' is too small: use /30 or larger")
+
+        return str(network)
+
+    @staticmethod
+    def is_valid_wireguard_key(value):
+        """Check for a base64-encoded 32-byte key, as produced by 'awg genkey'."""
+        if not isinstance(value, str):
+            return False
+        candidate = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=", candidate):
+            return False
+        try:
+            # binascii.Error (raised on malformed base64) subclasses ValueError.
+            return len(base64.b64decode(candidate, validate=True)) == 32
+        except ValueError:
+            return False
 
     class _SourceAddressAdapter(HTTPAdapter):
         """Requests adapter that binds outbound sockets to a specific source IP."""
@@ -265,6 +357,33 @@ class AmneziaManager:
         self.save_config()
         return probe
 
+    def _cache_geoip(self, ip, now, label, country_code, raw):
+        """Store a GeoIP result, evicting expired and then oldest entries.
+
+        Unbounded growth was slow but real: one entry per distinct client endpoint IP,
+        never removed.
+        """
+        self._geoip_cache[ip] = {
+            "ts": now,
+            "label": label,
+            "country_code": country_code,
+            "raw": raw,
+        }
+
+        if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
+            return
+
+        for key, entry in list(self._geoip_cache.items()):
+            if (now - entry.get("ts", 0)) >= self.GEOIP_CACHE_TTL_SECONDS:
+                del self._geoip_cache[key]
+
+        # Still over budget (many fresh entries): drop the oldest.
+        if len(self._geoip_cache) > self.GEOIP_CACHE_MAX_ENTRIES:
+            for key, _ in sorted(self._geoip_cache.items(), key=lambda kv: kv[1].get("ts", 0)):
+                if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
+                    break
+                del self._geoip_cache[key]
+
     def lookup_geoip(self, ip):
         """Return (geo label, country code) for a public IP with caching."""
         if not self.enable_geoip:
@@ -289,7 +408,7 @@ class AmneziaManager:
 
         now = time.time()
         cached = self._geoip_cache.get(ip)
-        if isinstance(cached, dict) and (now - cached.get("ts", 0)) < 24 * 3600:
+        if isinstance(cached, dict) and (now - cached.get("ts", 0)) < self.GEOIP_CACHE_TTL_SECONDS:
             return (cached.get("label"), cached.get("country_code"))
 
         def format_geo_label(raw):
@@ -327,65 +446,84 @@ class AmneziaManager:
                 headers={"User-Agent": "amneziawg-web-ui"},
             )
             if resp.status_code != 200:
-                self._geoip_cache[ip] = {
-                    "ts": now,
-                    "label": None,
-                    "country_code": None,
-                    "raw": {"status": resp.status_code},
-                }
+                self._cache_geoip(ip, now, None, None, {"status": resp.status_code})
                 return (None, None)
 
             content_type = resp.headers.get("content-type", "")
             data = resp.json() if content_type.startswith("application/json") else {}
             label = format_geo_label(data)
             country_code = extract_country_code(data)
-            self._geoip_cache[ip] = {
-                "ts": now,
-                "label": label,
-                "country_code": country_code,
-                "raw": data,
-            }
+            self._cache_geoip(ip, now, label, country_code, data)
             return (label, country_code)
         except Exception:
-            self._geoip_cache[ip] = {
-                "ts": now,
-                "label": None,
-                "country_code": None,
-                "raw": {"error": "lookup_failed"},
-            }
+            self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"})
             return (None, None)
 
     def auto_start_servers(self):
         """Auto-start servers that have config files and were running before"""
-        print("Checking for existing servers to auto-start...")
+        logger.info("Checking for existing servers to auto-start...")
         for server in self.config["servers"]:
             if os.path.exists(server["config_path"]):
                 current_status = self.get_server_status(server["id"])
                 if current_status == "stopped" and server.get("auto_start", True):
-                    print(f"Auto-starting server: {server['name']}")
+                    logger.info(f"Auto-starting server: {server['name']}")
                     try:
                         self.start_server(server["id"])
                     except Exception as e:
                         # Never crash the Web UI on boot due to a VPN startup failure.
                         server_name = server.get("name", server.get("id"))
-                        print(f"Auto-start failed for server '{server_name}': {e}")
-
+                        logger.error("Auto-start failed for server '%s': %s", server_name, e)
     def normalize_protocol(self, value):
+        """Map any accepted spelling to a canonical name from SUPPORTED_PROTOCOLS.
+
+        Accepts "AWG 3.0", "3.0", "awg3.0", "AWG_3.0"; anything unknown (including
+        non-strings) falls back to DEFAULT_PROTOCOL rather than raising, because this
+        runs over stored config as well as API input.
+        """
         if not isinstance(value, str):
             return self.DEFAULT_PROTOCOL
 
         normalized = value.strip().upper().replace("_", " ")
-        if normalized in {"AWG 1.5", "1.5", "AWG1.5"}:
-            return "AWG 1.5"
-        if normalized in {"AWG 2.0", "2.0", "AWG2.0"}:
-            return "AWG 2.0"
+        for protocol in self.SUPPORTED_PROTOCOLS:
+            version = protocol.split(" ", 1)[1]  # "AWG 3.0" -> "3.0"
+            if normalized in {protocol, version, f"AWG{version}"}:
+                return protocol
         return self.DEFAULT_PROTOCOL
 
     def protocol_supports_s34(self, protocol):
-        return self.normalize_protocol(protocol) == "AWG 2.0"
+        """S3/S4 padding: AWG 2.0 and later."""
+        return self.normalize_protocol(protocol) in self.PROTOCOLS_WITH_S34
 
     def protocol_supports_header_ranges(self, protocol):
-        return self.normalize_protocol(protocol) == "AWG 2.0"
+        """H1-H4 may be ranges ("1200-1400"): AWG 2.0 and later."""
+        return self.normalize_protocol(protocol) in self.PROTOCOLS_WITH_HEADER_RANGES
+
+    def protocol_supports_awg3(self, protocol):
+        """AWG 3.0 adds header protection, content padding and tunable timings."""
+        return self.normalize_protocol(protocol) in self.PROTOCOLS_WITH_AWG3
+
+    def parse_uint_range(self, value, key="value"):
+        """Parse an AWG 3.0 'a' or 'a-b' range, mirroring device/noise-types.go.
+
+        Returns the normalized string form, or "" when unset.
+        """
+        raw = sanitize_config_value(value if value is not None else "")
+        if not raw:
+            return ""
+
+        match = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", raw)
+        if not match:
+            raise ValueError(f"{key} must be an integer or range 'a-b', got '{raw}'")
+
+        low = int(match.group(1))
+        high = int(match.group(2)) if match.group(2) is not None else low
+        if high < low:
+            raise ValueError(f"{key} range '{raw}' is inverted: start must be <= end")
+        for bound in (low, high):
+            if bound > 0xFFFFFFFF:
+                raise ValueError(f"{key} value '{raw}' exceeds the uint32 range")
+
+        return str(low) if low == high else f"{low}-{high}"
 
     def extract_transport_params(self, params, protocol=None):
         if not isinstance(params, dict):
@@ -400,6 +538,13 @@ class AmneziaManager:
             if value is None or value == "":
                 continue
             result[key] = value
+
+        if self.protocol_supports_awg3(normalized_protocol):
+            for key in self.TRANSPORT_AWG3_PARAM_KEYS:
+                value = sanitize_config_value(params.get(key) or "")
+                if value:
+                    result[key] = value
+
         return result
 
     def extract_client_params(self, params):
@@ -415,6 +560,15 @@ class AmneziaManager:
                 result[key] = value
         for key in ("I1", "I2", "I3", "I4", "I5"):
             result.setdefault(key, "")
+
+        # AWG 3.0 params are kept whenever set, regardless of the server's current
+        # protocol, so downgrading and re-upgrading a server does not lose them.
+        # Rendering is gated on the protocol instead.
+        for key in self.CLIENT_AWG3_PARAM_KEYS:
+            value = sanitize_config_value(params.get(key) or "")
+            if value:
+                result[key] = value
+
         return result
 
     def default_client_defaults(self):
@@ -450,8 +604,7 @@ class AmneziaManager:
             raise ValueError(f"Header value '{raw}' must be an integer or range x-y for {protocol}")
         raise ValueError(f"Header value '{raw}' must be a single integer for {protocol}")
 
-    def validate_transport_params(self, protocol, params, _mtu):
-        del _mtu
+    def validate_transport_params(self, protocol, params):
         protocol = self.normalize_protocol(protocol)
         if not isinstance(params, dict):
             raise ValueError("Transport params payload must be an object")
@@ -492,12 +645,29 @@ class AmneziaManager:
             for index, current in enumerate(parsed_headers):
                 for other in parsed_headers[index + 1:]:
                     if current["start"] <= other["end"] and other["start"] <= current["end"]:
-                        raise ValueError("H1-H4 ranges must not intersect for AWG 2.0")
+                        raise ValueError(f"H1-H4 ranges must not intersect for {protocol}")
+
+        if self.protocol_supports_awg3(protocol):
+            header_protection_key = sanitize_config_value(params.get("HeaderProtectionKey") or "")
+            if header_protection_key:
+                if not self.is_valid_wireguard_key(header_protection_key):
+                    raise ValueError(
+                        "HeaderProtectionKey must be a 32-byte base64 key (generate one with 'awg genkey')"
+                    )
+                # amneziawg-go refuses the config outright if any S value is below
+                # the 12-byte header cipher nonce it slices out of the padding.
+                for key in ("S1", "S2", "S3", "S4"):
+                    value = transport.get(key)
+                    if value is None or value < self.HEADER_CIPHER_NONCE_SIZE:
+                        raise ValueError(
+                            f"{key} must be at least {self.HEADER_CIPHER_NONCE_SIZE} "
+                            "when HeaderProtectionKey is set"
+                        )
+                transport["HeaderProtectionKey"] = header_protection_key
 
         return transport
 
-    def validate_client_params(self, params, _mtu):
-        del _mtu
+    def validate_client_params(self, params):
         if not isinstance(params, dict):
             raise ValueError("Client params payload must be an object")
 
@@ -523,6 +693,16 @@ class AmneziaManager:
         merged["Jc"] = jc
         merged["Jmin"] = jmin
         merged["Jmax"] = jmax
+
+        # AWG 3.0 range params. Empty means "use the daemon's default", so unset
+        # keys are dropped rather than written as 0.
+        for key in self.CLIENT_AWG3_PARAM_KEYS:
+            normalized = self.parse_uint_range(merged.get(key), key)
+            if normalized:
+                merged[key] = normalized
+            else:
+                merged.pop(key, None)
+
         return merged
 
     def build_effective_client_params(self, server, client_params=None):
@@ -586,39 +766,75 @@ class AmneziaManager:
         return self.migrate_config_schema({"servers": [], "clients": {}})
 
     def save_config(self):
-        with open(self.config_file, "w", encoding="utf-8") as f:
+        """Persist config atomically: a crash mid-write must not lose server keys."""
+        directory = os.path.dirname(self.config_file) or "."
+        os.makedirs(directory, exist_ok=True)
+        tmp_path = f"{self.config_file}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(self.config, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, self.config_file)
+        os.chmod(self.config_file, 0o600)
 
-    def execute_command(self, command):
-        """Execute shell command and return result"""
+    def run_command(self, args):
+        """Run a command from an argv list and return stdout, or None on failure.
+
+        Always argv, never a shell string: values such as subnet, interface and
+        port originate from API input, and argv form cannot be turned into extra
+        shell commands.
+        """
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True)
+            result = subprocess.run(args, capture_output=True, text=True, check=True)
             return result.stdout.strip()
-        except subprocess.CalledProcessError as e:
-            print(f"Command failed: {e}")
+        except (subprocess.CalledProcessError, OSError) as e:
+            logger.error(f"Command failed ({args[0] if args else '?'}): {e}")
             return None
 
     def generate_wireguard_keys(self):
-        """Generate real WireGuard keys"""
-        try:
-            private_key = self.execute_command("wg genkey")
-            if private_key:
-                public_key = self.execute_command(f"echo '{private_key}' | wg pubkey")
-                return {"private_key": private_key, "public_key": public_key}
-        except Exception as e:
-            print(f"Key generation failed: {e}")
+        """Generate a real WireGuard keypair.
 
-        # Fallback - generate random keys
-        fake_private = base64.b64encode(os.urandom(32)).decode("utf-8")
-        fake_public = base64.b64encode(os.urandom(32)).decode("utf-8")
-        return {"private_key": fake_private, "public_key": fake_public}
+        Raises rather than inventing a fallback: an unrelated private/public pair
+        yields a server that looks configured but no client can ever handshake.
+        """
+        private_key = self.run_command(["wg", "genkey"])
+        if not private_key:
+            raise RuntimeError("'wg genkey' failed: cannot generate a server keypair")
+
+        public_key = self.derive_public_key(private_key)
+        if not public_key:
+            raise RuntimeError("'wg pubkey' failed: cannot derive the public key")
+
+        return {"private_key": private_key, "public_key": public_key}
+
+    def derive_public_key(self, private_key):
+        """Derive a public key by piping a private key into 'wg pubkey' via stdin."""
+        try:
+            result = subprocess.run(
+                ["wg", "pubkey"],
+                input=private_key,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return result.stdout.strip()
+        except (subprocess.CalledProcessError, OSError) as e:
+            logger.error("Public key derivation failed: %s", e)
+            return None
 
     def generate_preshared_key(self):
         """Generate preshared key"""
-        try:
-            return self.execute_command("wg genpsk")
-        except Exception:
-            return base64.b64encode(os.urandom(32)).decode("utf-8")
+        key = self.run_command(["wg", "genpsk"])
+        if not key:
+            raise RuntimeError("'wg genpsk' failed: cannot generate a preshared key")
+        return key
+
+    def generate_header_protection_key(self):
+        """Generate an AWG 3.0 header protection key (same format as a WG key)."""
+        key = self.run_command(["wg", "genkey"])
+        if key and self.is_valid_wireguard_key(key):
+            return key
+        return base64.b64encode(os.urandom(32)).decode("utf-8")
 
     def generate_transport_params(self, protocol, mtu=1420):
         S1 = random.randint(15, min(150, mtu - 148))
@@ -635,7 +851,12 @@ class AmneziaManager:
         }
         if self.protocol_supports_s34(protocol):
             params["S3"] = random.randint(15, 150)
-            params["S4"] = random.randint(0, 32)
+            # S4 pads every transport packet, so it stays small; with header
+            # protection the 12-byte nonce is carved out of it, hence the floor.
+            s4_low = self.HEADER_CIPHER_NONCE_SIZE if self.protocol_supports_awg3(protocol) else 0
+            params["S4"] = random.randint(s4_low, 32)
+        if self.protocol_supports_awg3(protocol):
+            params["HeaderProtectionKey"] = self.generate_header_protection_key()
         return params
 
     def generate_client_defaults(self, mtu=1420):
@@ -651,7 +872,7 @@ class AmneziaManager:
 
     def create_wireguard_server(self, server_data):
         """Create a new WireGuard server configuration with environment defaults"""
-        server_name = server_data.get("name", "New Server")
+        server_name = self.sanitize_name(server_data.get("name"), "New Server")
         port = server_data.get("port", self.default_port)
         subnet = server_data.get("subnet", self.default_subnet)
         mtu = server_data.get("mtu", self.default_mtu)
@@ -673,6 +894,18 @@ class AmneziaManager:
         if mtu < 1280 or mtu > 1440:
             raise ValueError(f"MTU must be between 1280 and 1440, got {mtu}")
 
+        # Validate port and subnet before they reach config files or the iptables
+        # scripts. Both arrive straight from the API.
+        try:
+            port = int(port)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Port must be an integer, got {port!r}") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError(f"Port must be between 1 and 65535, got {port}")
+
+        subnet = self.validate_subnet(subnet)
+        self.assert_no_conflicts(port, subnet)
+
         # Validate DNS servers
         for dns in dns_servers:
             if not self.is_valid_ip(dns):
@@ -693,12 +926,12 @@ class AmneziaManager:
         raw_transport_params = server_data.get("transport_params")
         if not isinstance(raw_transport_params, dict):
             raw_transport_params = self.generate_transport_params(protocol, mtu)
-        transport_params = self.validate_transport_params(protocol, raw_transport_params, mtu)
+        transport_params = self.validate_transport_params(protocol, raw_transport_params)
 
         raw_client_defaults = server_data.get("client_defaults")
         if not isinstance(raw_client_defaults, dict):
             raw_client_defaults = self.generate_client_defaults(mtu)
-        client_defaults = self.validate_client_params(raw_client_defaults, mtu)
+        client_defaults = self.validate_client_params(raw_client_defaults)
 
         # Parse subnet for server IP
         subnet_parts = subnet.split("/")
@@ -706,29 +939,7 @@ class AmneziaManager:
         prefix = subnet_parts[1] if len(subnet_parts) > 1 else "24"
         server_ip = self.get_server_ip(network)
 
-        # Create WireGuard server configuration
-        server_config_content = f"""[Interface]
-PrivateKey = {server_keys["private_key"]}
-Address = {server_ip}/{prefix}
-ListenPort = {port}
-SaveConfig = false
-MTU = {mtu}
-"""
-
-        if transport_params:
-
-            def _opt_line(key):
-                v = transport_params.get(key, None)
-                if v is None or v == "":
-                    return ""
-                return f"{key} = {v}\n"
-
-            server_config_content += f"""{_opt_line("S1")}{_opt_line("S2")}{_opt_line("S3")}{_opt_line("S4")}
-H1 = {transport_params["H1"]}
-H2 = {transport_params["H2"]}
-H3 = {transport_params["H3"]}
-H4 = {transport_params["H4"]}
-"""
+        del prefix  # _build_server_config_content derives this from the subnet.
 
         server_config = {
             "id": server_id,
@@ -754,19 +965,33 @@ H4 = {transport_params["H4"]}
             "created_at": time.time(),
         }
 
-        # Save WireGuard config file
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(server_config_content)
+        # Save WireGuard config file. Uses the same writer as every later rewrite
+        # so the created file and subsequent updates cannot drift apart.
+        self.write_server_conf(server_config)
 
         self.config["servers"].append(server_config)
         self.save_config()
 
         # Auto-start if enabled (from environment or request)
         if auto_start:
-            print(f"Auto-starting new server: {server_name}")
+            logger.info("Auto-starting new server: %s", server_name)
             self.start_server(server_id)
 
         return server_config
+
+    def write_server_conf(self, server):
+        """Render and write a server's .conf from current state, mode 0600.
+
+        Single writer for the interface config: it embeds PrivateKey (and, on AWG
+        3.0, HeaderProtectionKey), so it must not be world-readable — awg-quick
+        warns about that on every start.
+        """
+        content = self._build_server_config_content(server)
+        path = server["config_path"]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.chmod(path, 0o600)
+        return content
 
     def _build_server_config_content(self, server):
         """Build full server config content (Interface + all Peer blocks)."""
@@ -790,16 +1015,13 @@ MTU = {mtu}
         if p:
 
             def _opt_line(key):
-                v = p.get(key, None)
-                if v is None or v == "":
-                    return ""
-                return f"{key} = {v}\n"
+                return self._config_line(p, key)
 
             content += f"""{_opt_line("S1")}{_opt_line("S2")}{_opt_line("S3")}{_opt_line("S4")}H1 = {p.get("H1", 0)}
 H2 = {p.get("H2", 0)}
 H3 = {p.get("H3", 0)}
 H4 = {p.get("H4", 0)}
-"""
+{_opt_line("HeaderProtectionKey")}"""
 
         for client in server.get("clients") or []:
             if client.get("suspended"):
@@ -814,8 +1036,7 @@ PresharedKey = {client["preshared_key"]}
 AllowedIPs = {client["client_ip"]}/32
 """
             except Exception as e:
-                print(f"Failed to render client peer block: {e}")
-
+                logger.error("Failed to render client peer block: %s", e)
         return content
 
     def update_server_transport_params(self, server_id, params):
@@ -830,7 +1051,7 @@ AllowedIPs = {client["client_ip"]}/32
         mtu = int(server.get("mtu", self.default_mtu))
 
         next_protocol = self.normalize_protocol(params.get("protocol", server.get("protocol")))
-        next_transport_params = self.validate_transport_params(next_protocol, params, mtu)
+        next_transport_params = self.validate_transport_params(next_protocol, params)
 
         server["protocol"] = next_protocol
         server["transport_params"] = dict(next_transport_params)
@@ -852,9 +1073,7 @@ AllowedIPs = {client["client_ip"]}/32
                 apply_to_client_obj(self.config["clients"][cid])
 
         # Rewrite server config file
-        content = self._build_server_config_content(server)
-        with open(server["config_path"], "w", encoding="utf-8") as f:
-            f.write(content)
+        self.write_server_conf(server)
 
         self.save_config()
 
@@ -873,20 +1092,34 @@ AllowedIPs = {client["client_ip"]}/32
         }
 
     def apply_live_config(self, interface):
-        """Apply the latest config to the running WireGuard interface using wg syncconf."""
-        try:
-            # Use bash -c to support process substitution
-            command = f"bash -c 'awg syncconf {interface} <(awg-quick strip {interface})'"
-            result = self.execute_command(command)
-            if result is not None:
-                print(f"Live config applied to {interface}")
-                return True
-            else:
-                print(f"Failed to apply live config to {interface}")
-                return False
-        except Exception as e:
-            print(f"Error applying live config to {interface}: {e}")
+        """Apply the latest config to a running interface using 'awg syncconf'.
+
+        Upstream documents this as `awg syncconf <if> <(awg-quick strip <if>)`. The
+        process substitution is replaced with a temp file so no shell is involved.
+        """
+        stripped = self.run_command(["awg-quick", "strip", interface])
+        if stripped is None:
+            logger.error("Failed to strip config for %s", interface)
             return False
+
+        tmp_path = None
+        try:
+            fd, tmp_path = tempfile.mkstemp(prefix=f"{interface}-", suffix=".conf")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(stripped + "\n")
+
+            if self.run_command(["awg", "syncconf", interface, tmp_path]) is None:
+                logger.error("Failed to apply live config to %s", interface)
+                return False
+
+            logger.info("Live config applied to %s", interface)
+            return True
+        except OSError as e:
+            logger.error("Error applying live config to %s: %s", interface, e)
+            return False
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
     def get_server_ip(self, network):
         """Get server IP from network (first usable IP)"""
@@ -895,19 +1128,64 @@ AllowedIPs = {client["client_ip"]}/32
             return f"{parts[0]}.{parts[1]}.{parts[2]}.1"
         return "10.0.0.1"
 
-    def get_client_ip(self, server, client_index):
-        """Get the first unused client IP in the server's subnet."""
-        parts = server["server_ip"].split(".")
-        prefix = f"{parts[0]}.{parts[1]}.{parts[2]}" if len(parts) == 4 else "10.0.0"
-        used_ips = {c.get("client_ip") for c in server.get("clients", [])}
-        for host in range(2, 255):
-            candidate = f"{prefix}.{host}"
-            if candidate not in used_ips:
-                return candidate
-        return f"{prefix}.{client_index + 2}"
+    def get_client_ip(self, server):
+        """Return the first free client address in the server's subnet.
+
+        Derived from the subnet rather than assuming a /24, and checks both places
+        clients are stored so a stale embedded list cannot hand out a duplicate.
+        Raises when the subnet is full — silently reusing an address would break the
+        existing client that holds it.
+        """
+        subnet = server.get("subnet") or self.default_subnet
+        server_ip = server.get("server_ip")
+
+        try:
+            network = ipaddress.ip_network(str(subnet), strict=False)
+        except ValueError as exc:
+            raise ValueError(f"Server {server.get('id')} has an invalid subnet '{subnet}'") from exc
+
+        used = {server_ip}
+        used.update(c.get("client_ip") for c in server.get("clients") or [])
+        # The global map is the other half of the double bookkeeping (see DEVELOPMENT
+        # §3); a client missing from the embedded list still owns its address.
+        server_id = server.get("id")
+        for client in (self.config.get("clients") or {}).values():
+            if isinstance(client, dict) and client.get("server_id") == server_id:
+                used.add(client.get("client_ip"))
+
+        for candidate in network.hosts():
+            text = str(candidate)
+            if text not in used:
+                return text
+
+        raise ValueError(f"No free addresses left in {network} for server {server_id}")
 
     def get_server(self, server_id):
         return next((s for s in self.config.get("servers", []) if s.get("id") == server_id), None)
+
+    def assert_no_conflicts(self, port, subnet, ignore_server_id=None):
+        """Reject a port already in use, or a subnet overlapping an existing server.
+
+        The browser warns about this too, but only the backend can enforce it: two
+        servers on one port means the second interface fails to bind, and overlapping
+        subnets route unpredictably.
+        """
+        network = ipaddress.ip_network(str(subnet), strict=False)
+
+        for server in self.config.get("servers", []):
+            if not isinstance(server, dict) or server.get("id") == ignore_server_id:
+                continue
+
+            name = server.get("name", server.get("id"))
+            if int(server.get("port", 0) or 0) == int(port):
+                raise ValueError(f"Port {port} is already used by server '{name}'")
+
+            try:
+                existing = ipaddress.ip_network(str(server.get("subnet")), strict=False)
+            except ValueError:
+                continue  # a pre-existing bad subnet should not block new servers
+            if network.overlaps(existing):
+                raise ValueError(f"Subnet {network} overlaps '{name}' ({existing})")
 
     def reapply_iptables_for_server(self, server):
         """Reapply iptables rules for a running server after networking changes."""
@@ -935,8 +1213,9 @@ AllowedIPs = {client["client_ip"]}/32
         if not server:
             return False
 
-        # Stop the server if running
-        if server["status"] == "running":
+        # Stop based on the live interface state: a stale cached "stopped" would
+        # orphan the interface and its iptables rules after the config is gone.
+        if self.get_server_status(server_id) == "running":
             self.stop_server(server_id)
 
         # Remove config file
@@ -961,6 +1240,8 @@ AllowedIPs = {client["client_ip"]}/32
         if not server:
             return None
 
+        client_name = self.sanitize_name(client_name, "New Client")
+
         client_id = str(uuid.uuid4())[:6]
 
         # Generate client keys
@@ -968,7 +1249,7 @@ AllowedIPs = {client["client_ip"]}/32
         preshared_key = self.generate_preshared_key()
 
         # Assign client IP
-        client_ip = self.get_client_ip(server, len(server["clients"]))
+        client_ip = self.get_client_ip(server)
 
         base_client_params = self.default_client_defaults()
         base_client_params.update(self.extract_client_params(server.get("client_defaults") or {}))
@@ -985,7 +1266,7 @@ AllowedIPs = {client["client_ip"]}/32
         if isinstance(client_params, dict):
             base_client_params.update(self.extract_client_params(client_params))
 
-        base_client_params = self.validate_client_params(base_client_params, int(server.get("mtu", self.default_mtu)))
+        base_client_params = self.validate_client_params(base_client_params)
 
         client_config = {
             "id": client_id,
@@ -1003,29 +1284,21 @@ AllowedIPs = {client["client_ip"]}/32
             "client_params": dict(base_client_params),
         }
 
-        # Add client to server config
-        client_peer_config = f"""
-# Client: {client_config["name"]}
-[Peer]
-PublicKey = {client_keys["public_key"]}
-PresharedKey = {preshared_key}
-AllowedIPs = {client_ip}/32
-"""
-
-        # Append client to server config file
-        with open(server["config_path"], "a", encoding="utf-8") as f:
-            f.write(client_peer_config)
-
         server["clients"].append(client_config)
+
+        # Rewrite the whole file from state rather than appending a peer block, so
+        # the config always matches self.config exactly.
+        self.write_server_conf(server)
 
         # Store in global clients dict
         self.config["clients"][client_id] = client_config
         self.save_config()
-        # Apply live config if server is running
-        if server["status"] == "running":
+        # Check the live interface, not the cached status field: it is only
+        # refreshed by GET /api/servers, so a stale "stopped" would skip the
+        # hot-reload and leave the new peer absent from the running daemon.
+        if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
-        print(f"Client {client_config['name']} added")
-
+        logger.info(f"Client {client_config['name']} added")
         config_content = self.generate_wireguard_client_config(
             server,
             client_config,
@@ -1048,7 +1321,7 @@ AllowedIPs = {client_ip}/32
         if isinstance(params, dict):
             raw_client_params.update(self.extract_client_params(params))
 
-        client_params = self.validate_client_params(raw_client_params, int(server.get("mtu", self.default_mtu)))
+        client_params = self.validate_client_params(raw_client_params)
 
         client["client_params"] = client_params
 
@@ -1067,6 +1340,7 @@ AllowedIPs = {client_ip}/32
         server = self.get_server(server_id)
         if not server:
             return None
+        new_name = self.sanitize_name(new_name)
         server["name"] = new_name
         for client in server.get("clients", []):
             client["server_name"] = new_name
@@ -1084,14 +1358,13 @@ AllowedIPs = {client_ip}/32
         client = self.get_client(client_id)
         if not client or client.get("server_id") != server_id:
             return None
+        new_name = self.sanitize_name(new_name)
         client["name"] = new_name
         for embedded in server.get("clients", []):
             if embedded.get("id") == client_id:
                 embedded["name"] = new_name
                 break
-        content = self._build_server_config_content(server)
-        with open(server["config_path"], "w", encoding="utf-8") as f:
-            f.write(content)
+        self.write_server_conf(server)
         self.save_config()
         return client
 
@@ -1113,13 +1386,11 @@ AllowedIPs = {client_ip}/32
                 embedded["suspended"] = new_state
                 break
 
-        content = self._build_server_config_content(server)
-        with open(server["config_path"], "w", encoding="utf-8") as f:
-            f.write(content)
+        self.write_server_conf(server)
 
         self.save_config()
 
-        if server["status"] == "running":
+        if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
 
         return client
@@ -1141,55 +1412,18 @@ AllowedIPs = {client_ip}/32
         if client_id in self.config["clients"]:
             del self.config["clients"][client_id]
 
-        # Rewrite the config file without the deleted client's [Peer] block
-        self.rewrite_server_conf_without_client(server, client)
+        # Rebuild the config from state. Previously this stripped the peer block by
+        # matching a "# Client: <name>" comment, which deleted both blocks when two
+        # clients shared a name.
+        self.write_server_conf(server)
 
         self.save_config()
 
         # Apply live config if server is running
-        if server["status"] == "running":
+        if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
-        print(f"Client {server['name']}:{client['name']} removed")
-
+        logger.info(f"Client {server['name']}:{client['name']} removed")
         return True
-
-    def rewrite_server_conf_without_client(self, server, client):
-        """Rewrite the server conf file without the specified client's [Peer] block"""
-        if not os.path.exists(server["config_path"]):
-            return
-
-        with open(server["config_path"], "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        new_lines = []
-        skip = False
-        client_marker = f"# Client: {client['name']}"
-
-        for line in lines:
-            stripped = line.strip()
-
-            # Start skipping when we find the client marker line
-            if stripped == client_marker:
-                skip = True
-                continue
-
-            # Stop skipping when we hit the next client marker line
-            if skip and stripped.startswith("# Client:"):
-                skip = False
-
-            # If skipping, skip all lines until next client marker
-            if skip:
-                continue
-
-            # Otherwise, keep the line
-            new_lines.append(line)
-
-        # Remove trailing blank lines if any
-        while new_lines and new_lines[-1].strip() == "":
-            new_lines.pop()
-
-        with open(server["config_path"], "w", encoding="utf-8") as f:
-            f.writelines(new_lines)
 
     def generate_wireguard_client_config(self, server, client_config, include_comments=True):
         """Generate WireGuard client configuration"""
@@ -1219,10 +1453,7 @@ MTU = {server["mtu"]}
         if params:
 
             def _opt_line(key):
-                v = params.get(key, None)
-                if v is None or v == "":
-                    return ""
-                return f"{key} = {v}\n"
+                return self._config_line(params, key)
 
             i_lines = []
             for key in ("I1", "I2", "I3", "I4", "I5"):
@@ -1242,6 +1473,14 @@ H4 = {params.get("H4", 0)}
             if i_lines:
                 config += "\n".join(i_lines) + "\n"
 
+            # AWG 3.0. HeaderProtectionKey is server-side, so it has to match the
+            # server config exactly; the rest are client-side and optional.
+            if self.protocol_supports_awg3(server.get("protocol")):
+                config += _opt_line("HeaderProtectionKey")
+                config += _opt_line("ContentPaddingAddition")
+                for key in self.CLIENT_TIMING_PARAM_KEYS:
+                    config += _opt_line(key)
+
         config += f"""
 [Peer]
 PublicKey = {server["server_public_key"]}
@@ -1252,55 +1491,45 @@ PersistentKeepalive = 25
 """
         return config
 
+    def _run_iptables_script(self, action, interface, subnet, enable_nat, block_lan_cidrs):
+        """Run the setup/cleanup iptables script for an interface.
+
+        interface and subnet originate from API input, so the script is invoked as
+        an argv list (no shell) and the toggles are passed through the environment.
+        """
+        script_path = f"/app/scripts/{action}_iptables.sh"
+        if not os.path.exists(script_path):
+            logger.warning("iptables %s script not found at %s", action, script_path)
+            return False
+
+        env = os.environ.copy()
+        if enable_nat is not None:
+            env["ENABLE_NAT"] = "1" if enable_nat else "0"
+        if block_lan_cidrs is not None:
+            env["BLOCK_LAN_CIDRS"] = "1" if block_lan_cidrs else "0"
+
+        try:
+            subprocess.run(
+                [script_path, str(interface), str(subnet)],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+        except (subprocess.CalledProcessError, OSError) as e:
+            logger.error("iptables %s failed for %s: %s", action, interface, e)
+            return False
+
+        logger.info("iptables %s completed for %s", action, interface)
+        return True
+
     def setup_iptables(self, interface, subnet, enable_nat=None, block_lan_cidrs=None):
         """Setup iptables rules for WireGuard interface"""
-        try:
-            script_path = "/app/scripts/setup_iptables.sh"
-            if os.path.exists(script_path):
-                env_parts = []
-                if enable_nat is not None:
-                    env_parts.append(f"ENABLE_NAT={'1' if enable_nat else '0'}")
-                if block_lan_cidrs is not None:
-                    env_parts.append(f"BLOCK_LAN_CIDRS={'1' if block_lan_cidrs else '0'}")
-                env_prefix = (" ".join(env_parts) + " ") if env_parts else ""
-                result = self.execute_command(f"{env_prefix}{script_path} {interface} {subnet}")
-                if result is not None:
-                    print(f"iptables setup completed for {interface}")
-                    return True
-                else:
-                    print(f"iptables setup failed for {interface}")
-                    return False
-            else:
-                print(f"iptables script not found at {script_path}")
-                return False
-        except Exception as e:
-            print(f"Error setting up iptables for {interface}: {e}")
-            return False
+        return self._run_iptables_script("setup", interface, subnet, enable_nat, block_lan_cidrs)
 
     def cleanup_iptables(self, interface, subnet, enable_nat=None, block_lan_cidrs=None):
         """Cleanup iptables rules for WireGuard interface"""
-        try:
-            script_path = "/app/scripts/cleanup_iptables.sh"
-            if os.path.exists(script_path):
-                env_parts = []
-                if enable_nat is not None:
-                    env_parts.append(f"ENABLE_NAT={'1' if enable_nat else '0'}")
-                if block_lan_cidrs is not None:
-                    env_parts.append(f"BLOCK_LAN_CIDRS={'1' if block_lan_cidrs else '0'}")
-                env_prefix = (" ".join(env_parts) + " ") if env_parts else ""
-                result = self.execute_command(f"{env_prefix}{script_path} {interface} {subnet}")
-                if result is not None:
-                    print(f"iptables cleanup completed for {interface}")
-                    return True
-                else:
-                    print(f"iptables cleanup failed for {interface}")
-                    return False
-            else:
-                print(f"iptables cleanup script not found at {script_path}")
-                return False
-        except Exception as e:
-            print(f"Error cleaning up iptables for {interface}: {e}")
-            return False
+        return self._run_iptables_script("cleanup", interface, subnet, enable_nat, block_lan_cidrs)
 
     def start_server(self, server_id):
         """Start a WireGuard server using awg-quick with iptables setup"""
@@ -1310,7 +1539,7 @@ PersistentKeepalive = 25
 
         try:
             # Use awg-quick to bring up the interface
-            result = self.execute_command(f"/usr/bin/awg-quick up {server['interface']}")
+            result = self.run_command(["/usr/bin/awg-quick", "up", server["interface"]])
             if result is not None:
                 # Setup iptables rules
                 iptables_success = self.setup_iptables(
@@ -1323,22 +1552,17 @@ PersistentKeepalive = 25
                 server["status"] = "running"
                 self.save_config()
 
-                print(f"Server {server['name']} started successfully")
+                logger.info(f"Server {server['name']} started successfully")
                 if iptables_success:
-                    print(f"iptables rules configured for {server['interface']}")
+                    logger.info(f"iptables rules configured for {server['interface']}")
                 else:
-                    print(f"Warning: iptables setup may have failed for {server['interface']}")
-
-                threading.Thread(
-                    target=self.simulate_server_operation,
-                    args=(server_id, "running"),
-                ).start()
+                    logger.error(f"Warning: iptables setup may have failed for {server['interface']}")
+                self.emit_status_after_delay(server_id, "running")
                 return True
             else:
-                print(f"Failed to start server {server['name']}")
+                logger.error(f"Failed to start server {server['name']}")
         except Exception as e:
-            print(f"Failed to start server {server_id}: {e}")
-
+            logger.error("Failed to start server %s: %s", server_id, e)
         return False
 
     def stop_server(self, server_id):
@@ -1357,25 +1581,20 @@ PersistentKeepalive = 25
             )
 
             # Use awg-quick to bring down the interface
-            result = self.execute_command(f"/usr/bin/awg-quick down {server['interface']}")
+            result = self.run_command(["/usr/bin/awg-quick", "down", server["interface"]])
             if result is not None:
                 server["status"] = "stopped"
                 self.save_config()
 
-                print(f"Server {server['name']} stopped successfully")
+                logger.info(f"Server {server['name']} stopped successfully")
                 if iptables_cleaned:
-                    print(f"iptables rules cleaned up for {server['interface']}")
-
-                threading.Thread(
-                    target=self.simulate_server_operation,
-                    args=(server_id, "stopped"),
-                ).start()
+                    logger.info(f"iptables rules cleaned up for {server['interface']}")
+                self.emit_status_after_delay(server_id, "stopped")
                 return True
             else:
-                print(f"Failed to stop server {server['name']}")
+                logger.error(f"Failed to stop server {server['name']}")
         except Exception as e:
-            print(f"Failed to stop server {server_id}: {e}")
-
+            logger.error("Failed to stop server %s: %s", server_id, e)
         return False
 
     def get_server_status(self, server_id):
@@ -1384,20 +1603,23 @@ PersistentKeepalive = 25
         if not server:
             return "not_found"
 
-        try:
-            # Check if interface exists and is up
-            result = self.execute_command(f"ip link show {server['interface']} 2>/dev/null")
-            if result and "state UNKNOWN" in result:
-                return "running"
-            else:
-                return "stopped"
-        except Exception:
-            return "stopped"
+        # run_command returns None when the interface does not exist.
+        result = self.run_command(["ip", "link", "show", server["interface"]])
+        return "running" if result and "state UNKNOWN" in result else "stopped"
 
-    def simulate_server_operation(self, server_id, status):
-        """Simulate server operation with status updates"""
-        time.sleep(2)
-        self.socketio.emit("server_status", {"server_id": server_id, "status": status})
+    def emit_status_after_delay(self, server_id, status, delay_seconds=2):
+        """Push a server_status update to clients once the interface has settled.
+
+        Runs as a Socket.IO background task rather than a real thread: the app runs
+        under eventlet, where a blocking sleep in a plain thread does not cooperate
+        with the event loop.
+        """
+
+        def emit_later():
+            self.socketio.sleep(delay_seconds)
+            self.socketio.emit("server_status", {"server_id": server_id, "status": status})
+
+        self.socketio.start_background_task(emit_later)
 
     def start_traffic_monitoring(self):
         """Start background thread for real-time traffic monitoring"""
@@ -1420,7 +1642,7 @@ PersistentKeepalive = 25
 
                     self.socketio.sleep(7)  # Update every 7 seconds
                 except Exception as e:
-                    print(f"Error in traffic monitoring: {e}")
+                    logger.error("Error in traffic monitoring: %s", e)
                     self.socketio.sleep(7)
 
         self.socketio.start_background_task(monitor_traffic)
@@ -1441,7 +1663,7 @@ PersistentKeepalive = 25
             return None
 
         interface = server["interface"]
-        output = self.execute_command(f"/usr/bin/awg show {interface}")
+        output = self.run_command(["/usr/bin/awg", "show", interface])
         if not output:
             return None
 
@@ -1573,6 +1795,5 @@ PersistentKeepalive = 25
                     self._client_status_dirty = False
                     self._last_client_status_persist_ts = now
                 except Exception as e:
-                    print(f"Failed to persist client status updates: {e}")
-
+                    logger.error("Failed to persist client status updates: %s", e)
         return clients_traffic

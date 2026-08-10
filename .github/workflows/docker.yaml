@@ -17,7 +17,26 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Only the imports the modules under test need; the suite itself is stdlib.
+      - name: Install runtime dependencies
+        run: pip install --no-cache-dir -r web-ui/requirements.txt
+
+      - name: Run tests
+        run: ./run_tests.sh
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

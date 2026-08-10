@@ -30,6 +30,11 @@ body.dark h3, body.dark h4 { color: #bfdbfe !important; }
 body.dark .text-blue-800 { color: #93c5fd !important; }
 body.dark .text-blue-900 { color: #bfdbfe !important; }
 body.dark .text-blue-800\/80 { color: #93c5fd !important; opacity: 1 !important; }
+/* Secondary help text inside blue panels (AWG 3.0 fields, header protection
+   warning). Without this the /60 opacity keeps the dark navy default and is
+   almost unreadable on the dark panel background. */
+body.dark .text-blue-800\/60 { color: #93c5fd !important; opacity: 1 !important; }
+body.dark .text-blue-800\/70 { color: #93c5fd !important; opacity: 1 !important; }
 body.dark .text-blue-800 { color: #bfdbfe !important; }
 body.dark .text-blue-600 { color: #93c5fd !important; }
 body.dark .text-blue-500 { color: #60a5fa !important; }
@@ -91,6 +96,9 @@ body.dark .text-purple-600 { color: #c084fc !important; }
 body.dark .text-slate-600 { color: #94a3b8 !important; }
 body.dark .text-amber-600 { color: #fbbf24 !important; }
 body.dark .text-amber-500 { color: #f59e0b !important; }
+/* Warning/callout text on the dark amber panel background (bg-amber-50 -> #451a03) */
+body.dark .text-amber-800 { color: #fcd34d !important; }
+body.dark .text-amber-700 { color: #fbbf24 !important; }
 body.dark .text-sky-600 { color: #7dd3fc !important; }
 body.dark .text-red-500 { color: #fca5a5 !important; }
 body.dark .text-green-500 { color: #4ade80 !important; }
@@ -134,6 +142,24 @@ body.dark textarea::placeholder {
 body.dark .bg-gray-800 { background-color: #111827 !important; }
 body.dark .bg-gray-900 { background-color: #0f172a !important; }
 body.dark .text-green-400 { color: #86efac !important; }
+
+/* Collapsible parameter help (keeps config dialogs short) */
+.param-help > summary {
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    opacity: 0.85;
+}
+.param-help > summary::-webkit-details-marker { display: none; }
+.param-help > summary::before {
+    content: '▸';
+    display: inline-block;
+    font-size: 0.9em;
+    transition: transform 0.15s ease;
+}
+.param-help[open] > summary::before { transform: rotate(90deg); }
+.param-help > summary:hover { opacity: 1; text-decoration: underline; }
 
 /* Loading animations */
 .loading {

@@ -1,0 +1,32 @@
+# Keep the build context small and stop non-runtime files reaching the image.
+# The Dockerfile only COPYs web-ui/, scripts/, config/ and web-ui/requirements.txt,
+# so everything here is either never used or must never be baked in.
+
+# VCS and editor state (.git alone is several MB of context)
+.git
+.gitignore
+.github
+.vscode
+
+# Tests and their fixtures are run from the source tree, not from the image
+tests
+run_tests.sh
+
+# Docs and assets
+*.md
+screenshot.png
+
+# Local helper scripts
+run.sh
+publish_dockerhub.sh
+
+# Python bytecode: stale .pyc files inside the image are worse than useless
+__pycache__
+**/__pycache__
+*.py[cod]
+.python-version
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db
+*.swp

@@ -6,9 +6,12 @@ import time
 import subprocess
 from collections import deque
 from flask import Blueprint, request, jsonify
+from core.logging_setup import get_logger
 
 # pylint: disable=broad-exception-caught
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
+
+logger = get_logger(__name__)
 
 
 def register_system_routes(
@@ -43,6 +46,21 @@ def register_system_routes(
             "active_servers": len([s for s in amnezia_manager.config["servers"]
                                  if amnezia_manager.get_server_status(s["id"]) == "running"]),
             "timestamp": time.time(),
+            # The backend's protocol table. static/js/protocols.js mirrors it for the
+            # UI; exposing it here means the mirror can be checked rather than assumed
+            # (tests/test_http_api.py compares the two).
+            "protocols": {
+                "default": amnezia_manager.DEFAULT_PROTOCOL,
+                "supported": [
+                    {
+                        "id": protocol,
+                        "supports_s34": amnezia_manager.protocol_supports_s34(protocol),
+                        "supports_header_ranges": amnezia_manager.protocol_supports_header_ranges(protocol),
+                        "supports_awg3": amnezia_manager.protocol_supports_awg3(protocol),
+                    }
+                    for protocol in amnezia_manager.SUPPORTED_PROTOCOLS
+                ],
+            },
             "environment": {
                 "nginx_port": nginx_port,
                 "auto_start_servers": auto_start_servers,
@@ -176,19 +194,24 @@ def register_system_routes(
             return jsonify({"error": "Server not found"}), 404
 
         try:
-            check_commands = [
-                f"iptables -L INPUT -n | grep {server['interface']}",
-                f"iptables -L FORWARD -n | grep {server['interface']}",
-                f"iptables -t nat -L POSTROUTING -n | grep {server['subnet']}"
+            # Listed as (label, argv, needle): the chain is dumped with a plain argv
+            # call and matched in Python, so interface/subnet never reach a shell.
+            # Uses -S rather than -L because -L omits the interface column, which
+            # made the INPUT/FORWARD checks always report "Not found".
+            checks = [
+                ("iptables -S INPUT", ["iptables", "-S", "INPUT"], server['interface']),
+                ("iptables -S FORWARD", ["iptables", "-S", "FORWARD"], server['interface']),
+                ("iptables -t nat -S POSTROUTING",
+                 ["iptables", "-t", "nat", "-S", "POSTROUTING"], server['subnet']),
             ]
 
             results = {}
-            for cmd in check_commands:
-                try:
-                    result = amnezia_manager.execute_command(cmd)
-                    results[cmd] = "Found" if result else "Not found"
-                except Exception:
-                    results[cmd] = "Error"
+            for label, argv, needle in checks:
+                output = amnezia_manager.run_command(argv)
+                if output is None:
+                    results[f"{label} | grep {needle}"] = "Error"
+                else:
+                    results[f"{label} | grep {needle}"] = "Found" if needle in output else "Not found"
 
             return jsonify({
                 "server_id": server_id,

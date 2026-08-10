@@ -4,9 +4,12 @@ import io
 import os
 import re
 from flask import Blueprint, request, jsonify, send_file
+from core.logging_setup import get_logger
 
 # pylint: disable=broad-exception-caught
 # pylint: disable=too-many-arguments,too-many-locals,too-many-statements
+
+logger = get_logger(__name__)
 
 
 def register_server_routes(
@@ -47,7 +50,15 @@ def register_server_routes(
     @require_token
     def create_server():
         data = request.get_json(silent=True) or {}
-        server = amnezia_manager.create_wireguard_server(data)
+        # Require an explicit name so an empty POST cannot silently create a
+        # fully-defaulted (and auto-started) server.
+        if not isinstance(data, dict) or not str(data.get('name') or '').strip():
+            return jsonify({"error": "A server name is required"}), 400
+
+        try:
+            server = amnezia_manager.create_wireguard_server(data)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
         return jsonify(server)
 
     @server_bp.route('/api/servers/<server_id>', methods=['DELETE'])

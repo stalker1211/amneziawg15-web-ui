@@ -1,5 +1,48 @@
 # CHANGELOG
 
+## Version 2.0 (2026-08-07)
+
+Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and
+`amneziawg-tools` are both upgraded to v3, which changes the UAPI wire format.
+Existing AWG 1.5 / 2.0 servers and clients keep working — 3.0 features are opt-in.
+
+### AWG 3.0
+- **Header protection** (`HeaderProtectionKey`) — encrypts packet headers instead of only randomising them. Generated per server, mirrored into every client config. Requires each of S1–S4 to be ≥ 12 (enforced).
+- **`ContentPaddingAddition`** — extra random bytes per data packet.
+- **Tunable timings** — `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts`, per client, range-valued (`22-30`).
+- Protocol-specific fields appear only for protocols that support them.
+
+### Components
+- `amneziawg-go` → `08d68cd`, `amneziawg-tools` → `v3.0.20260805`. **These must match**: v1.x tools cannot configure a v3 daemon. Go builder pinned to `1.26.5`.
+
+### Security
+- **CVEs: 85 → 1** (12 critical → 0). Raised the `x/crypto` / `x/net` / `x/sys` pins (the old ones were *below* upstream's own requirements, so they did nothing), dropped `apache2-utils` in favour of `openssl passwd -apr1`, removed `setuptools`, added a pinned `requirements.txt`.
+- **Shell execution removed** from the backend — all subprocesses use argv lists, and subnet/port from the API are validated. Closes a command-injection path via `subnet`.
+- **CSRF**: a cross-site form POST could create and start a VPN server. Mutating `/api/` requests now require `Content-Type: application/json`.
+- Config files and `web_config.json` are now mode `0600` and written atomically.
+
+### Fixes
+- Deleting one of two identically named clients no longer removes **both** `[Peer]` blocks.
+- Client addresses are now derived from the server's subnet, so non-`/24` subnets allocate correctly, and both client stores are checked so a duplicate cannot be handed out. A full subnet raises instead of reusing an address.
+- Creating a server rejects a port already in use or a subnet overlapping an existing server (previously only the browser warned).
+- The GeoIP cache is bounded, so it no longer grows for the lifetime of the container.
+- Adding/removing a client now hot-reloads the daemon based on the live interface state, not a cached status field that could be stale.
+- Failed key generation raises instead of substituting unrelated random keys (a server that looked healthy but could never handshake).
+- Status updates use Socket.IO background tasks, not threads that block eventlet.
+- `/api/system/iptables-test` no longer reports "Not found" for rules that exist.
+- The API token prompt no longer appears for nginx Basic Auth failures, where it could not help.
+- Server and client names are sanitized before they reach a config file: a name containing a newline could previously end the `# Client:` comment and have the rest parsed as configuration.
+
+### UI
+- Long parameter help is collapsible, so dialogs fit the viewport with their buttons visible.
+- Fixed dark-mode help text that was effectively invisible (1.25:1 contrast).
+
+### Maintainability
+- Modal dialogs moved to `static/js/modals.js`; the protocol table has one definition per side (`amnezia_manager.py` + `static/js/protocols.js`), so adding a generation is a two-file edit.
+- `print()` replaced with `logging` — timestamps, levels and module names in the logs; `LOG_LEVEL` controls verbosity.
+- Added `./run_tests.sh` (111 stdlib `unittest` tests, no new dependencies) plus browser smoke tests; CI runs the suite before building.
+- Added `DEVELOPMENT.md` (architecture, state model, conventions, open items) and `CLAUDE.md`.
+
 ## Version 1.6.1 (2026-05-16)
 
 - AWG 2.0 support: Updated `amneziawg-go` builder to latest commit (f4f4c99) with fixed S4 handling for keepalive packets. Updated awg-tools builder to latest release (tag v1.0.20260223).

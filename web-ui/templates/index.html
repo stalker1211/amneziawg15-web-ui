@@ -145,10 +145,9 @@
 
                     <div class="mb-3">
                         <label class="block text-sm font-medium text-gray-700">Protocol *</label>
-                        <select id="serverProtocol" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" required>
-                            <option value="AWG 1.5">AWG 1.5</option>
-                            <option value="AWG 2.0">AWG 2.0</option>
-                        </select>
+                        <!-- Options are filled from static/js/protocols.js at startup so the
+                             list lives in exactly one place. -->
+                        <select id="serverProtocol" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" required></select>
                     </div>
 
                     <div id="transportParameterDescription"></div>
@@ -190,6 +189,25 @@
                             <input type="text" id="paramH4" value="4000" class="mt-1 block w-full border border-gray-300 rounded-md px-2 py-1 text-sm font-mono">
                         </div>
                     </div>
+
+                    <!-- AWG 3.0 only; shown/hidden by toggleProtocolFields() -->
+                    <div id="paramHeaderProtectionKeyRow" class="mt-4">
+                        <label class="block text-xs font-medium text-gray-600">
+                            HeaderProtectionKey (optional, server-side)
+                        </label>
+                        <div class="mt-1 flex items-center gap-2">
+                            <input type="text" id="paramHeaderProtectionKey" value="" placeholder="leave empty to disable header protection"
+                                class="block w-full border border-gray-300 rounded-md px-2 py-1 text-sm font-mono">
+                            <button type="button" id="genHeaderProtectionKeyBtn"
+                                class="btn-pill bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600 whitespace-nowrap">
+                                Generate
+                            </button>
+                        </div>
+                        <p class="text-gray-500 text-xs mt-1">
+                            Encrypts packet headers. Must be identical on server and clients (it is written into
+                            every client config automatically). Requires S1, S2, S3 and S4 to each be 12 or more.
+                        </p>
+                    </div>
                 </div>
                 <div id="obfuscationError" class="text-red-600 text-xs mt-1 hidden"></div>
 
@@ -207,8 +225,12 @@
 
     </div>
 
+    <script src="{{ url_for('static', filename='js/protocols.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/api.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/server-ui.js') }}?v={{ cache_bust }}"></script>
+    <!-- app.js defines AmneziaApp; modals.js extends its prototype and must load
+         after it but before the instance is created at the end of app.js. -->
     <script src="{{ url_for('static', filename='js/app.js') }}?v={{ cache_bust }}"></script>
+    <script src="{{ url_for('static', filename='js/modals.js') }}?v={{ cache_bust }}"></script>
 </body>
 </html>

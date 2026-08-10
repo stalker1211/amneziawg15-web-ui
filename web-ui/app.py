@@ -6,6 +6,7 @@ import time
 from functools import wraps
 
 from core.helpers import to_bool
+from core.logging_setup import configure_logging, get_logger
 from core.runtime import (
     create_flask_app,
     create_socketio,
@@ -16,6 +17,9 @@ from flask import jsonify, render_template, request, send_from_directory
 from routes.servers import register_server_routes
 from routes.system import register_system_routes
 from services.amnezia_manager import AmneziaManager
+
+configure_logging()
+logger = get_logger(__name__)
 
 # Get the absolute path to the current directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,7 +55,6 @@ WEB_UI_PORT = 5000
 CONFIG_DIR = "/etc/amnezia"
 WIREGUARD_CONFIG_DIR = os.path.join(CONFIG_DIR, "amneziawg")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "web_config.json")
-ENABLE_OBFUSCATION = True
 ENABLE_GEOIP = os.getenv("ENABLE_GEOIP", "1").strip().lower() not in ("0", "false", "no", "off")
 
 # API Token Auth (optional, for defense-in-depth)
@@ -73,39 +76,52 @@ else:
     # Default: same-origin only (let Flask-SocketIO use its default behavior)
     ALLOWED_ORIGINS = []
 
-print(f"Base directory: {BASE_DIR}")
-print(f"Template directory: {TEMPLATE_DIR}")
-print(f"Static directory: {STATIC_DIR}")
-# Print environment configuration for debugging
-print("=== Environment Configuration ===")
-print(f"NGINX_PORT: {NGINX_PORT}")
-print(f"AUTO_START_SERVERS: {AUTO_START_SERVERS}")
-print(f"DEFAULT_MTU: {DEFAULT_MTU}")
-print(f"DEFAULT_SUBNET: {DEFAULT_SUBNET}")
-print(f"DEFAULT_PORT: {DEFAULT_PORT}")
-print(f"DEFAULT_DNS: {DEFAULT_DNS}")
-print(f"DEFAULT_ENABLE_NAT: {DEFAULT_ENABLE_NAT}")
-print(f"DEFAULT_BLOCK_LAN_CIDRS: {DEFAULT_BLOCK_LAN_CIDRS}")
-print(f"DNS_SERVERS: {DNS_SERVERS}")
-print("==================================")
-print("Fixed Configuration:")
-print(f"WEB_UI_PORT: {WEB_UI_PORT} (internal)")
-print(f"CONFIG_DIR: {CONFIG_DIR}")
-print(f"ENABLE_OBFUSCATION: {ENABLE_OBFUSCATION}")
-print(f"API_TOKEN: {'<set>' if API_TOKEN else '<not set>'}")
-print(f"ALLOWED_ORIGINS: {ALLOWED_ORIGINS if ALLOWED_ORIGINS else '<same-origin only>'}")
-print("==================================")
-
-# Check if directories exist
-print(f"Templates exist: {os.path.exists(TEMPLATE_DIR)}")
-print(f"Static exist: {os.path.exists(STATIC_DIR)}")
-if os.path.exists(TEMPLATE_DIR):
-    print(f"Template files: {os.listdir(TEMPLATE_DIR)}")
-if os.path.exists(STATIC_DIR):
-    print(f"Static files: {os.listdir(STATIC_DIR)}")
+logger.info("=== AmneziaWG Web UI configuration ===")
+logger.info("dirs: base=%s templates=%s (exists=%s) static=%s (exists=%s)",
+            BASE_DIR, TEMPLATE_DIR, os.path.exists(TEMPLATE_DIR),
+            STATIC_DIR, os.path.exists(STATIC_DIR))
+logger.info("nginx_port=%s auto_start=%s api_token=%s allowed_origins=%s",
+            NGINX_PORT, AUTO_START_SERVERS,
+            "<set>" if API_TOKEN else "<not set>",
+            ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>")
+logger.info("defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s",
+            DEFAULT_MTU, DEFAULT_SUBNET, DEFAULT_PORT, DNS_SERVERS,
+            DEFAULT_ENABLE_NAT, DEFAULT_BLOCK_LAN_CIDRS, ENABLE_GEOIP)
+logger.info("config_dir=%s web_ui_port=%s (internal)", CONFIG_DIR, WEB_UI_PORT)
+logger.debug("template files: %s",
+             os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
+logger.debug("static files: %s",
+             os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
 
 app = create_flask_app(TEMPLATE_DIR, STATIC_DIR)
 socketio = create_socketio(app, ALLOWED_ORIGINS)
+
+
+@app.before_request
+def require_json_for_mutations():
+    """Require a JSON content-type on state-changing API requests (anti-CSRF).
+
+    Browsers cache Basic Auth credentials per origin, so once the panel is open a
+    page on another site could otherwise POST to the API and have the credentials
+    attached automatically. An HTML form can only send urlencoded, text/plain or
+    multipart bodies; asking for application/json means a cross-site request needs
+    a CORS preflight, which is not granted. Same-origin calls from the UI are
+    unaffected because ApiClient always sets this header.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    if not request.path.startswith("/api/"):
+        return None
+
+    if not request.is_json:
+        return jsonify({
+            "error": (
+                "Content-Type: application/json is required for this request "
+                f"(got {request.headers.get('Content-Type') or 'none'})"
+            )
+        }), 415
+
+    return None
 
 
 # API Token Auth decorator
@@ -118,8 +134,10 @@ def require_token(f):
             return f(*args, **kwargs)
 
         # Support either:
-        # - Authorization: Bearer <token> (useful when there is no proxy auth)
-        # - X-API-Token: <token>         (works alongside Nginx Basic Auth)
+        # - X-API-Token: <token>          works alongside Nginx Basic Auth
+        # - Authorization: Bearer <token> ONLY when nginx Basic Auth is disabled or
+        #   bypassed, since otherwise the Authorization header carries the Basic
+        #   credentials and nginx rejects a Bearer value before Flask sees it.
         token = (request.headers.get("X-API-Token") or "").strip()
         if not token:
             auth_header = request.headers.get("Authorization", "")
@@ -153,7 +171,6 @@ amnezia_manager = AmneziaManager(
     config_dir=CONFIG_DIR,
     wireguard_config_dir=WIREGUARD_CONFIG_DIR,
     config_file=CONFIG_FILE,
-    enable_obfuscation=ENABLE_OBFUSCATION,
     enable_geoip=ENABLE_GEOIP,
 )
 
@@ -186,7 +203,7 @@ register_socket_handlers(socketio, amnezia_manager, NGINX_PORT)
 @app.route("/")
 def index():
     """Render the main single-page web UI."""
-    print("Serving index.html")
+    logger.debug("Serving index.html")
     # Cache-bust static assets so browsers pick up new JS/CSS immediately.
     try:
         js_path = os.path.join(STATIC_DIR, "js", "app.js")

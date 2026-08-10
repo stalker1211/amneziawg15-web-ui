@@ -1,0 +1,17 @@
+# Runtime dependencies for the AmneziaWG Web UI.
+#
+# Pinned for reproducible builds. Bump deliberately (and rerun a CVE scan) rather
+# than relying on an unpinned build silently picking up fixes.
+flask==3.1.3
+flask-socketio==5.6.1
+requests==2.34.2
+
+# Flask-SocketIO's server side. python-engineio is a transitive dependency, but
+# it is pinned explicitly because CVE-2026-48802 / CVE-2026-48809 are fixed there
+# rather than in python-socketio.
+python-socketio==5.16.4
+python-engineio==4.13.4
+
+# async_mode='eventlet' in core/runtime.py. Eventlet is maintained in bugfix mode
+# only and warns on import; migrating to gevent or threading is worth planning.
+eventlet==0.41.1

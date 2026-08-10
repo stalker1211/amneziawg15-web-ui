@@ -1,59 +1,79 @@
 # AmneziaWG Web UI
 
-A comprehensive web-based management interface for AmneziaWG VPN servers. This service provides an easy-to-use web UI to create, manage, and monitor WireGuard VPN servers with AmneziaWG's advanced obfuscation features.
-Most server configuration is done via the web interface or API endpoints. However, some defaults are controlled only via environment variables at container startup: `NGINX_PORT`, `API_TOKEN`, `ENABLE_GEOIP`,`WAN_IF`, `ALLOWED_ORIGINS`, (NAT/LAN settings `ENABLE_NAT` and `BLOCK_LAN_CIDRS` are defaults per-server and can be overridden in the UI).
+A web UI for running [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) VPN
+servers — WireGuard with obfuscation that resists DPI-based blocking. Create servers,
+manage clients, hand out configs, and watch traffic live, all from one container.
 
-Current version: **1.6**
+Almost everything is configurable in the UI. A handful of settings are startup-only
+environment variables: `NGINX_PORT`, `NGINX_USER`/`NGINX_PASSWORD`, `API_TOKEN`,
+`ENABLE_GEOIP`, `WAN_IF`, `ALLOWED_ORIGINS`, `LOG_LEVEL` (`ENABLE_NAT` and
+`BLOCK_LAN_CIDRS` are only *defaults* — override them per server in the UI).
+
+Current version: **2.0**
+
+> Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, the
+> state model, protocol/parameter details, conventions and open items.
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
 ## 🚀 Features
 
-*   **Web-based Management**: Intuitive UI for managing VPN servers and clients
-*   **Full AWG 2.0 support**: Clear separation of server transport params (S1–S4, H1–H4) and client-only params (Jc, Jmin, Jmax, I1–I5). Supports H header ranges (`x-y`), S3/S4 padding (AWG 2.0 only; silently ignored for AWG 1.5), and custom signature packets (I1–I5) with full tag syntax.
-*   **Client Management**: Generate and download client configurations; click any server or client name to rename it inline
-*   **Real-time Monitoring**: Live server status and connection monitoring
-*   **Geo for endpoint/server/egress IPs**: Shows client endpoint (`IP:PORT`), server public IP, and egress IP with country flag/location when available
-*   **Auto-start**: Automatic server startup on container restart
-*   **IPTables Automation**: Automatic firewall configuration
-*   **Custom values**: MTU and other connection settings can be customized
-*   **QR code**: Client can be viewed, copied and downloaded via text, file or QR code (with size limits)
-*   **Config view**: Both servers' and clients' configs can be viewed directly from UI
-*   **Client-only params**: Jc, Jmin, Jmax and I1–I5 are stored per-client and written to client configs only (not to the server `.conf`). Each client can override the server defaults.
-*   **AWG logs viewer**: Per-server “View Logs” modal with auto-refresh and interface-aware filtering.
-*   **Per-server egress IP probe**: Shows each server's final outbound external IP as seen from inside the container, with one-click refresh.
-*   **Dark theme**: Full dark mode support with toggle switch.
-*   **Client Suspend/Reactivate**: Toggle client access on/off without deleting — keys and settings are preserved.
-*   **Smart Defaults**: Auto-proposes next free port and subnet when creating servers; smart IP allocation avoids collisions.
-*   **Compact UI**: Server controls as icon buttons, client controls as icon+label pills, toggle switches for server on/off and client suspend.
-*   **Refactored codebase**: Backend and frontend split into clearer modules for easier maintenance.
+- **Servers and clients from the browser** — create, start/stop, rename, delete; add
+  clients and hand out configs as `.conf`, text or QR code.
+- **AWG 1.5 / 2.0 / 3.0**, with only the relevant fields shown per protocol.
+  AWG 3.0 adds header protection, content padding and tunable timings.
+- **Live monitoring** — per-client traffic, endpoint and handshake age over WebSocket,
+  with country flags for endpoint / server / egress IPs.
+- **Client suspend** — revoke access without deleting; keys are preserved.
+- **Automatic networking** — iptables NAT and optional private-LAN blocking per
+  server, auto-start on container restart, smart port/subnet/IP proposals.
+- **Dark theme**, collapsible help, inline rename.
+- Behind nginx HTTP Basic Auth, with an optional `API_TOKEN` for scripted access.
 
-## 📝 Logs (amneziawg-go)
+## 📝 Logging
 
-AmneziaWG userspace logs are produced by `amneziawg-go` and are only visible when `LOG_LEVEL` is set. This container exposes a safe wrapper controlled by env vars:
+There are two independent log streams, each with its own variable.
 
-- `AWG_LOG_LEVEL`: `debug|verbose|error|silent` to enable logs (empty/`off` disables).
+**VPN daemon (`amneziawg-go`)** — produced by the daemon itself, off by default. The container wraps it safely:
+
+- `AWG_LOG_LEVEL`: `debug|verbose|error|silent` to enable logs (empty/`off` disables). Sets the daemon's own `LOG_LEVEL` internally.
 - `AWG_LOG_FILE`: log file path (default: `/var/log/amnezia/amneziawg-go.log`).
 
 Once enabled, use **Server → View Logs** in the UI. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
 
+**Web UI** — always on, written to `/var/log/webui/access.log` with timestamps, levels and module names:
+
+- `LOG_LEVEL`: `DEBUG|INFO|WARNING|ERROR` (default `INFO`). Use `DEBUG` when troubleshooting; anything unrecognised falls back to `INFO`.
+
+```
+2026-08-07 17:49:02 INFO    [services.amnezia_manager] Server myvpn started successfully
+```
+
 ## 🏗️ Architecture
 
-### Components
+One container, three processes under supervisord: **nginx** (port 80, Basic Auth,
+reverse proxy), the **Flask + Socket.IO web UI** (127.0.0.1:5000), and one
+**`amneziawg-go`** daemon per VPN interface.
 
-**Flask Backend**
+```
+web-ui/
+├── app.py                      Flask entrypoint, env parsing, auth decorator
+├── core/                       runtime wiring, helpers, logging setup
+├── routes/                     servers.py + system.py (all /api routes)
+├── services/amnezia_manager.py all business logic
+├── templates/index.html        page shell + create-server form
+└── static/
+    ├── css/style.css           incl. dark-theme overrides
+    └── js/  app.js             state, sockets, API calls, validation
+              modals.js         all dialogs
+              server-ui.js      server/client card rendering
+              protocols.js      the protocol table
+              api.js            fetch/token plumbing
+```
 
-*   Entry point and app wiring in `web-ui/app.py`
-*   Core service logic in `web-ui/services/amnezia_manager.py`
-*   API route modules in `web-ui/routes/servers.py` and `web-ui/routes/system.py`
-*   Runtime/helpers in `web-ui/core/runtime.py` and `web-ui/core/helpers.py`
-
-**Frontend**
-
-*   Main app logic in `web-ui/static/js/app.js`
-*   API utilities in `web-ui/static/js/api.js`
-*   Server/client rendering helpers in `web-ui/static/js/server-ui.js`
-*   Responsive vanilla-JS UI with real-time status/traffic updates
+State lives in `/etc/amnezia/web_config.json` — the source of truth. WireGuard
+`.conf` files under `/etc/amnezia/amneziawg/` are generated from it and never parsed
+back. See [DEVELOPMENT.md](DEVELOPMENT.md) for the details.
 
 ## 🧩 I1–I5 (Custom Signature Packets)
 
@@ -94,245 +114,55 @@ In the UI:
 
 WireGuard configs can become too large to fit into a single QR code (especially with long I1–I5 values). When this happens, the UI will show an error in the QR modal and you should use **Download Config File (.conf)** instead.
 
-**Nginx** (`config/nginx.conf`)
-
-*   Reverse proxy for Flask application
-*   Static file serving
-*   WebSocket proxy support
-
-**Supervisor** (`config/supervisord.conf`)
-
-*   Process management
-*   Automatic service restart
-*   Log management
-
-### Directory Structure
-
-```
-/app/web-ui/
-├── app.py # Flask application entrypoint/wiring
-├── core/
-│ ├── runtime.py # Flask/Socket.IO runtime helpers
-│ └── helpers.py # shared utility helpers
-├── routes/
-│ ├── servers.py # server/client API routes
-│ └── system.py # system/status/log routes
-├── services/
-│ └── amnezia_manager.py # core business logic
-├── templates/
-│ └── index.html # Main web interface
-└── static/
-├── js/
-│ ├── app.js # Main frontend logic
-│ ├── api.js # API/auth/download helpers
-│ └── server-ui.js # server/client rendering helpers
-└── css/
-└── style.css # Custom styles
-```
-
 ## 🔧 API Endpoints
 
-### Authentication
+All `/api/*` routes sit behind nginx HTTP Basic Auth (`NGINX_USER` / `NGINX_PASSWORD`).
+If `API_TOKEN` is set, they additionally require an `X-API-Token` header — useful for
+scripts; redundant in a browser, where Basic Auth already gates everything.
 
-All `/api/*` endpoints support optional token authentication (configured via `API_TOKEN` env var):
+**Mutating requests must send `Content-Type: application/json`** (anything else gets
+`415`). This is what stops another site's page from driving the API using your cached
+Basic Auth credentials.
 
-**Using token auth (recommended for scripts/automation):**
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/servers` | list servers with live status and clients |
+| POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
+| DELETE | `/api/servers/<id>` | delete server and its clients |
+| POST | `/api/servers/<id>/start` \| `/stop` | bring the interface up/down |
+| GET | `/api/servers/<id>/info` | summary (status, keys, params, client count) |
+| GET | `/api/servers/<id>/config` \| `/config/download` | the generated `.conf` |
+| POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey`; restarts if running |
+| POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables |
+| POST | `/api/servers/<id>/rename` | `{"name": "..."}` |
+| GET | `/api/servers/<id>/traffic` | per-client rx/tx, endpoint, handshake age |
+| POST | `/api/servers/<id>/egress-ip` | probe the server's outbound IP |
+| GET | `/api/servers/<id>/clients` | list clients |
+| POST | `/api/servers/<id>/clients` | add (`name`, optional `client_params`, `copy_from_client_id`) |
+| DELETE | `/api/servers/<id>/clients/<cid>` | delete client |
+| GET | `/api/servers/<id>/clients/<cid>/config` | download client `.conf` |
+| GET | `/api/servers/<id>/clients/<cid>/config-both` | JSON: clean + commented, for QR |
+| POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.0 timings |
+| POST | `/api/servers/<id>/clients/<cid>/rename` \| `/suspend` | rename, or toggle access |
+| GET | `/api/clients` | all clients across all servers |
+| GET | `/api/system/status` | health, counts, public IP, supported protocols |
+| GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
+| GET | `/api/system/refresh-ip` | re-detect the public IP |
+| GET | `/api/system/iptables-test` | diagnostic (`?server_id=`) |
+| GET | `/status` | container uptime, plain text (localhost only) |
+
+Example:
+
 ```bash
-curl -H "Authorization: Bearer YOUR_API_TOKEN" http://localhost:8080/api/servers
+curl -u admin:pass -H 'Content-Type: application/json' \
+  -d '{"name":"My VPN","protocol":"AWG 3.0","subnet":"10.10.0.0/24","port":51820}' \
+  http://localhost:8080/api/servers
 ```
 
-**Using token auth with Nginx Basic Auth enabled (recommended for this container):**
-
-Nginx Basic Auth uses the `Authorization` header (`Authorization: Basic ...`), so a Bearer token cannot reliably be sent in the same header.
-Use `X-API-Token` instead:
-
-```bash
-curl -u admin:changeme -H "X-API-Token: YOUR_API_TOKEN" http://localhost:8080/api/servers
-```
-
-**Using Nginx Basic Auth (default):**
-```bash
-curl -u admin:changeme http://localhost:8080/api/servers
-```
-
-**CLI tool with token:**
-```bash
-export AMNEZIA_API_TOKEN=YOUR_API_TOKEN
-./scripts/api_status.py --base-url http://localhost:8080 --token $AMNEZIA_API_TOKEN
-```
-
-**Generate a token:**
-```bash
-openssl rand -hex 32
-```
-
-### Server Management
-
-#### Create Server
-
-```yaml
-POST /api/servers
-Content-Type: application/json
-
-{
-  "name": "My VPN Server",
-  "port": 51820,
-  "subnet": "10.0.0.0/24",
-  "mtu": 1280,
-  "obfuscation": true,
-  "auto_start": true,
-  "obfuscation_params": {
-    "Jc": 8,
-    "Jmin": 8,
-    "Jmax": 80,
-    "S1": 50,
-    "S2": 60,
-    "S3": null,
-    "S4": null,
-    "H1": 1000,
-    "H2": 2000,
-    "H3": 3000,
-    "H4": 4000,
-    "I1": "",
-    "I2": "",
-    "I3": "",
-    "I4": "",
-    "I5": "",
-    "MTU": 1280
-  }
-}
-```
-
-Note: `S3`/`S4` are AWG 2.0 parameters. For AWG 1.5 servers they are silently ignored even if provided.
-
-### Obfuscation parameter matching
-
-**Must match** between server and client: `S1`, `S2`, `S3`, `S4`, `H1`–`H4`.
-
-**Client-only** (not written to server config): `Jc`, `Jmin`, `Jmax`, `I1`–`I5`.
-
-#### List Servers
-
-`GET /api/servers`
-
-#### Start Server
-
-`POST /api/servers/{server_id}/start`
-
-#### Stop Server
-
-`POST /api/servers/{server_id}/stop`
-
-#### Delete Server
-
-`DELETE /api/servers/{server_id}`
-
-#### Get Server Configuration
-
-`GET /api/servers/{server_id}/config`
-
-#### Download Server Config
-
-`GET /api/servers/{server_id}/config/download`
-
-#### Get Server Info
-
-`GET /api/servers/{server_id}/info`
-
-#### Update per-server NAT/LAN behavior
-
-`POST /api/servers/{server_id}/networking`
-
-Body example:
-
-```json
-{ "enable_nat": true, "block_lan_cidrs": true }
-```
-
-#### Update server default I1–I5 (new clients only)
-
-`POST /api/servers/{server_id}/i-params`
-
-Body example:
-
-```json
-{ "I1": "...", "I2": "...", "I3": "...", "I4": "...", "I5": "..." }
-```
-
-#### Rename Server
-
-`POST /api/servers/{server_id}/rename`
-
-Body: `{ "name": "New Name" }`
-
-### Client Management
-
-#### Add Client
-
-```yaml
-POST /api/servers/{server_id}/clients
-Content-Type: application/json
-{
-"name": "Alice's Phone"
-}
-```
-
-Optional per-client I1–I5 overrides at creation time:
-
-```json
-{
-  "name": "Alice's Phone",
-  "i_params": { "I1": "...", "I2": "...", "I3": "...", "I4": "...", "I5": "..." }
-}
-```
-
-#### List Server Clients
-
-`GET /api/servers/{server_id}/clients`
-
-#### Delete Client
-
-`DELETE /api/servers/{server_id}/clients/{client_id}`
-
-#### Download Client Config in `text/plain` (.conf file)
-
-`GET /api/servers/{server_id}/clients/{client_id}/config`
-
-#### Download Client Config in JSON format
-
-`GET /api/servers/{server_id}/clients/{client_id}/config-both`
-
-#### Update a specific client's I1–I5
-
-`POST /api/servers/{server_id}/clients/{client_id}/i-params`
-
-#### Rename Client
-
-`POST /api/servers/{server_id}/clients/{client_id}/rename`
-
-Body: `{ "name": "New Name" }`
-
-#### List All Clients
-
-`GET /api/clients`
-
-### System Management
-
-#### System Status
-
-`GET /api/system/status`
-
-#### Refresh Public IP
-
-`GET /api/system/refresh-ip`
-
-#### IPTables Test
-
-`GET /api/system/iptables-test?server_id=wg_abc123`
-
-### Export Configuration
-
-`GET /api/config/export`
+Server-side params (S1–S4, H1–H4, `HeaderProtectionKey`) are written to both the
+server config and every client config, so changing them means clients must re-import.
+Client-side params (Jc, Jmin, Jmax, I1–I5, `ContentPaddingAddition`, timings) are
+per-client and only appear in client configs.
 
 ## 🐳 Docker Deployment
 
@@ -423,100 +253,57 @@ docker run -d \
 
 ## 📊 Obfuscation Parameters
 
-AmneziaWG supports advanced traffic obfuscation to bypass censorship and DPI (Deep Packet Inspection).
+Two kinds, and the distinction matters:
 
-## Parameter Reference
+- **Server-side** — must be identical on both ends. Written into the server config
+  *and* every client config, so changing one means clients must re-import.
+- **Client-side** — may differ per client; only appear in client configs.
 
-| Parameter | Type | Default | Description |
+| Parameter | Side | Protocol | Notes |
 | --- | --- | --- | --- |
-| `Jc` | int | 8 | Number of junk packets sent prior to every handshake (client-only) |
-| `Jmin` | int | 8 | Minimum junk packet size in bytes |
-| `Jmax` | int | 80 | Maximum junk packet size in bytes (`Jmin` ≤ `Jmax`; should be < system MTU) |
-| `S1` | int | 50 | Padding of handshake initiation message |
-| `S2` | int | 60 | Padding of handshake response message |
-| `S3` | int | — | Padding of handshake cookie message (AWG 2.0 only) |
-| `S4` | int | — | Padding of transport messages (AWG 2.0 only) |
-| `H1` | int or range | 1000 | Header of handshake initiation message (AWG 2.0: range `x-y`) |
-| `H2` | int or range | 2000 | Header of handshake response message (AWG 2.0: range `x-y`) |
-| `H3` | int or range | 3000 | Header of handshake cookie message (AWG 2.0: range `x-y`) |
-| `H4` | int or range | 4000 | Header of transport message (AWG 2.0: range `x-y`) |
-| `I1`–`I5` | string | — | Custom signature packets sent before handshake (client-only; see tag syntax above) |
-| `MTU` | int | 1280 | Maximum Transmission Unit |
+| `Jc` | client | 1.5+ | Junk packets sent before each handshake (4–12 typical) |
+| `Jmin` / `Jmax` | client | 1.5+ | Junk packet size range; `Jmin` ≤ `Jmax`, keep `Jmax` < MTU or packets fragment |
+| `I1`–`I5` | client | 1.5+ | Custom signature packets (tag syntax above). Empty values are omitted |
+| `S1` | server | 1.5+ | Padding of the handshake initiation message. `S1 + 56 ≠ S2` |
+| `S2` | server | 1.5+ | Padding of the handshake response message |
+| `S3` / `S4` | server | 2.0+ | Padding of the cookie / transport messages |
+| `H1`–`H4` | server | 1.5+ | Message header values. 2.0+ also accepts a range (`1200-1400`); ranges must not overlap |
+| `HeaderProtectionKey` | server | **3.0** | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
+| `ContentPaddingAddition` | client | **3.0** | Extra random bytes per data packet (`10-40`) |
+| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | **3.0** | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default |
+| `MTU` | — | all | Interface MTU (1280–1440) |
 
-## Detailed Parameter Explanation
+Junk packets and signature packets camouflage the *handshake* only; S/H values and
+header protection affect the tunnel itself. The UI shows only the fields the selected
+protocol supports, validates the constraints above before saving, and can generate a
+random valid set for you.
 
-### Jc, Jmin, Jmax (Junk Packets) — client-only
+## 🔍 Logs, backup and debugging
 
-Before every handshake, the client generates `Jc` junk packets with random size between `Jmin` and `Jmax` bytes and sends them to the server. The server does not need these values.
+```bash
+# Web UI (timestamps, levels, module names) — note: webui, not web-ui
+docker exec amnezia-web-ui tail -f /var/log/webui/access.log
+docker exec amnezia-web-ui tail -f /var/log/webui/error.log
 
-*   **Jc**: Number of junk packets (recommended 4–12)
-*   **Jmin** ≤ **Jmax**: Size range in bytes
-*   If `Jmax` ≥ system MTU, packets may be fragmented (looks suspicious to DPI)
+# nginx / supervisor
+docker exec amnezia-web-ui tail -f /var/log/nginx/error.log
+docker exec amnezia-web-ui tail -f /var/log/supervisor/supervisord.log
 
-### S1–S4 (Message Paddings) — server + client
+# Backup: config plus every generated .conf
+docker cp amnezia-web-ui:/etc/amnezia ./amnezia-backup/
 
-*   **S1**: Padding added to handshake initiation message
-*   **S2**: Padding added to handshake response message
-*   **S3**: Padding added to handshake cookie message (AWG 2.0 only)
-*   **S4**: Padding added to transport messages (AWG 2.0 only)
-*   **Constraint**: S1 + 56 ≠ S2
-*   S1/S2/S3/S4 must match between server and client
+# Live VPN state, straight from the daemon
+docker exec amnezia-web-ui awg show
+docker exec amnezia-web-ui awg showconf wg-<server-id>
 
-### H1–H4 (Message Headers) — server + client
+# Health and firewall checks
+curl -u admin:pass http://localhost:8080/api/system/status
+curl -u admin:pass "http://localhost:8080/api/system/iptables-test?server_id=<server-id>"
+```
 
-Every WireGuard message has a 32-bit type field at the beginning. H1–H4 let you replace the default header values:
-
-*   **H1**: Header for handshake initiation messages
-*   **H2**: Header for handshake response messages
-*   **H3**: Header for cookie messages
-*   **H4**: Header for transport messages
-*   AWG 2.0 supports **range syntax** (`x-y`, where x ≤ y) — a random value from the range is used per packet
-*   AWG 1.5 accepts single integer values only
-*   All four values must be unique (ranges must not overlap in AWG 2.0)
-*   H1–H4 must match between server and client
-
-### I1–I5 (Custom Signature Packets) — client-only
-
-See the [I1–I5 section](#-i1i5-custom-signature-packets) above for full details and tag syntax.
-
-## 📝 Logs and Monitoring
-
-### Application logs
-
-`docker exec amnezia-web-ui tail -f /var/log/web-ui/access.log`
-
-`docker exec amnezia-web-ui tail -f /var/log/web-ui/error.log`
-
-### Nginx logs
-
-`docker exec amnezia-web-ui tail -f /var/log/nginx/access.log`
-
-`docker exec amnezia-web-ui tail -f /var/log/nginx/error.log`
-
-### Supervisor logs
-
-`docker exec amnezia-web-ui tail -f /var/log/supervisor/supervisord.log`
-
-## 🔄 Backup and Restore
-Export Configuration
-
-### Export all configuration via API
-
-`curl http://localhost/api/config/export > amnezia_backup.json`
-
-### Backup configuration directory
-
-`docker cp amnezia-web-ui:/etc/amnezia ./amnezia-backup/`
-
-## Debug Commands
-
-### Check serv status
-
-`curl http://localhost/api/system/status`
-
-### Test iptables configuration
-
-`curl "http://localhost/api/system/iptables-test?server_id=wg_abc123"`
+Server ids are 6 characters (e.g. `a1b2c3`); the interface is `wg-<id>`. Restore by
+putting `/etc/amnezia` back and restarting the container — servers with
+`auto_start` come back up on their own.
 
 # Security
 The app is exposed directly on 80 or custom port with basic authentication.
