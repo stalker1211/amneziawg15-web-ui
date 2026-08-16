@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -36,15 +35,17 @@ if docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
 	docker rm -f "${CONTAINER_NAME}" >/dev/null
 fi
 
+HOST_PORT="${HOST_PORT:-8090}"
+
 docker run "${RUN_FLAGS[@]}" \
 	--name "${CONTAINER_NAME}" \
-	"${ENTRYPOINT_FLAGS[@]}" \
+	"${ENTRYPOINT_FLAGS[@]+"${ENTRYPOINT_FLAGS[@]}"}" \
 	--cap-add=NET_ADMIN \
 	--cap-add=SYS_MODULE \
 	--device /dev/net/tun \
 	--sysctl net.ipv4.ip_forward=1 \
 	--sysctl net.ipv4.conf.all.src_valid_mark=1 \
-	-p 8090:8090/tcp \
+	-p "${HOST_PORT}:8090/tcp" \
 	-p 51820-51830:51820-51830/udp \
 	-e ENABLE_NAT=1 \
 	-e NGINX_PORT=8090 \
@@ -55,5 +56,5 @@ docker run "${RUN_FLAGS[@]}" \
 	-e API_TOKEN="${API_TOKEN:-}" \
 	-v amnezia-data:/etc/amnezia \
 	"${IMAGE_NAME}" \
-	"${CMD_ARGS[@]}"
+	"${CMD_ARGS[@]+"${CMD_ARGS[@]}"}"
 

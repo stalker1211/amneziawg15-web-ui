@@ -16,6 +16,7 @@ IMAGE_REPO="${IMAGE_REPO:-stalker1211/amneziawg15-web-ui}"
 ARG_TAG="${1:-}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 CONTEXT_DIR="${CONTEXT_DIR:-.}"
+PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 
 usage() {
 	cat <<EOF
@@ -71,14 +72,11 @@ if [[ -n "${TAG}" && "${TAG}" != "latest" ]]; then
 fi
 
 echo "Building image..."
-docker build -f "${DOCKERFILE}" "${BUILD_TAGS[@]}" "${CONTEXT_DIR}"
-
-if [[ -n "${IMAGE_TAGGED}" ]]; then
-	echo "Pushing ${IMAGE_TAGGED}..."
-	docker push "${IMAGE_TAGGED}"
-fi
-
-echo "Pushing ${IMAGE_LATEST}..."
-docker push "${IMAGE_LATEST}"
+docker buildx build \
+    --platform "${PLATFORMS}" \
+    -f "${DOCKERFILE}" \
+    "${BUILD_TAGS[@]}" \
+    --push \
+    "${CONTEXT_DIR}"
 
 echo "Done."
