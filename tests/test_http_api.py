@@ -253,17 +253,20 @@ class ProtocolTableTests(unittest.TestCase):
             r"id:\s*'([^']+)',\s*"
             r"supportsS34:\s*(true|false),[^}]*?"
             r"supportsHeaderRanges:\s*(true|false),[^}]*?"
-            r"supportsAwg3:\s*(true|false)",
+            r"supportsAwg3:\s*(true|false),[^}]*?"
+            r"supportsAwg31:\s*(true|false)",
             source, re.S)
         self.assertEqual(len(entries), len(self.manager.SUPPORTED_PROTOCOLS),
                          "could not parse every protocol entry from protocols.js")
-        for protocol, s34, ranges, awg3 in entries:
+        for protocol, s34, ranges, awg3, awg31 in entries:
             self.assertEqual(s34 == "true", self.manager.protocol_supports_s34(protocol),
                              f"{protocol}: supportsS34 mismatch")
             self.assertEqual(ranges == "true", self.manager.protocol_supports_header_ranges(protocol),
                              f"{protocol}: supportsHeaderRanges mismatch")
             self.assertEqual(awg3 == "true", self.manager.protocol_supports_awg3(protocol),
                              f"{protocol}: supportsAwg3 mismatch")
+            self.assertEqual(awg31 == "true", self.manager.protocol_supports_awg31(protocol),
+                             f"{protocol}: supportsAwg31 mismatch")
 
     def test_no_hardcoded_protocol_literals_left_in_the_ui(self):
         """Capability checks must go through Protocols, not string comparison."""

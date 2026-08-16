@@ -54,7 +54,8 @@ function check(label, condition, detail) {
 
         for (const server of servers) {
             const { id, protocol } = server;
-            const awg3 = protocol === 'AWG 3.0';
+            const awg3 = protocol === 'AWG 3.0' || protocol === 'AWG 3.1';
+            const awg31 = protocol === 'AWG 3.1';
 
             await page.evaluate((s) => amneziaApp.showServerConfig(s), id);
             await new Promise((r) => setTimeout(r, 1200));
@@ -66,6 +67,12 @@ function check(label, condition, detail) {
                     if (!row) return false;
                     return (getComputedStyle(row).display !== 'none') === want;
                 }, id, awg3));
+            check(`${protocol} 3.1 options ${awg31 ? 'visible' : 'hidden'}`,
+                await page.evaluate((s, want) => {
+                    const row = document.getElementById(`serverTransportParam-${s}-Awg31OptionsRow`);
+                    if (!row) return false;
+                    return (getComputedStyle(row).display !== 'none') === want;
+                }, id, awg31));
             check(`${protocol} help is collapsed by default`,
                 await page.evaluate(() => [...document.querySelectorAll('#configModal details.param-help')].every((d) => !d.open)));
             // Help text must be readable in both themes (the /60 opacity bug).
@@ -119,13 +126,18 @@ function check(label, condition, detail) {
 
         await page.evaluate(() => amneziaApp.openCreateServerModal());
         await new Promise((r) => setTimeout(r, 400));
-        check('create form offers all three protocols', await page.evaluate(() =>
-            [...document.getElementById('serverProtocol').options].map((o) => o.value).join(',') === 'AWG 1.5,AWG 2.0,AWG 3.0'));
+        check('create form offers all four protocols', await page.evaluate(() =>
+            [...document.getElementById('serverProtocol').options].map((o) => o.value).join(',') === 'AWG 1.5,AWG 2.0,AWG 3.0,AWG 3.1'));
         check('AWG 3.0 random params respect the S >= 12 floor', await page.evaluate(() => {
             document.getElementById('serverProtocol').value = 'AWG 3.0';
             amneziaApp.toggleProtocolFields('AWG 3.0', 'param');
             amneziaApp.generateRandomParams();
             return ['S1', 'S2', 'S3', 'S4'].every((k) => Number(document.getElementById('param' + k).value) >= 12);
+        }));
+        check('AWG 3.1 options become visible', await page.evaluate(() => {
+            document.getElementById('serverProtocol').value = 'AWG 3.1';
+            amneziaApp.toggleProtocolFields('AWG 3.1', 'param');
+            return getComputedStyle(document.getElementById('paramAwg31OptionsRow')).display !== 'none';
         }));
         const createSubmission = await page.evaluate(async () => {
             const originalApiFetch = amneziaApp.apiFetch;
@@ -156,10 +168,12 @@ function check(label, condition, detail) {
                 amneziaApp.loadServers = originalLoadServers;
             }
         });
-        check('create form submits the selected AWG 3.0 payload',
+        check('create form submits the selected AWG 3.1 payload',
             createSubmission?.url === '/api/servers'
                 && createSubmission?.method === 'POST'
-                && createSubmission?.payload?.protocol === 'AWG 3.0',
+                && createSubmission?.payload?.protocol === 'AWG 3.1'
+                && createSubmission?.payload?.transport_params?.RandomTrailers === false
+                && createSubmission?.payload?.transport_params?.DisableCookies === false,
             createSubmission);
         await page.evaluate(() => amneziaApp.closeCreateServerModal());
     }

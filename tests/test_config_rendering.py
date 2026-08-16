@@ -42,6 +42,8 @@ class ConfigRenderingTests(unittest.TestCase):
                 "S1": 50, "S2": 60, "S3": 40, "S4": 20,
                 "H1": "1000", "H2": "2000", "H3": "3000", "H4": "4000",
                 "HeaderProtectionKey": HEADER_PROTECTION_KEY,
+                "RandomTrailers": True,
+                "DisableCookies": True,
             },
             "client_defaults": {"Jc": 8, "Jmin": 40, "Jmax": 70},
         })
@@ -76,6 +78,11 @@ class ConfigRenderingTests(unittest.TestCase):
         with open(server["config_path"], encoding="utf-8") as f:
             self._check("server-awg30.conf", f.read())
 
+    def test_server_conf_awg31(self):
+        _, server, _ = self._server_with_client("AWG 3.1", "10.31.0.0/24")
+        with open(server["config_path"], encoding="utf-8") as f:
+            self._check("server-awg31.conf", f.read())
+
     # --- client configs -------------------------------------------------------
 
     def test_client_conf_awg15(self):
@@ -108,6 +115,22 @@ class ConfigRenderingTests(unittest.TestCase):
             manager.generate_wireguard_client_config(server, client, include_comments=False),
         )
 
+    def test_client_conf_awg31(self):
+        manager, server, client = self._server_with_client(
+            "AWG 3.1", "10.31.0.0/24",
+            extra_client_params={
+                "Jc": 8, "Jmin": 40, "Jmax": 70,
+                "ContentPaddingAddition": "10-40",
+                "RekeyAfterTime": "110-130",
+                "KeepaliveTimeout": "22-30",
+                "MaxHandshakeAttempts": "12",
+            },
+        )
+        self._check(
+            "client-awg31.conf",
+            manager.generate_wireguard_client_config(server, client, include_comments=False),
+        )
+
     # --- invariants the golden files alone would not catch --------------------
 
     def test_create_and_rebuild_produce_identical_output(self):
@@ -122,17 +145,41 @@ class ConfigRenderingTests(unittest.TestCase):
         _, server, _ = self._server_with_client("AWG 1.5", "10.22.0.0/24")
         self.assertEqual(os.stat(server["config_path"]).st_mode & 0o777, 0o600)
 
-    def test_awg3_keys_absent_on_older_protocols(self):
-        """HeaderProtectionKey must never leak into a 1.5/2.0 config."""
-        for protocol, subnet in (("AWG 1.5", "10.23.0.0/24"), ("AWG 2.0", "10.24.0.0/24")):
+    def test_newer_protocol_keys_absent_on_older_protocols(self):
+        """Protocol-specific keys must never leak into an older config."""
+        for protocol, subnet in (
+            ("AWG 1.5", "10.23.0.0/24"),
+            ("AWG 2.0", "10.24.0.0/24"),
+            ("AWG 3.0", "10.27.0.0/24"),
+        ):
             manager, server, client = self._server_with_client(protocol, subnet)
             with open(server["config_path"], encoding="utf-8") as f:
                 server_text = f.read()
             client_text = manager.generate_wireguard_client_config(server, client)
             for blob, label in ((server_text, "server"), (client_text, "client")):
-                self.assertNotIn("HeaderProtectionKey", blob, f"{protocol} {label}")
-                self.assertNotIn("ContentPaddingAddition", blob, f"{protocol} {label}")
-                self.assertNotIn("KeepaliveTimeout", blob, f"{protocol} {label}")
+                if not manager.protocol_supports_awg3(protocol):
+                    self.assertNotIn("HeaderProtectionKey", blob, f"{protocol} {label}")
+                    self.assertNotIn("ContentPaddingAddition", blob, f"{protocol} {label}")
+                    self.assertNotIn("KeepaliveTimeout", blob, f"{protocol} {label}")
+                self.assertNotIn("RandomTrailers", blob, f"{protocol} {label}")
+                self.assertNotIn("DisableCookies", blob, f"{protocol} {label}")
+
+    def test_awg31_options_mirrored_to_client(self):
+        manager, server, client = self._server_with_client("AWG 3.1", "10.31.0.0/24")
+        with open(server["config_path"], encoding="utf-8") as f:
+            server_text = f.read()
+        client_text = manager.generate_wireguard_client_config(server, client)
+        for line in ("RandomTrailers = on", "DisableCookies = on"):
+            self.assertIn(line, server_text)
+            self.assertIn(line, client_text)
+
+        server["transport_params"]["RandomTrailers"] = False
+        server["transport_params"]["DisableCookies"] = False
+        server_text = manager.write_server_conf(server)
+        client_text = manager.generate_wireguard_client_config(server, client)
+        for line in ("RandomTrailers = off", "DisableCookies = off"):
+            self.assertIn(line, server_text)
+            self.assertIn(line, client_text)
 
     def test_header_protection_key_mirrored_to_client(self):
         """It is server-side: both ends must carry the identical value."""

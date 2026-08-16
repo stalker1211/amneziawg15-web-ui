@@ -38,7 +38,7 @@ class AmneziaApp {
     }
 
     // Generate a base64-encoded 32-byte key, matching `awg genkey` output format.
-    // Used for the AWG 3.0 HeaderProtectionKey, which is a plain symmetric key.
+    // Used for the AWG 3.x HeaderProtectionKey, which is a plain symmetric key.
     generateBase64Key() {
         const bytes = new Uint8Array(32);
         crypto.getRandomValues(bytes);
@@ -114,6 +114,8 @@ class AmneziaApp {
             H3: (document.getElementById(`serverTransportParam-${serverId}-H3`)?.value || '').trim(),
             H4: (document.getElementById(`serverTransportParam-${serverId}-H4`)?.value || '').trim(),
             HeaderProtectionKey: (document.getElementById(`serverTransportParam-${serverId}-HeaderProtectionKey`)?.value || '').trim(),
+            RandomTrailers: !!document.getElementById(`serverTransportParam-${serverId}-RandomTrailers`)?.checked,
+            DisableCookies: !!document.getElementById(`serverTransportParam-${serverId}-DisableCookies`)?.checked,
         };
     }
 
@@ -128,6 +130,12 @@ class AmneziaApp {
         // Never render the key itself: this summary is shown in the client dialogs.
         if (window.Protocols.supportsAwg3(protocol) && String(transportParams.HeaderProtectionKey || '').trim()) {
             parts.push('HeaderProtection=on');
+        }
+        if (window.Protocols.supportsAwg31(protocol) && transportParams.RandomTrailers) {
+            parts.push('RandomTrailers=on');
+        }
+        if (window.Protocols.supportsAwg31(protocol) && transportParams.DisableCookies) {
+            parts.push('DisableCookies=on');
         }
 
         return parts.length > 0 ? parts.join(', ') : 'No transport parameters set';
@@ -168,6 +176,8 @@ class AmneziaApp {
             `serverTransportParam-${serverId}-H3`,
             `serverTransportParam-${serverId}-H4`,
             `serverTransportParam-${serverId}-HeaderProtectionKey`,
+            `serverTransportParam-${serverId}-RandomTrailers`,
+            `serverTransportParam-${serverId}-DisableCookies`,
         ];
 
         fieldIds.forEach((id) => {
@@ -535,6 +545,7 @@ class AmneziaApp {
         const allowS34 = window.Protocols.supportsS34(protocol);
         const allowRanges = window.Protocols.supportsHeaderRanges(protocol);
         const allowAwg3 = window.Protocols.supportsAwg3(protocol);
+        const allowAwg31 = window.Protocols.supportsAwg31(protocol);
 
         ['S3', 'S4'].forEach((key) => {
             const element = document.getElementById(`${prefix}${key}`);
@@ -555,7 +566,7 @@ class AmneziaApp {
             element.placeholder = allowRanges ? '123 or 123-456' : '123';
         });
 
-        // AWG 3.0 header protection. Clearing the key on downgrade keeps the
+        // AWG 3.x header protection. Clearing the key on downgrade keeps the
         // submitted payload consistent with the protocol the user picked.
         const keyElement = document.getElementById(`${prefix}HeaderProtectionKey`);
         if (keyElement) {
@@ -565,6 +576,15 @@ class AmneziaApp {
                 || keyElement.closest('label, div');
             if (row) row.style.display = allowAwg3 ? '' : 'none';
         }
+
+        ['RandomTrailers', 'DisableCookies'].forEach((key) => {
+            const element = document.getElementById(`${prefix}${key}`);
+            if (!element) return;
+            element.disabled = !allowAwg31;
+            if (!allowAwg31) element.checked = false;
+        });
+        const awg31Row = document.getElementById(`${prefix}Awg31OptionsRow`);
+        if (awg31Row) awg31Row.style.display = allowAwg31 ? '' : 'none';
 
         this.updateTransportDescription(protocol, prefix);
     }
@@ -859,7 +879,7 @@ class AmneziaApp {
         if (window.Protocols.supportsS34(protocol)) {
             if (s3Element) s3Element.value = Math.floor(Math.random() * 136) + 15;
             // With header protection the daemon slices a 12-byte nonce out of the
-            // padding, so S4 cannot go below 12 on AWG 3.0.
+            // padding, so S4 cannot go below 12 on AWG 3.x.
             const s4Low = window.Protocols.supportsAwg3(protocol) ? 12 : 0;
             if (s4Element) s4Element.value = Math.floor(Math.random() * (33 - s4Low)) + s4Low;
         } else {
@@ -951,10 +971,10 @@ class AmneziaApp {
         }
 
         if (!window.Protocols.supportsS34(protocol) && (hasS3 || hasS4)) {
-            errors.push('S3 and S4 are supported only by AWG 2.0 and AWG 3.0');
+            errors.push('S3 and S4 are supported only by AWG 2.0 or later');
         }
 
-        // AWG 3.0: header protection carves a 12-byte cipher nonce out of each
+        // AWG 3.x: header protection carves a 12-byte cipher nonce out of each
         // S padding, so the daemon rejects any S value below that.
         if (window.Protocols.supportsAwg3(protocol) && String(params.HeaderProtectionKey || '').trim()) {
             if (!/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(String(params.HeaderProtectionKey).trim())) {
@@ -1034,7 +1054,7 @@ class AmneziaApp {
             errors.push(`Jmin (${params.Jmin}) must be less than or equal to Jmax (${params.Jmax})`);
         }
 
-        // AWG 3.0 range params: 'a' or 'a-b', empty means protocol default.
+        // AWG 3.x range params: 'a' or 'a-b', empty means protocol default.
         AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((key) => {
             const raw = String(params[key] ?? '').trim();
             if (!raw) return;
@@ -1069,7 +1089,7 @@ class AmneziaApp {
         return ['I1', 'I2', 'I3', 'I4', 'I5'];
     }
 
-    // AWG 3.0 client-side params. Range-valued ('a' or 'a-b'); empty means the
+    // AWG 3.x client-side params. Range-valued ('a' or 'a-b'); empty means the
     // daemon keeps its built-in WireGuard default.
     static get AWG3_CLIENT_PARAM_KEYS() {
         return [
@@ -1094,7 +1114,7 @@ class AmneziaApp {
             I5: document.getElementById(`${prefix}-I5`)?.value || '',
         };
 
-        // Only present when the form was rendered for an AWG 3.0 server.
+        // Only present when the form was rendered for an AWG 3.x server.
         AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((key) => {
             const element = document.getElementById(`${prefix}-${key}`);
             if (element) state[key] = (element.value || '').trim();
@@ -1103,7 +1123,7 @@ class AmneziaApp {
         return state;
     }
 
-    // AWG 3.0 client-side fields. Rendered only for AWG 3.0 servers, matching how
+    // AWG 3.x client-side fields. Rendered only for AWG 3.x servers, matching how
     // S3/S4 are hidden for AWG 1.5.
     autosizeClientParamTextareas(prefix, maxHeightPx = 260) {
         AmneziaApp.I_PARAM_KEYS.forEach((key) => {
@@ -1129,7 +1149,7 @@ class AmneziaApp {
             I5: params.I5 ?? defaults.I5 ?? '',
         };
 
-        // Copy AWG 3.0 params too, when the form has those fields.
+        // Copy AWG 3.x params too, when the form has those fields.
         AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((key) => {
             values[key] = params[key] ?? defaults[key] ?? '';
         });
@@ -1312,6 +1332,10 @@ class AmneziaApp {
         if (window.Protocols.supportsAwg3(formData.protocol)) {
             formData.transport_params.HeaderProtectionKey =
                 (this.getElement('paramHeaderProtectionKey')?.value || '').trim();
+        }
+        if (window.Protocols.supportsAwg31(formData.protocol)) {
+            formData.transport_params.RandomTrailers = !!this.getElement('paramRandomTrailers')?.checked;
+            formData.transport_params.DisableCookies = !!this.getElement('paramDisableCookies')?.checked;
         }
 
         const transportErrors = this.validateTransportParamsJS(formData.protocol, formData.transport_params, formData.mtu);
@@ -1635,7 +1659,7 @@ class AmneziaApp {
         const mtu = Number(server?.mtu) || 1420;
         const clientName = (document.getElementById(`newClientName-${serverId}`)?.value || '').trim();
         const copyFromClientId = document.getElementById(`newClientCopyFrom-${serverId}`)?.value || '';
-        // Shared with the edit dialog; also picks up the AWG 3.0 fields when present.
+        // Shared with the edit dialog; also picks up the AWG 3.x fields when present.
         const clientParams = this.collectClientParamsFormState(`newClientParam-${serverId}`);
 
         if (!clientName) {

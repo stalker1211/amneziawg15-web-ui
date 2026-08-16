@@ -10,24 +10,35 @@
 //   supportsS34         -> protocol_supports_s34()
 //   supportsHeaderRanges-> protocol_supports_header_ranges()
 //   supportsAwg3        -> protocol_supports_awg3()
+//   supportsAwg31       -> protocol_supports_awg31()
 const PROTOCOLS = [
     {
         id: 'AWG 1.5',
         supportsS34: false,           // S3/S4 padding
         supportsHeaderRanges: false,  // H1-H4 as "1200-1400"
         supportsAwg3: false,          // header protection, content padding, timings
+        supportsAwg31: false,         // random trailers, disable cookies
     },
     {
         id: 'AWG 2.0',
         supportsS34: true,
         supportsHeaderRanges: true,
         supportsAwg3: false,
+        supportsAwg31: false,
     },
     {
         id: 'AWG 3.0',
         supportsS34: true,
         supportsHeaderRanges: true,
         supportsAwg3: true,
+        supportsAwg31: false,
+    },
+    {
+        id: 'AWG 3.1',
+        supportsS34: true,
+        supportsHeaderRanges: true,
+        supportsAwg3: true,
+        supportsAwg31: true,
     },
 ];
 
@@ -62,6 +73,10 @@ const Protocols = {
 
     supportsAwg3(protocol) {
         return this.supports(protocol, 'supportsAwg3');
+    },
+
+    supportsAwg31(protocol) {
+        return this.supports(protocol, 'supportsAwg31');
     },
 
     // <option> markup for a <select>; used by both the create form and the server

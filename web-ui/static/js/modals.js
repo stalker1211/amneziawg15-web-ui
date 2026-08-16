@@ -27,6 +27,7 @@ class ModalUi {
 
         const supportsS34 = window.Protocols.supportsS34(protocol);
         const supportsRanges = window.Protocols.supportsHeaderRanges(protocol);
+        const supportsAwg31 = window.Protocols.supportsAwg31(protocol);
 
         const baseLines = [
             '<p>S1: Padding for handshake initial traffic. Common starting range is 15-150 but =< (MTU - 148)</p>',
@@ -42,7 +43,10 @@ class ModalUi {
                 : '<p>H1-H4: header signature values. Change packet fingerprint, can be single int32 values.</p>',
             window.Protocols.supportsAwg3(protocol)
                 ? '<p>HeaderProtectionKey: encrypts packet headers instead of only randomising them. Server-side, so it must match on server and clients. When set, each of S1, S2, S3 and S4 must individually be 12 or more (the first 12 bytes of each padding are used as the cipher nonce).</p>'
-                : ''
+                : '',
+            supportsAwg31
+                ? '<p>RandomTrailers: appends a random number of bytes to packets. DisableCookies: suppresses handshake cookie replies and reduces handshake-flood protection. Both options are mirrored into client configs.</p>'
+                : '',
         ];
 
         const summaryClass = variant === 'modal'
@@ -103,7 +107,7 @@ class ModalUi {
                 Randomising the timings defeats fingerprinting based on WireGuard's fixed intervals.</p>
                 ${fields.map(([key, text]) => `<p>${safe(key)}: ${safe(text)}</p>`).join('')}
             </div>`,
-            'What do these AWG 3.0 parameters mean?',
+            'What do these AWG 3.x parameters mean?',
             'text-[12px] font-medium text-blue-800/80',
         );
 
@@ -111,7 +115,7 @@ class ModalUi {
         // away in the block above, which keeps this grid compact.
         return `
             <div class="mt-3 pt-3 border-t border-blue-200/70">
-                <div class="text-xs font-semibold text-blue-900 mb-1">AWG 3.0 parameters</div>
+                <div class="text-xs font-semibold text-blue-900 mb-1">AWG 3.x parameters</div>
                 ${help}
                 <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
                     ${fields.map(([key, text]) => `
@@ -361,7 +365,7 @@ class ModalUi {
                                 `).join('')}
                             </div>
 
-                            <!-- AWG 3.0 only; shown/hidden by toggleProtocolFields() -->
+                            <!-- AWG 3.x only; shown/hidden by toggleProtocolFields() -->
                             <div id="serverTransportParam-${serverInfo.id}-HeaderProtectionKeyRow" class="text-xs">
                                 <div class="font-medium text-blue-800/80">HeaderProtectionKey (optional, server-side)</div>
                                 <div class="mt-1 flex items-center gap-2">
@@ -378,6 +382,20 @@ class ModalUi {
                                 <p class="mt-1 text-blue-800/80">
                                     Requires S1, S2, S3 and S4 to each be 12 or more.
                                 </p>
+                            </div>
+
+                            <div id="serverTransportParam-${serverInfo.id}-Awg31OptionsRow"
+                                class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                <label class="flex items-center gap-2" title="Append a random number of bytes to each packet">
+                                    <input id="serverTransportParam-${serverInfo.id}-RandomTrailers" type="checkbox"
+                                        ${transportParams.RandomTrailers ? 'checked' : ''}>
+                                    <span class="font-medium text-blue-800/80">Random trailers</span>
+                                </label>
+                                <label class="flex items-center gap-2" title="Do not send handshake cookie replies">
+                                    <input id="serverTransportParam-${serverInfo.id}-DisableCookies" type="checkbox"
+                                        ${transportParams.DisableCookies ? 'checked' : ''}>
+                                    <span class="font-medium text-blue-800/80">Disable cookies</span>
+                                </label>
                             </div>
                         </div>
 

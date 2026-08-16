@@ -9,7 +9,7 @@ environment variables: `NGINX_PORT`, `NGINX_USER`/`NGINX_PASSWORD`, `API_TOKEN`,
 `ENABLE_GEOIP`, `WAN_IF`, `ALLOWED_ORIGINS`, `LOG_LEVEL` (`ENABLE_NAT` and
 `BLOCK_LAN_CIDRS` are only *defaults* — override them per server in the UI).
 
-Current version: **2.0**
+Current version: **2.1**
 
 > Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, the
 > state model, protocol/parameter details, conventions and open items.
@@ -20,8 +20,9 @@ Current version: **2.0**
 
 - **Servers and clients from the browser** — create, start/stop, rename, delete; add
   clients and hand out configs as `.conf`, text or QR code.
-- **AWG 1.5 / 2.0 / 3.0**, with only the relevant fields shown per protocol.
-  AWG 3.0 adds header protection, content padding and tunable timings.
+- **AWG 1.5 / 2.0 / 3.0 / 3.1**, with only the relevant fields shown per protocol.
+  AWG 3.0 adds header protection, content padding and tunable timings; 3.1 adds
+  random packet trailers and optional cookie-reply suppression.
 - **Live monitoring** — per-client traffic, endpoint and handshake age over WebSocket,
   with country flags for endpoint / server / egress IPs.
 - **Client suspend** — revoke access without deleting; keys are preserved.
@@ -132,7 +133,7 @@ Basic Auth credentials.
 | POST | `/api/servers/<id>/start` \| `/stop` | bring the interface up/down |
 | GET | `/api/servers/<id>/info` | summary (status, keys, params, client count) |
 | GET | `/api/servers/<id>/config` \| `/config/download` | the generated `.conf` |
-| POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey`; restarts if running |
+| POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey` / AWG 3.1 toggles; restarts if running |
 | POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables |
 | POST | `/api/servers/<id>/rename` | `{"name": "..."}` |
 | GET | `/api/servers/<id>/traffic` | per-client rx/tx, endpoint, handshake age |
@@ -142,7 +143,7 @@ Basic Auth credentials.
 | DELETE | `/api/servers/<id>/clients/<cid>` | delete client |
 | GET | `/api/servers/<id>/clients/<cid>/config` | download client `.conf` |
 | GET | `/api/servers/<id>/clients/<cid>/config-both` | JSON: clean + commented, for QR |
-| POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.0 timings |
+| POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.x timings |
 | POST | `/api/servers/<id>/clients/<cid>/rename` \| `/suspend` | rename, or toggle access |
 | GET | `/api/clients` | all clients across all servers |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
@@ -159,8 +160,9 @@ curl -u admin:pass -H 'Content-Type: application/json' \
   http://localhost:8080/api/servers
 ```
 
-Server-side params (S1–S4, H1–H4, `HeaderProtectionKey`) are written to both the
-server config and every client config, so changing them means clients must re-import.
+Server-side params (S1–S4, H1–H4, `HeaderProtectionKey`, `RandomTrailers`,
+`DisableCookies`) are written to both the server config and every client config, so
+changing them means clients must re-import.
 Client-side params (Jc, Jmin, Jmax, I1–I5, `ContentPaddingAddition`, timings) are
 per-client and only appear in client configs.
 
@@ -268,9 +270,11 @@ Two kinds, and the distinction matters:
 | `S2` | server | 1.5+ | Padding of the handshake response message |
 | `S3` / `S4` | server | 2.0+ | Padding of the cookie / transport messages |
 | `H1`–`H4` | server | 1.5+ | Message header values. 2.0+ also accepts a range (`1200-1400`); ranges must not overlap |
-| `HeaderProtectionKey` | server | **3.0** | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
-| `ContentPaddingAddition` | client | **3.0** | Extra random bytes per data packet (`10-40`) |
-| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | **3.0** | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default |
+| `HeaderProtectionKey` | server | 3.0+ | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
+| `ContentPaddingAddition` | client | 3.0+ | Extra random bytes per data packet (`10-40`) |
+| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default |
+| `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends |
+| `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
 | `MTU` | — | all | Interface MTU (1280–1440) |
 
 Junk packets and signature packets camouflage the *handshake* only; S/H values and

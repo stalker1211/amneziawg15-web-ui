@@ -28,6 +28,7 @@ class ProtocolNormalizationTests(unittest.TestCase):
             ("AWG 1.5", "AWG 1.5"), ("1.5", "AWG 1.5"), ("awg1.5", "AWG 1.5"),
             ("AWG 2.0", "AWG 2.0"), ("2.0", "AWG 2.0"), ("AWG_2.0", "AWG 2.0"),
             ("AWG 3.0", "AWG 3.0"), ("3.0", "AWG 3.0"), ("awg3.0", "AWG 3.0"),
+            ("AWG 3.1", "AWG 3.1"), ("3.1", "AWG 3.1"), ("awg3.1", "AWG 3.1"),
         ]:
             self.assertEqual(self.m.normalize_protocol(value), expected, value)
 
@@ -37,14 +38,16 @@ class ProtocolNormalizationTests(unittest.TestCase):
 
     def test_capability_matrix(self):
         expected = {
-            "AWG 1.5": (False, False, False),
-            "AWG 2.0": (True, True, False),
-            "AWG 3.0": (True, True, True),
+            "AWG 1.5": (False, False, False, False),
+            "AWG 2.0": (True, True, False, False),
+            "AWG 3.0": (True, True, True, False),
+            "AWG 3.1": (True, True, True, True),
         }
-        for protocol, (s34, ranges, awg3) in expected.items():
+        for protocol, (s34, ranges, awg3, awg31) in expected.items():
             self.assertEqual(self.m.protocol_supports_s34(protocol), s34, protocol)
             self.assertEqual(self.m.protocol_supports_header_ranges(protocol), ranges, protocol)
             self.assertEqual(self.m.protocol_supports_awg3(protocol), awg3, protocol)
+            self.assertEqual(self.m.protocol_supports_awg31(protocol), awg31, protocol)
 
 
 class UintRangeTests(unittest.TestCase):
@@ -156,6 +159,29 @@ class HeaderProtectionTests(unittest.TestCase):
         for protocol in ("AWG 1.5", "AWG 2.0"):
             result = self.m.validate_transport_params(protocol, self._params())
             self.assertNotIn("HeaderProtectionKey", result, protocol)
+
+
+class Awg31TransportTests(unittest.TestCase):
+    def setUp(self):
+        self.m = build_manager()
+
+    def test_boolean_options_are_normalized(self):
+        result = self.m.validate_transport_params("AWG 3.1", {
+            **VALID_TRANSPORT,
+            "RandomTrailers": "on",
+            "DisableCookies": False,
+        })
+        self.assertIs(result["RandomTrailers"], True)
+        self.assertIs(result["DisableCookies"], False)
+
+    def test_boolean_options_are_ignored_by_awg30(self):
+        result = self.m.validate_transport_params("AWG 3.0", {
+            **VALID_TRANSPORT,
+            "RandomTrailers": True,
+            "DisableCookies": True,
+        })
+        self.assertNotIn("RandomTrailers", result)
+        self.assertNotIn("DisableCookies", result)
 
 
 class ClientParamTests(unittest.TestCase):

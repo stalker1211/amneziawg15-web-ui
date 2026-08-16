@@ -190,7 +190,7 @@
                         </div>
                     </div>
 
-                    <!-- AWG 3.0 only; shown/hidden by toggleProtocolFields() -->
+                    <!-- AWG 3.x only; shown/hidden by toggleProtocolFields() -->
                     <div id="paramHeaderProtectionKeyRow" class="mt-4">
                         <label class="block text-xs font-medium text-gray-600">
                             HeaderProtectionKey (optional, server-side)
@@ -207,6 +207,17 @@
                             Encrypts packet headers. Must be identical on server and clients (it is written into
                             every client config automatically). Requires S1, S2, S3 and S4 to each be 12 or more.
                         </p>
+                    </div>
+
+                    <div id="paramAwg31OptionsRow" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                        <label class="flex items-center gap-2" title="Append a random number of bytes to each packet">
+                            <input type="checkbox" id="paramRandomTrailers">
+                            <span class="font-medium text-gray-700">Random trailers</span>
+                        </label>
+                        <label class="flex items-center gap-2" title="Do not send handshake cookie replies">
+                            <input type="checkbox" id="paramDisableCookies">
+                            <span class="font-medium text-gray-700">Disable cookies</span>
+                        </label>
                     </div>
                 </div>
                 <div id="obfuscationError" class="text-red-600 text-xs mt-1 hidden"></div>

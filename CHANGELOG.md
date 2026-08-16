@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## Version 2.1 (2026-08-15)
+
+Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compatible.
+
+### AWG 3.1
+- **`RandomTrailers`** — appends a random number of bytes to packets to vary their wire size. The setting is mirrored into every client config.
+- **`DisableCookies`** — optionally suppresses handshake cookie replies. It defaults off because cookies provide handshake-flood protection.
+- Both options are available only for AWG 3.1, use checkboxes in the create/edit forms, and are rendered as canonical `on` / `off` values.
+
+### Components
+- `amneziawg-go` → `1b86b2a` (`v3.1.20260814`), including the fix for a runtime panic when `RandomTrailers` was used on handshake cookie messages.
+- `amneziawg-tools` → `v3.1.20260812`. The daemon and tools pins remain paired because 3.1 adds new UAPI fields.
+
+### Validation
+- Added AWG 3.1 protocol-table, validation, leakage, mirrored-config and golden-file coverage (118 tests total).
+- Verified a generated 3.1 server/client pair against the real daemon: `awg showconf` and live `awg show` both reported the two options enabled.
+- Browser smoke coverage now checks all four protocols and the 3.1 controls in both themes.
+
 ## Version 2.0 (2026-08-07)
 
 Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and

@@ -7,7 +7,7 @@ ARG GO_VERSION=1.26.5
 FROM golang:${GO_VERSION}-alpine AS awg_go_builder
 
 # Pin by default for reproducibility; override with --build-arg AWG_GO_REF=...
-ARG AWG_GO_REF=08d68cd
+ARG AWG_GO_REF=1b86b2a
 
 RUN apk add --no-cache git make build-base
 
@@ -33,7 +33,7 @@ FROM alpine:${ALPINE_VERSION} AS awg_tools_builder
 # Must match the AmneziaWG protocol generation built above: AWG 3.0 changed the
 # UAPI wire format (range-valued keepalive, header protection, timings), so v1.x
 # tools cannot configure a v3 daemon. Override with --build-arg AWG_TOOLS_REF=...
-ARG AWG_TOOLS_REF=v3.0.20260805
+ARG AWG_TOOLS_REF=v3.1.20260812
 
 RUN apk add --no-cache git make build-base bash linux-headers
 

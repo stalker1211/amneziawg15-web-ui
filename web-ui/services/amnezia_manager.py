@@ -32,18 +32,19 @@ class AmneziaManager:
     # extending these tuples and nothing else on the backend; the frontend mirror
     # lives in static/js/protocols.js.
     DEFAULT_PROTOCOL = "AWG 1.5"
-    SUPPORTED_PROTOCOLS = ("AWG 1.5", "AWG 2.0", "AWG 3.0")
+    SUPPORTED_PROTOCOLS = ("AWG 1.5", "AWG 2.0", "AWG 3.0", "AWG 3.1")
 
     # Capabilities, keyed by the protocols that have them.
-    PROTOCOLS_WITH_S34 = ("AWG 2.0", "AWG 3.0")
-    PROTOCOLS_WITH_HEADER_RANGES = ("AWG 2.0", "AWG 3.0")
-    PROTOCOLS_WITH_AWG3 = ("AWG 3.0",)
+    PROTOCOLS_WITH_S34 = ("AWG 2.0", "AWG 3.0", "AWG 3.1")
+    PROTOCOLS_WITH_HEADER_RANGES = ("AWG 2.0", "AWG 3.0", "AWG 3.1")
+    PROTOCOLS_WITH_AWG3 = ("AWG 3.0", "AWG 3.1")
+    PROTOCOLS_WITH_AWG31 = ("AWG 3.1",)
 
     # Client-side params: may differ between server and client, so they are only
     # written into client configs.
     CLIENT_ONLY_PARAM_KEYS = ("Jc", "Jmin", "Jmax", "I1", "I2", "I3", "I4", "I5")
 
-    # AWG 3.0 client-side params. Range-valued ("a" or "a-b"); empty means unset,
+    # AWG 3.x client-side params. Range-valued ("a" or "a-b"); empty means unset,
     # in which case amneziawg-go keeps its built-in WireGuard defaults.
     CLIENT_TIMING_PARAM_KEYS = (
         "RekeyAfterTime",
@@ -58,6 +59,7 @@ class AmneziaManager:
     # the server config and mirrored into every client config.
     TRANSPORT_PARAM_KEYS = ("S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4")
     TRANSPORT_AWG3_PARAM_KEYS = ("HeaderProtectionKey",)
+    TRANSPORT_AWG31_PARAM_KEYS = ("RandomTrailers", "DisableCookies")
 
     # amneziawg-go uses the first 12 bytes of each packet's S-padding as the header
     # protection cipher nonce, so every S value must be at least this large once a
@@ -172,6 +174,8 @@ class AmneziaManager:
         value = params.get(key)
         if value is None or value == "":
             return ""
+        if isinstance(value, bool):
+            value = "on" if value else "off"
         return f"{key} = {value}\n"
 
     @staticmethod
@@ -499,8 +503,12 @@ class AmneziaManager:
         return self.normalize_protocol(protocol) in self.PROTOCOLS_WITH_HEADER_RANGES
 
     def protocol_supports_awg3(self, protocol):
-        """AWG 3.0 adds header protection, content padding and tunable timings."""
+        """AWG 3.x adds header protection, content padding and tunable timings."""
         return self.normalize_protocol(protocol) in self.PROTOCOLS_WITH_AWG3
+
+    def protocol_supports_awg31(self, protocol):
+        """AWG 3.1 adds random packet trailers and optional cookie suppression."""
+        return self.normalize_protocol(protocol) in self.PROTOCOLS_WITH_AWG31
 
     def parse_uint_range(self, value, key="value"):
         """Parse an AWG 3.0 'a' or 'a-b' range, mirroring device/noise-types.go.
@@ -544,6 +552,11 @@ class AmneziaManager:
                 value = sanitize_config_value(params.get(key) or "")
                 if value:
                     result[key] = value
+
+        if self.protocol_supports_awg31(normalized_protocol):
+            for key in self.TRANSPORT_AWG31_PARAM_KEYS:
+                if key in params:
+                    result[key] = to_bool(params.get(key))
 
         return result
 
@@ -664,6 +677,10 @@ class AmneziaManager:
                             "when HeaderProtectionKey is set"
                         )
                 transport["HeaderProtectionKey"] = header_protection_key
+
+        if self.protocol_supports_awg31(protocol):
+            for key in self.TRANSPORT_AWG31_PARAM_KEYS:
+                transport[key] = to_bool(params.get(key), False)
 
         return transport
 
@@ -1021,7 +1038,7 @@ MTU = {mtu}
 H2 = {p.get("H2", 0)}
 H3 = {p.get("H3", 0)}
 H4 = {p.get("H4", 0)}
-{_opt_line("HeaderProtectionKey")}"""
+{_opt_line("HeaderProtectionKey")}{_opt_line("RandomTrailers")}{_opt_line("DisableCookies")}"""
 
         for client in server.get("clients") or []:
             if client.get("suspended"):
@@ -1473,12 +1490,15 @@ H4 = {params.get("H4", 0)}
             if i_lines:
                 config += "\n".join(i_lines) + "\n"
 
-            # AWG 3.0. HeaderProtectionKey is server-side, so it has to match the
+            # AWG 3.x. HeaderProtectionKey is server-side, so it has to match the
             # server config exactly; the rest are client-side and optional.
             if self.protocol_supports_awg3(server.get("protocol")):
                 config += _opt_line("HeaderProtectionKey")
                 config += _opt_line("ContentPaddingAddition")
                 for key in self.CLIENT_TIMING_PARAM_KEYS:
+                    config += _opt_line(key)
+            if self.protocol_supports_awg31(server.get("protocol")):
+                for key in self.TRANSPORT_AWG31_PARAM_KEYS:
                     config += _opt_line(key)
 
         config += f"""
