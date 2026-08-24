@@ -121,6 +121,13 @@ All `/api/*` routes sit behind nginx HTTP Basic Auth (`NGINX_USER` / `NGINX_PASS
 If `API_TOKEN` is set, they additionally require an `X-API-Token` header — useful for
 scripts; redundant in a browser, where Basic Auth already gates everything.
 
+Live updates over Socket.IO (`/socket.io/`) are the one exception: nginx does not
+Basic-Auth-gate that path, because some browsers (notably iPadOS Safari) don't
+reliably reattach cached Basic Auth credentials to a WebSocket handshake, which
+showed up as endless credential prompts. Instead, Flask sets a persisted session
+cookie on any request that already cleared Basic Auth on `/` or `/api/`, and the
+WebSocket handshake is authorized from that cookie.
+
 **Mutating requests must send `Content-Type: application/json`** (anything else gets
 `415`). This is what stops another site's page from driving the API using your cached
 Basic Auth credentials.

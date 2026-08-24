@@ -18,6 +18,15 @@ Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compati
 - Verified a generated 3.1 server/client pair against the real daemon: `awg showconf` and live `awg show` both reported the two options enabled.
 - Browser smoke coverage now checks all four protocols and the 3.1 controls in both themes.
 
+### Fixes (2026-08-23)
+- **iPadOS Safari repeatedly re-prompted for Basic Auth credentials.** WebKit does
+  not reliably reattach a cached Basic Auth credential to a WebSocket upgrade
+  handshake, and every Socket.IO reconnect attempt re-triggered the native
+  credential dialog — not reproducible on macOS Safari. `/socket.io/` is no longer
+  Basic-Auth-gated in nginx; instead Flask sets a persisted-secret-key session
+  cookie on any request that already cleared Basic Auth on `/` or `/api/`, and the
+  WebSocket `connect` handler requires that cookie. `/` and `/api/` are unaffected.
+
 ## Version 2.0 (2026-08-07)
 
 Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and
