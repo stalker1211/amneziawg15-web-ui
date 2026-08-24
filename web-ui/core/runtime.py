@@ -1,7 +1,6 @@
 """Runtime wiring helpers for Flask and Socket.IO startup."""
 
-import os
-from flask import Flask, request
+from flask import Flask, request, session
 from flask_socketio import SocketIO
 from core.logging_setup import get_logger
 
@@ -9,13 +8,17 @@ logger = get_logger(__name__)
 
 
 def create_flask_app(template_dir, static_dir):
-    """Create and configure the Flask application instance."""
+    """Create and configure the Flask application instance.
+
+    app.secret_key is set by app.py from a persisted file, not here, so the
+    session cookie used to authorize WebSocket handshakes (see
+    register_socket_handlers) survives a container restart.
+    """
     app = Flask(
         __name__,
         template_folder=template_dir,
         static_folder=static_dir,
     )
-    app.secret_key = os.urandom(24)
     return app
 
 
@@ -42,6 +45,15 @@ def register_socket_handlers(socketio, amnezia_manager, nginx_port):
     """Register WebSocket connect/disconnect event handlers."""
     @socketio.on('connect')
     def handle_connect():
+        # nginx does not gate /socket.io/ with Basic Auth (WebKit does not reliably
+        # reattach cached Basic Auth credentials to a WS upgrade handshake, causing
+        # endless re-prompts on iPadOS Safari). Authorization instead rides the
+        # session cookie app.py sets on any request that already cleared nginx's
+        # Basic Auth, which browsers do attach to the WS handshake.
+        if not session.get('nginx_authenticated'):
+            logger.warning("WebSocket connect rejected (no auth cookie) from %s", request.remote_addr)
+            return False
+
         logger.info("WebSocket connected from %s", request.remote_addr)
         socketio.emit('status', {
             'message': 'Connected to AmneziaWG Web UI',

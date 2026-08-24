@@ -3,6 +3,7 @@
 
 import os
 import time
+from datetime import timedelta
 from functools import wraps
 
 from core.helpers import to_bool
@@ -13,7 +14,7 @@ from core.runtime import (
     register_socket_handlers,
     run_web_ui,
 )
-from flask import jsonify, render_template, request, send_from_directory
+from flask import jsonify, render_template, request, send_from_directory, session
 from routes.servers import register_server_routes
 from routes.system import register_system_routes
 from services.amnezia_manager import AmneziaManager
@@ -55,10 +56,35 @@ WEB_UI_PORT = 5000
 CONFIG_DIR = "/etc/amnezia"
 WIREGUARD_CONFIG_DIR = os.path.join(CONFIG_DIR, "amneziawg")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "web_config.json")
+SECRET_KEY_FILE = os.path.join(CONFIG_DIR, ".flask_secret_key")
 ENABLE_GEOIP = os.getenv("ENABLE_GEOIP", "1").strip().lower() not in ("0", "false", "no", "off")
 
 # API Token Auth (optional, for defense-in-depth)
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
+
+
+def _load_or_create_secret_key(path):
+    """Read the Flask secret key from `path`, creating it on first run.
+
+    Persisted (rather than os.urandom() per boot) so the session cookie set by
+    mark_authenticated() below survives a container restart -- it is what lets a
+    WebSocket reconnect stay authorized without redoing nginx's Basic Auth
+    dialog, which iPadOS Safari does not reliably reattach to a WS handshake.
+    """
+    try:
+        with open(path, "rb") as key_file:
+            data = key_file.read()
+            if data:
+                return data
+    except OSError:
+        pass
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    key = os.urandom(24)
+    with open(path, "wb") as key_file:
+        key_file.write(key)
+    os.chmod(path, 0o600)
+    return key
 
 # Socket.IO CORS origins (comma-separated list or '*' for all)
 # Empty/not set = same-origin only (recommended for production)
@@ -94,7 +120,22 @@ logger.debug("static files: %s",
              os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
 
 app = create_flask_app(TEMPLATE_DIR, STATIC_DIR)
+app.secret_key = _load_or_create_secret_key(SECRET_KEY_FILE)
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=365)
 socketio = create_socketio(app, ALLOWED_ORIGINS)
+
+
+@app.before_request
+def mark_authenticated():
+    """Set a long-lived session cookie once nginx's Basic Auth has passed.
+
+    Every request that reaches Flask already cleared nginx's Basic Auth gate, so
+    this grants no new trust -- it just records that fact in a cookie, which
+    browsers attach to a WebSocket upgrade handshake far more reliably than a
+    cached Basic Auth credential (see register_socket_handlers in core/runtime.py).
+    """
+    session.permanent = True
+    session.setdefault("nginx_authenticated", True)
 
 
 @app.before_request
