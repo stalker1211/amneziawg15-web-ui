@@ -7,7 +7,7 @@ ARG GO_VERSION=1.26.6
 FROM golang:${GO_VERSION}-alpine AS awg_go_builder
 
 # Pin by default for reproducibility; override with --build-arg AWG_GO_REF=...
-ARG AWG_GO_REF=1b86b2a
+ARG AWG_GO_REF=v3.1.20260828
 
 RUN apk add --no-cache git make build-base
 

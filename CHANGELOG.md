@@ -27,6 +27,28 @@ Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compati
   cookie on any request that already cleared Basic Auth on `/` or `/api/`, and the
   WebSocket `connect` handler requires that cookie. `/` and `/api/` are unaffected.
 
+### Fixes (2026-09-10)
+- **A stopped server logged an error every 7 seconds.** `get_server_status()` detects a
+  stopped server by the absence of its interface, but asked for it via
+  `run_command(["ip", "link", "show", ...])`, whose non-zero exit is logged at error
+  level. `start_traffic_monitoring()` runs that check for every configured server on a 7s
+  loop, so a single stopped server produced roughly 12k error lines a day and buried every
+  real failure in the log. It now tests `/sys/class/net/<interface>` first and returns
+  `stopped` when it is absent; the `ip link show` call and its `state UNKNOWN` check still
+  run whenever the interface exists, so a present-but-down interface is still reported
+  correctly and a genuine failure of that command is still an error.
+
+### Components (2026-09-10)
+- Go builder → `1.26.6`, `golang.org/x/crypto` → `v0.56.0`. Clears 1 critical, 8 high and
+  2 medium advisories that `docker scout` reported against the Go stdlib and x/crypto;
+  rescan of the rebuilt image is 0C/0H/0M. `x/net` and `x/sys` are unchanged — no
+  advisories, and the pins are floors that minimal version selection only raises.
+- `amneziawg-go` → `v3.1.20260828` (`b5928ef`), picking up two upstream fixes to features
+  this UI exposes: UDP window handling for `RandomPaddingAddition`, and disabling the whole
+  underload path when `DisableCookies` is set. Neither touches the UAPI surface, so
+  `amneziawg-tools` stays at `v3.1.20260812` — still upstream HEAD — and the pair remains
+  consistent.
+
 ## Version 2.0 (2026-08-07)
 
 Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and
