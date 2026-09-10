@@ -1623,6 +1623,15 @@ PersistentKeepalive = 25
         if not server:
             return "not_found"
 
+        # A stopped server has no interface at all, so ask sysfs before spawning
+        # anything. start_traffic_monitoring() calls this for every configured
+        # server every 7s; without this guard a stopped server ran `ip link show`
+        # against a missing interface each tick, and run_command logged that
+        # foreseeable non-zero exit at error level — roughly 12k lines a day,
+        # which buried every real failure in the log.
+        if not os.path.exists(f"/sys/class/net/{server['interface']}"):
+            return "stopped"
+
         # run_command returns None when the interface does not exist.
         result = self.run_command(["ip", "link", "show", server["interface"]])
         return "running" if result and "state UNKNOWN" in result else "stopped"
