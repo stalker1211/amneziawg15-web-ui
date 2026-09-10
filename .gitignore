@@ -9,3 +9,6 @@ __pycache__/
 # OS/editor cruft
 .DS_Store
 Thumbs.db
+
+# Generated per build by publish_dockerhub.sh; baked into the image, never committed
+web-ui/BUILD

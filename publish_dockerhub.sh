@@ -71,6 +71,25 @@ if [[ -n "${TAG}" && "${TAG}" != "latest" ]]; then
 	BUILD_TAGS+=("-t" "${IMAGE_TAGGED}")
 fi
 
+# Build label shown under the page heading: "v<tag> build <YYYYMMDD>.<n>", where
+# n counts builds for the day. Written into the build context so the Dockerfile's
+# existing `COPY web-ui` bakes it in; app.py falls back to "dev" when absent, so a
+# plain `docker build` or a source bind-mount is never mislabelled as a release.
+#
+# The file has to exist before the build, so a failed build still consumes a
+# number. Gaps in the sequence are expected and harmless.
+BUILD_FILE="${CONTEXT_DIR}/web-ui/BUILD"
+BUILD_DATE="$(date +%Y%m%d)"
+PREV="$(cat "${BUILD_FILE}" 2>/dev/null || true)"
+if [[ "${PREV}" == *" ${BUILD_DATE}."* ]]; then
+	BUILD_N=$(( ${PREV##*.} + 1 ))
+else
+	BUILD_N=1
+fi
+BUILD_LABEL="v${TAG:-dev} build ${BUILD_DATE}.${BUILD_N}"
+echo "${BUILD_LABEL}" > "${BUILD_FILE}"
+echo "  Build:      ${BUILD_LABEL}"
+
 echo "Building image..."
 docker buildx build \
     --platform "${PLATFORMS}" \

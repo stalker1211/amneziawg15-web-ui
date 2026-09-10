@@ -27,6 +27,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
+# Build label shown under the page heading. publish_dockerhub.sh writes this
+# file into the build context, so it is baked into a published image but absent
+# from a plain `docker build` or a source bind-mount, which then read "dev".
+try:
+    with open(os.path.join(BASE_DIR, "BUILD"), encoding="utf-8") as _fh:
+        BUILD_LABEL = _fh.read().strip() or "dev"
+except OSError:
+    BUILD_LABEL = "dev"
+
 # Essential environment variables
 NGINX_PORT = os.getenv("NGINX_PORT", "80")
 AUTO_START_SERVERS = os.getenv("AUTO_START_SERVERS", "true").lower() == "true"
@@ -253,7 +262,9 @@ def index():
     except OSError:
         cache_bust = int(time.time())
 
-    return render_template("index.html", cache_bust=cache_bust)
+    return render_template(
+        "index.html", cache_bust=cache_bust, build_label=BUILD_LABEL
+    )
 
 
 # Explicit static file route to ensure they're served
