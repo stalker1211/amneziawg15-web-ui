@@ -11,6 +11,8 @@ set -euo pipefail
 # Commits that never contained the files keep their original IDs.
 #
 # Only refs are pushed; no local branch or tag is created or changed.
+# Pushes go to the remote's fetch URL, so `remote.origin.pushurl` can be set to
+# a dummy value to make a plain `git push origin` fail.
 #
 # Usage:
 #   ./publish_github.sh             # push master + all tags
@@ -26,7 +28,7 @@ for arg in "$@"; do
 	case "${arg}" in
 		--dry-run) PUSH_FLAGS+=(--dry-run) ;;
 		--force) PUSH_FLAGS+=(--force) ;;
-		-h|--help) sed -n '4,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "Unknown argument: ${arg}" >&2; exit 1 ;;
 	esac
 done
@@ -97,8 +99,10 @@ while read -r name type target peeled; do
 	fi
 done < <(git for-each-ref refs/tags --format='%(refname:short) %(objecttype) %(objectname) %(*objectname)')
 
-echo "Publishing to ${REMOTE} without: ${PRIVATE_FILES[*]}"
+URL="$(git remote get-url "${REMOTE}")"
+
+echo "Publishing to ${URL} without: ${PRIVATE_FILES[*]}"
 echo "  ${BRANCH}: $(git rev-parse --short "${BRANCH}") -> $(git rev-parse --short "${TIP}")"
 echo "  files dropped at tip: $(git diff --name-only "${TIP}" "${BRANCH}" | tr '\n' ' ')"
 
-git push ${PUSH_FLAGS[@]+"${PUSH_FLAGS[@]}"} "${REMOTE}" "${REFSPECS[@]}"
+git push ${PUSH_FLAGS[@]+"${PUSH_FLAGS[@]}"} "${URL}" "${REFSPECS[@]}"
