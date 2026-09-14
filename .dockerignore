@@ -19,6 +19,7 @@ screenshot.png
 # Local helper scripts
 run.sh
 publish_dockerhub.sh
+publish_github.sh
 
 # Python bytecode: stale .pyc files inside the image are worse than useless
 __pycache__
