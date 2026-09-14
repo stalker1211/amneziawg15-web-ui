@@ -49,6 +49,11 @@ Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compati
   `amneziawg-tools` stays at `v3.1.20260812` — still upstream HEAD — and the pair remains
   consistent.
 
+### UI (2026-09-10)
+- **Build label** under the page heading, e.g. `v2.1 build 20260910.1`, written to
+  `web-ui/BUILD` by `publish_dockerhub.sh` (n = builds that day; a failed build still uses a
+  number, so gaps are normal). Plain `docker build` or a bind-mounted source shows `dev`.
+
 ## Version 2.0 (2026-08-07)
 
 Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and
