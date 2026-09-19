@@ -8,7 +8,13 @@
 #   UPDATE_GOLDEN=1 ./run_tests.sh      rewrite tests/golden/*.conf fixtures
 #
 # The suite needs `requests` and `flask` importable (they are imported by the
-# modules under test). If they are missing on the host, run inside the image:
+# modules under test). On the host, build the local env once, then run through
+# it (uv puts .venv/bin first on PATH, so `python3` below is the venv's):
+#
+#   uv venv --python 3.14 && uv pip install -r web-ui/requirements.txt
+#   uv run ./run_tests.sh
+#
+# Or run inside the image:
 #
 #   docker run --rm -v "$PWD":/src -w /src --entrypoint sh \
 #     amneziawg-web-ui:local -c './run_tests.sh'
