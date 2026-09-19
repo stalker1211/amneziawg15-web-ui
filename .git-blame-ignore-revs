@@ -1,0 +1,6 @@
+# Style-only commits for `git blame` to skip. GitHub reads this file automatically; locally run
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Add ruff and pyright configs; fix lint findings
+01e78eaf129b6ec0521f2a1ffe16f55840e9c397
+# Apply ruff format
+dfa1c12118ecae0e60ce322454fab5616d2946fa
