@@ -45,10 +45,14 @@ class HandshakeParsingTests(unittest.TestCase):
 
     def setUp(self):
         self.manager = build_manager()
-        self.server = self.manager.create_wireguard_server({
-            "name": "traffic", "protocol": "AWG 3.0", "subnet": "10.9.0.0/24",
-            "auto_start": False,
-        })
+        self.server = self.manager.create_wireguard_server(
+            {
+                "name": "traffic",
+                "protocol": "AWG 3.0",
+                "subnet": "10.9.0.0/24",
+                "auto_start": False,
+            }
+        )
         self.client, _ = self.manager.add_wireguard_client(self.server["id"], "phone")
 
     def _traffic_for(self, handshake_line, transfer="transfer: 10 B received, 20 B sent"):
@@ -91,10 +95,14 @@ class HandshakeParsingTests(unittest.TestCase):
 class ShowOutputParsingTests(unittest.TestCase):
     def setUp(self):
         self.manager = build_manager()
-        self.server = self.manager.create_wireguard_server({
-            "name": "traffic", "protocol": "AWG 3.0", "subnet": "10.9.0.0/24",
-            "auto_start": False,
-        })
+        self.server = self.manager.create_wireguard_server(
+            {
+                "name": "traffic",
+                "protocol": "AWG 3.0",
+                "subnet": "10.9.0.0/24",
+                "auto_start": False,
+            }
+        )
         self.client, _ = self.manager.add_wireguard_client(self.server["id"], "phone")
         sample = AWG_SHOW_SAMPLE.format(pubkey=self.client["client_public_key"])
         self.manager.run_command = lambda args, _o=sample: _o
@@ -124,10 +132,14 @@ class ShowOutputParsingTests(unittest.TestCase):
 class MissingDataTests(unittest.TestCase):
     def setUp(self):
         self.manager = build_manager()
-        self.server = self.manager.create_wireguard_server({
-            "name": "traffic", "protocol": "AWG 1.5", "subnet": "10.9.0.0/24",
-            "auto_start": False,
-        })
+        self.server = self.manager.create_wireguard_server(
+            {
+                "name": "traffic",
+                "protocol": "AWG 1.5",
+                "subnet": "10.9.0.0/24",
+                "auto_start": False,
+            }
+        )
         self.client, _ = self.manager.add_wireguard_client(self.server["id"], "phone")
 
     def test_peer_absent_from_output_reports_zeroes(self):
@@ -147,8 +159,9 @@ class MissingDataTests(unittest.TestCase):
 
     def test_endpoint_none_literal(self):
         pubkey = self.client["client_public_key"]
-        output = (f"interface: {self.server['interface']}\n\npeer: {pubkey}\n"
-                  "  endpoint: (none)\n  transfer: 0 B received, 0 B sent\n")
+        output = (
+            f"interface: {self.server['interface']}\n\npeer: {pubkey}\n  endpoint: (none)\n  transfer: 0 B received, 0 B sent\n"
+        )
         self.manager.run_command = lambda args, _o=output: _o
         info = self.manager.get_traffic_for_server(self.server["id"])[self.client["id"]]
         self.assertEqual(info["endpoint"], "(none)")

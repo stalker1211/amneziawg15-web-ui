@@ -14,8 +14,14 @@ import unittest
 from tests.support import HEADER_PROTECTION_KEY, build_manager
 
 VALID_TRANSPORT = {
-    "S1": 50, "S2": 60, "S3": 40, "S4": 20,
-    "H1": "1000", "H2": "2000", "H3": "3000", "H4": "4000",
+    "S1": 50,
+    "S2": 60,
+    "S3": 40,
+    "S4": 20,
+    "H1": "1000",
+    "H2": "2000",
+    "H3": "3000",
+    "H4": "4000",
 }
 
 
@@ -25,10 +31,18 @@ class ProtocolNormalizationTests(unittest.TestCase):
 
     def test_accepted_spellings(self):
         for value, expected in [
-            ("AWG 1.5", "AWG 1.5"), ("1.5", "AWG 1.5"), ("awg1.5", "AWG 1.5"),
-            ("AWG 2.0", "AWG 2.0"), ("2.0", "AWG 2.0"), ("AWG_2.0", "AWG 2.0"),
-            ("AWG 3.0", "AWG 3.0"), ("3.0", "AWG 3.0"), ("awg3.0", "AWG 3.0"),
-            ("AWG 3.1", "AWG 3.1"), ("3.1", "AWG 3.1"), ("awg3.1", "AWG 3.1"),
+            ("AWG 1.5", "AWG 1.5"),
+            ("1.5", "AWG 1.5"),
+            ("awg1.5", "AWG 1.5"),
+            ("AWG 2.0", "AWG 2.0"),
+            ("2.0", "AWG 2.0"),
+            ("AWG_2.0", "AWG 2.0"),
+            ("AWG 3.0", "AWG 3.0"),
+            ("3.0", "AWG 3.0"),
+            ("awg3.0", "AWG 3.0"),
+            ("AWG 3.1", "AWG 3.1"),
+            ("3.1", "AWG 3.1"),
+            ("awg3.1", "AWG 3.1"),
         ]:
             self.assertEqual(self.m.normalize_protocol(value), expected, value)
 
@@ -56,8 +70,13 @@ class UintRangeTests(unittest.TestCase):
 
     def test_valid_forms(self):
         for raw, expected in [
-            ("", ""), (None, ""), ("25", "25"), ("22-30", "22-30"),
-            (" 22 - 30 ", "22-30"), ("7-7", "7"), (25, "25"),
+            ("", ""),
+            (None, ""),
+            ("25", "25"),
+            ("22-30", "22-30"),
+            (" 22 - 30 ", "22-30"),
+            ("7-7", "7"),
+            (25, "25"),
         ]:
             self.assertEqual(self.m.parse_uint_range(raw, "X"), expected, repr(raw))
 
@@ -97,8 +116,7 @@ class TransportParamTests(unittest.TestCase):
     def test_header_ranges_allowed_for_20_and_30_only(self):
         ranged = {**VALID_TRANSPORT, "H1": "1200-1400"}
         for protocol in ("AWG 2.0", "AWG 3.0"):
-            self.assertEqual(
-                self.m.validate_transport_params(protocol, dict(ranged))["H1"], "1200-1400")
+            self.assertEqual(self.m.validate_transport_params(protocol, dict(ranged))["H1"], "1200-1400")
         with self.assertRaises(ValueError):
             self.m.validate_transport_params("AWG 1.5", dict(ranged))
 
@@ -166,20 +184,26 @@ class Awg31TransportTests(unittest.TestCase):
         self.m = build_manager()
 
     def test_boolean_options_are_normalized(self):
-        result = self.m.validate_transport_params("AWG 3.1", {
-            **VALID_TRANSPORT,
-            "RandomTrailers": "on",
-            "DisableCookies": False,
-        })
+        result = self.m.validate_transport_params(
+            "AWG 3.1",
+            {
+                **VALID_TRANSPORT,
+                "RandomTrailers": "on",
+                "DisableCookies": False,
+            },
+        )
         self.assertIs(result["RandomTrailers"], True)
         self.assertIs(result["DisableCookies"], False)
 
     def test_boolean_options_are_ignored_by_awg30(self):
-        result = self.m.validate_transport_params("AWG 3.0", {
-            **VALID_TRANSPORT,
-            "RandomTrailers": True,
-            "DisableCookies": True,
-        })
+        result = self.m.validate_transport_params(
+            "AWG 3.0",
+            {
+                **VALID_TRANSPORT,
+                "RandomTrailers": True,
+                "DisableCookies": True,
+            },
+        )
         self.assertNotIn("RandomTrailers", result)
         self.assertNotIn("DisableCookies", result)
 
@@ -203,20 +227,28 @@ class ClientParamTests(unittest.TestCase):
             self.m.validate_client_params({"Jc": 8, "Jmin": 90, "Jmax": 70})
 
     def test_awg3_ranges_normalized_and_unset_dropped(self):
-        result = self.m.validate_client_params({
-            "Jc": 8, "Jmin": 40, "Jmax": 70,
-            "KeepaliveTimeout": " 22 - 30 ",
-            "RekeyAfterTime": "",
-        })
+        result = self.m.validate_client_params(
+            {
+                "Jc": 8,
+                "Jmin": 40,
+                "Jmax": 70,
+                "KeepaliveTimeout": " 22 - 30 ",
+                "RekeyAfterTime": "",
+            }
+        )
         self.assertEqual(result["KeepaliveTimeout"], "22-30")
         # Empty means "use the daemon default", so the key must not be written at all.
         self.assertNotIn("RekeyAfterTime", result)
 
     def test_i_params_are_single_line(self):
-        result = self.m.validate_client_params({
-            "Jc": 8, "Jmin": 40, "Jmax": 70,
-            "I1": "<b 0xf0>\ninjected = 1",
-        })
+        result = self.m.validate_client_params(
+            {
+                "Jc": 8,
+                "Jmin": 40,
+                "Jmax": 70,
+                "I1": "<b 0xf0>\ninjected = 1",
+            }
+        )
         self.assertNotIn("\n", result["I1"])
 
 

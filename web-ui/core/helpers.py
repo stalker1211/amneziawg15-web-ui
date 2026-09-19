@@ -1,8 +1,9 @@
 """Shared utility helpers for configuration and validation."""
 
+
 def sanitize_config_value(value):
     """Make sure config values are single-line to keep config format intact."""
-    return str(value).replace('\r', ' ').replace('\n', ' ').strip()
+    return str(value).replace("\r", " ").replace("\n", " ").strip()
 
 
 def to_bool(value, default=False):
@@ -15,16 +16,16 @@ def to_bool(value, default=False):
         return value != 0
     if isinstance(value, str):
         s = value.strip().lower()
-        if s in ('', 'none', 'null'):
+        if s in ("", "none", "null"):
             return default
-        return s not in ('0', 'false', 'no', 'off')
+        return s not in ("0", "false", "no", "off")
     return bool(value)
 
 
 def is_valid_ip(ip):
     """Check if the string is a valid IPv4 address."""
     try:
-        parts = str(ip).split('.')
+        parts = str(ip).split(".")
         if len(parts) != 4:
             return False
         for part in parts:

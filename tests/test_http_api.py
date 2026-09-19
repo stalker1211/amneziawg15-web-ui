@@ -61,14 +61,24 @@ def build_app():
         return wrapped
 
     register_system_routes(
-        app, require_token, manager,
-        awg_log_file="/nonexistent/awg.log", nginx_port="80", auto_start_servers=False,
-        default_mtu=1420, default_subnet="10.0.0.0/24", default_port=51820,
+        app,
+        require_token,
+        manager,
+        awg_log_file="/nonexistent/awg.log",
+        nginx_port="80",
+        auto_start_servers=False,
+        default_mtu=1420,
+        default_subnet="10.0.0.0/24",
+        default_port=51820,
         default_dns="1.1.1.1",
     )
     register_server_routes(
-        app, require_token, manager,
-        to_bool=to_bool, default_enable_nat=True, default_block_lan_cidrs=True,
+        app,
+        require_token,
+        manager,
+        to_bool=to_bool,
+        default_enable_nat=True,
+        default_block_lan_cidrs=True,
     )
     return app, manager
 
@@ -93,15 +103,20 @@ class CsrfGuardTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/servers").status_code, 415)
 
     def test_no_server_is_created_by_a_rejected_request(self):
-        self.client.post("/api/servers", data="x=1",
-                         content_type="application/x-www-form-urlencoded")
+        self.client.post("/api/servers", data="x=1", content_type="application/x-www-form-urlencoded")
         self.assertEqual(self.manager.config["servers"], [])
 
     def test_json_mutations_are_allowed(self):
-        response = self.client.post("/api/servers", json={
-            "name": "ok", "protocol": "AWG 2.0", "subnet": "10.31.0.0/24",
-            "port": 51931, "auto_start": False,
-        })
+        response = self.client.post(
+            "/api/servers",
+            json={
+                "name": "ok",
+                "protocol": "AWG 2.0",
+                "subnet": "10.31.0.0/24",
+                "port": 51931,
+                "auto_start": False,
+            },
+        )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(self.manager.config["servers"]), 1)
 
@@ -128,16 +143,27 @@ class CreateServerValidationTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/servers", json={"name": "   "}).status_code, 400)
 
     def test_invalid_subnet_returns_400_not_500(self):
-        response = self.client.post("/api/servers", json={
-            "name": "bad", "subnet": "10.0.0.0/24; id", "auto_start": False,
-        })
+        response = self.client.post(
+            "/api/servers",
+            json={
+                "name": "bad",
+                "subnet": "10.0.0.0/24; id",
+                "auto_start": False,
+            },
+        )
         self.assertEqual(response.status_code, 400)
         self.assertIn("subnet", response.get_json()["error"].lower())
 
     def test_invalid_port_returns_400(self):
-        response = self.client.post("/api/servers", json={
-            "name": "bad", "port": 99999, "subnet": "10.32.0.0/24", "auto_start": False,
-        })
+        response = self.client.post(
+            "/api/servers",
+            json={
+                "name": "bad",
+                "port": 99999,
+                "subnet": "10.32.0.0/24",
+                "auto_start": False,
+            },
+        )
         self.assertEqual(response.status_code, 400)
 
 
@@ -162,23 +188,26 @@ class TokenAuthTests(unittest.TestCase):
         self.assertIn("token", response.get_json()["error"].lower())
 
     def test_correct_token_accepted(self):
-        self.assertEqual(
-            self.client.get("/api/servers", headers={"X-API-Token": "s3cr3t"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/servers", headers={"X-API-Token": "s3cr3t"}).status_code, 200)
 
     def test_bearer_form_accepted(self):
-        self.assertEqual(
-            self.client.get("/api/servers",
-                            headers={"Authorization": "Bearer s3cr3t"}).status_code, 200)
+        self.assertEqual(self.client.get("/api/servers", headers={"Authorization": "Bearer s3cr3t"}).status_code, 200)
 
 
 class SerializationTests(unittest.TestCase):
     def setUp(self):
         self.app, self.manager = build_app()
         self.client = self.app.test_client()
-        self.client.post("/api/servers", json={
-            "name": "ser", "protocol": "AWG 3.0", "subnet": "10.33.0.0/24",
-            "port": 51933, "auto_start": False,
-        })
+        self.client.post(
+            "/api/servers",
+            json={
+                "name": "ser",
+                "protocol": "AWG 3.0",
+                "subnet": "10.33.0.0/24",
+                "port": 51933,
+                "auto_start": False,
+            },
+        )
         self.server_id = self.manager.config["servers"][0]["id"]
         self.client.post(f"/api/servers/{self.server_id}/clients", json={"name": "phone"})
 
@@ -205,15 +234,24 @@ class SerializationTests(unittest.TestCase):
 
     def test_unknown_ids_return_404(self):
         self.assertEqual(self.client.get("/api/servers/nope/info").status_code, 404)
-        self.assertEqual(
-            self.client.get(f"/api/servers/{self.server_id}/clients/nope/config").status_code, 404)
+        self.assertEqual(self.client.get(f"/api/servers/{self.server_id}/clients/nope/config").status_code, 404)
 
     def test_transport_params_rejects_bad_values_with_400(self):
-        response = self.client.post(f"/api/servers/{self.server_id}/transport-params", json={
-            "protocol": "AWG 3.0", "S1": 50, "S2": 60, "S3": 40, "S4": 5,
-            "H1": "1", "H2": "2", "H3": "3", "H4": "4",
-            "HeaderProtectionKey": "aGVhZGVyUFJPVEVDVElPTmtleTAwMDAwMDAwMDAwMDA=",
-        })
+        response = self.client.post(
+            f"/api/servers/{self.server_id}/transport-params",
+            json={
+                "protocol": "AWG 3.0",
+                "S1": 50,
+                "S2": 60,
+                "S3": 40,
+                "S4": 5,
+                "H1": "1",
+                "H2": "2",
+                "H3": "3",
+                "H4": "4",
+                "HeaderProtectionKey": "aGVhZGVyUFJPVEVDVElPTmtleTAwMDAwMDAwMDAwMDA=",
+            },
+        )
         self.assertEqual(response.status_code, 400)
         self.assertIn("12", response.get_json()["error"])
 
@@ -228,8 +266,7 @@ class ProtocolTableTests(unittest.TestCase):
     def test_status_exposes_the_protocol_table(self):
         protocols = self.client.get("/api/system/status").get_json()["protocols"]
         self.assertEqual(protocols["default"], self.manager.DEFAULT_PROTOCOL)
-        self.assertEqual([p["id"] for p in protocols["supported"]],
-                         list(self.manager.SUPPORTED_PROTOCOLS))
+        self.assertEqual([p["id"] for p in protocols["supported"]], list(self.manager.SUPPORTED_PROTOCOLS))
 
     def test_every_supported_protocol_normalizes_to_itself(self):
         for protocol in self.manager.SUPPORTED_PROTOCOLS:
@@ -240,8 +277,9 @@ class ProtocolTableTests(unittest.TestCase):
         source = Path(os.path.join(STATIC_JS, "protocols.js")).read_text(encoding="utf-8")
 
         ids = re.findall(r"id:\s*'([^']+)'", source)
-        self.assertEqual(ids, list(self.manager.SUPPORTED_PROTOCOLS),
-                         "protocols.js protocol list differs from SUPPORTED_PROTOCOLS")
+        self.assertEqual(
+            ids, list(self.manager.SUPPORTED_PROTOCOLS), "protocols.js protocol list differs from SUPPORTED_PROTOCOLS"
+        )
 
         default = re.search(r"DEFAULT_PROTOCOL\s*=\s*'([^']+)'", source).group(1)
         self.assertEqual(default, self.manager.DEFAULT_PROTOCOL)
@@ -253,18 +291,25 @@ class ProtocolTableTests(unittest.TestCase):
             r"supportsHeaderRanges:\s*(true|false),[^}]*?"
             r"supportsAwg3:\s*(true|false),[^}]*?"
             r"supportsAwg31:\s*(true|false)",
-            source, re.DOTALL)
-        self.assertEqual(len(entries), len(self.manager.SUPPORTED_PROTOCOLS),
-                         "could not parse every protocol entry from protocols.js")
+            source,
+            re.DOTALL,
+        )
+        self.assertEqual(
+            len(entries), len(self.manager.SUPPORTED_PROTOCOLS), "could not parse every protocol entry from protocols.js"
+        )
         for protocol, s34, ranges, awg3, awg31 in entries:
-            self.assertEqual(s34 == "true", self.manager.protocol_supports_s34(protocol),
-                             f"{protocol}: supportsS34 mismatch")
-            self.assertEqual(ranges == "true", self.manager.protocol_supports_header_ranges(protocol),
-                             f"{protocol}: supportsHeaderRanges mismatch")
-            self.assertEqual(awg3 == "true", self.manager.protocol_supports_awg3(protocol),
-                             f"{protocol}: supportsAwg3 mismatch")
-            self.assertEqual(awg31 == "true", self.manager.protocol_supports_awg31(protocol),
-                             f"{protocol}: supportsAwg31 mismatch")
+            self.assertEqual(s34 == "true", self.manager.protocol_supports_s34(protocol), f"{protocol}: supportsS34 mismatch")
+            self.assertEqual(
+                ranges == "true",
+                self.manager.protocol_supports_header_ranges(protocol),
+                f"{protocol}: supportsHeaderRanges mismatch",
+            )
+            self.assertEqual(
+                awg3 == "true", self.manager.protocol_supports_awg3(protocol), f"{protocol}: supportsAwg3 mismatch"
+            )
+            self.assertEqual(
+                awg31 == "true", self.manager.protocol_supports_awg31(protocol), f"{protocol}: supportsAwg31 mismatch"
+            )
 
     def test_no_hardcoded_protocol_literals_left_in_the_ui(self):
         """Capability checks must go through Protocols, not string comparison."""
@@ -321,8 +366,7 @@ class SystemRoutesTests(unittest.TestCase):
 
     def test_iptables_test_requires_server_id(self):
         self.assertEqual(self.client.get("/api/system/iptables-test").status_code, 400)
-        self.assertEqual(
-            self.client.get("/api/system/iptables-test?server_id=nope").status_code, 404)
+        self.assertEqual(self.client.get("/api/system/iptables-test?server_id=nope").status_code, 404)
 
 
 if __name__ == "__main__":

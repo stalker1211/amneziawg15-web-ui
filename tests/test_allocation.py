@@ -15,10 +15,15 @@ class ClientIpAllocationTests(unittest.TestCase):
     def _server(self, subnet, name="alloc"):
         # Distinct ports: creating a server now rejects a port already in use.
         self._next_port += 1
-        return self.manager.create_wireguard_server({
-            "name": name, "protocol": "AWG 1.5", "subnet": subnet,
-            "port": self._next_port, "auto_start": False,
-        })
+        return self.manager.create_wireguard_server(
+            {
+                "name": name,
+                "protocol": "AWG 1.5",
+                "subnet": subnet,
+                "port": self._next_port,
+                "auto_start": False,
+            }
+        )
 
     def test_first_client_gets_the_first_free_address(self):
         server = self._server("10.5.0.0/24")
@@ -63,12 +68,14 @@ class ClientIpAllocationTests(unittest.TestCase):
         """Clients are stored twice; a stale embedded list must not cause a duplicate."""
         server = self._server("10.12.0.0/24")
         self.manager.config["clients"]["ghost"] = {
-            "id": "ghost", "server_id": server["id"], "client_ip": "10.12.0.2",
+            "id": "ghost",
+            "server_id": server["id"],
+            "client_ip": "10.12.0.2",
         }
         self.assertEqual(self.manager.get_client_ip(server), "10.12.0.3")
 
     def test_full_subnet_raises_rather_than_reusing(self):
-        server = self._server("10.13.0.0/30")   # exactly two usable hosts
+        server = self._server("10.13.0.0/30")  # exactly two usable hosts
         server["clients"] = [{"client_ip": "10.13.0.2"}]
         with self.assertRaises(ValueError) as ctx:
             self.manager.get_client_ip(server)
@@ -78,47 +85,76 @@ class ClientIpAllocationTests(unittest.TestCase):
 class ServerConflictTests(unittest.TestCase):
     def setUp(self):
         self.manager = build_manager()
-        self.manager.create_wireguard_server({
-            "name": "first", "subnet": "10.20.0.0/24", "port": 51820, "auto_start": False,
-        })
+        self.manager.create_wireguard_server(
+            {
+                "name": "first",
+                "subnet": "10.20.0.0/24",
+                "port": 51820,
+                "auto_start": False,
+            }
+        )
 
     def test_duplicate_port_rejected(self):
         with self.assertRaises(ValueError) as ctx:
-            self.manager.create_wireguard_server({
-                "name": "second", "subnet": "10.21.0.0/24", "port": 51820, "auto_start": False,
-            })
+            self.manager.create_wireguard_server(
+                {
+                    "name": "second",
+                    "subnet": "10.21.0.0/24",
+                    "port": 51820,
+                    "auto_start": False,
+                }
+            )
         self.assertIn("Port 51820", str(ctx.exception))
 
     def test_identical_subnet_rejected(self):
         with self.assertRaises(ValueError) as ctx:
-            self.manager.create_wireguard_server({
-                "name": "second", "subnet": "10.20.0.0/24", "port": 51821, "auto_start": False,
-            })
+            self.manager.create_wireguard_server(
+                {
+                    "name": "second",
+                    "subnet": "10.20.0.0/24",
+                    "port": 51821,
+                    "auto_start": False,
+                }
+            )
         self.assertIn("overlaps", str(ctx.exception))
 
     def test_overlapping_supernet_rejected(self):
         with self.assertRaises(ValueError):
-            self.manager.create_wireguard_server({
-                "name": "second", "subnet": "10.20.0.0/16", "port": 51822, "auto_start": False,
-            })
+            self.manager.create_wireguard_server(
+                {
+                    "name": "second",
+                    "subnet": "10.20.0.0/16",
+                    "port": 51822,
+                    "auto_start": False,
+                }
+            )
 
     def test_non_overlapping_subnet_and_free_port_accepted(self):
-        server = self.manager.create_wireguard_server({
-            "name": "second", "subnet": "10.22.0.0/24", "port": 51823, "auto_start": False,
-        })
+        server = self.manager.create_wireguard_server(
+            {
+                "name": "second",
+                "subnet": "10.22.0.0/24",
+                "port": 51823,
+                "auto_start": False,
+            }
+        )
         self.assertEqual(server["subnet"], "10.22.0.0/24")
 
     def test_conflict_check_can_ignore_a_server(self):
         """Used when re-validating an existing server against the others."""
         existing = self.manager.config["servers"][0]
-        self.manager.assert_no_conflicts(
-            existing["port"], existing["subnet"], ignore_server_id=existing["id"])
+        self.manager.assert_no_conflicts(existing["port"], existing["subnet"], ignore_server_id=existing["id"])
 
     def test_a_stored_invalid_subnet_does_not_block_new_servers(self):
         self.manager.config["servers"][0]["subnet"] = "not-a-subnet"
-        self.manager.create_wireguard_server({
-            "name": "third", "subnet": "10.23.0.0/24", "port": 51824, "auto_start": False,
-        })
+        self.manager.create_wireguard_server(
+            {
+                "name": "third",
+                "subnet": "10.23.0.0/24",
+                "port": 51824,
+                "auto_start": False,
+            }
+        )
 
 
 class GeoipCacheTests(unittest.TestCase):

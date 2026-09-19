@@ -28,6 +28,7 @@ BACKEND_FILES = [
 class LoggingSetupTests(unittest.TestCase):
     def setUp(self):
         from core.logging_setup import configure_logging
+
         self.configure_logging = configure_logging
         self._saved_level = os.environ.get("LOG_LEVEL")
 
@@ -100,8 +101,7 @@ class NoBarePrintTests(unittest.TestCase):
                 continue
             if relative.endswith("logging_setup.py"):
                 continue
-            self.assertIn("logger = get_logger(__name__)", source,
-                          f"{relative} logs without defining a module logger")
+            self.assertIn("logger = get_logger(__name__)", source, f"{relative} logs without defining a module logger")
 
 
 if __name__ == "__main__":

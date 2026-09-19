@@ -29,24 +29,32 @@ class ConfigRenderingTests(unittest.TestCase):
 
     def _server_with_client(self, protocol, subnet, extra_client_params=None):
         manager = build_manager()
-        server = manager.create_wireguard_server({
-            "name": f"test-{protocol}",
-            "protocol": protocol,
-            "subnet": subnet,
-            "port": 51820,
-            "auto_start": False,
-            "dns": "1.1.1.1,8.8.8.8",
-            "mtu": 1420,
-            # Fixed transport params so the golden file is deterministic.
-            "transport_params": {
-                "S1": 50, "S2": 60, "S3": 40, "S4": 20,
-                "H1": "1000", "H2": "2000", "H3": "3000", "H4": "4000",
-                "HeaderProtectionKey": HEADER_PROTECTION_KEY,
-                "RandomTrailers": True,
-                "DisableCookies": True,
-            },
-            "client_defaults": {"Jc": 8, "Jmin": 40, "Jmax": 70},
-        })
+        server = manager.create_wireguard_server(
+            {
+                "name": f"test-{protocol}",
+                "protocol": protocol,
+                "subnet": subnet,
+                "port": 51820,
+                "auto_start": False,
+                "dns": "1.1.1.1,8.8.8.8",
+                "mtu": 1420,
+                # Fixed transport params so the golden file is deterministic.
+                "transport_params": {
+                    "S1": 50,
+                    "S2": 60,
+                    "S3": 40,
+                    "S4": 20,
+                    "H1": "1000",
+                    "H2": "2000",
+                    "H3": "3000",
+                    "H4": "4000",
+                    "HeaderProtectionKey": HEADER_PROTECTION_KEY,
+                    "RandomTrailers": True,
+                    "DisableCookies": True,
+                },
+                "client_defaults": {"Jc": 8, "Jmin": 40, "Jmax": 70},
+            }
+        )
         client, _ = manager.add_wireguard_client(server["id"], "phone")
         if extra_client_params:
             manager.update_client_params(server["id"], client["id"], extra_client_params)
@@ -101,9 +109,12 @@ class ConfigRenderingTests(unittest.TestCase):
 
     def test_client_conf_awg30(self):
         manager, server, client = self._server_with_client(
-            "AWG 3.0", "10.30.0.0/24",
+            "AWG 3.0",
+            "10.30.0.0/24",
             extra_client_params={
-                "Jc": 8, "Jmin": 40, "Jmax": 70,
+                "Jc": 8,
+                "Jmin": 40,
+                "Jmax": 70,
                 "ContentPaddingAddition": "10-40",
                 "RekeyAfterTime": "110-130",
                 "KeepaliveTimeout": "22-30",
@@ -117,9 +128,12 @@ class ConfigRenderingTests(unittest.TestCase):
 
     def test_client_conf_awg31(self):
         manager, server, client = self._server_with_client(
-            "AWG 3.1", "10.31.0.0/24",
+            "AWG 3.1",
+            "10.31.0.0/24",
             extra_client_params={
-                "Jc": 8, "Jmin": 40, "Jmax": 70,
+                "Jc": 8,
+                "Jmin": 40,
+                "Jmax": 70,
                 "ContentPaddingAddition": "10-40",
                 "RekeyAfterTime": "110-130",
                 "KeepaliveTimeout": "22-30",
@@ -202,19 +216,21 @@ class ConfigRenderingTests(unittest.TestCase):
     def test_names_cannot_inject_config_directives(self):
         """A newline in a name would end the '# Client:' comment (see §5 #19)."""
         manager = build_manager()
-        server = manager.create_wireguard_server({
-            "name": "srv\nListenPort = 1", "protocol": "AWG 1.5",
-            "subnet": "10.28.0.0/24", "auto_start": False,
-        })
-        client, _ = manager.add_wireguard_client(
-            server["id"], "evil\nPersistentKeepalive = 1\n# x")
+        server = manager.create_wireguard_server(
+            {
+                "name": "srv\nListenPort = 1",
+                "protocol": "AWG 1.5",
+                "subnet": "10.28.0.0/24",
+                "auto_start": False,
+            }
+        )
+        client, _ = manager.add_wireguard_client(server["id"], "evil\nPersistentKeepalive = 1\n# x")
         manager.rename_client(server["id"], client["id"], "worse\nMTU = 99")
 
         server = manager.get_server(server["id"])
         with open(server["config_path"], encoding="utf-8") as f:
             server_text = f.read()
-        client_text = manager.generate_wireguard_client_config(
-            server, manager.get_client(client["id"]), include_comments=True)
+        client_text = manager.generate_wireguard_client_config(server, manager.get_client(client["id"]), include_comments=True)
 
         for blob, label in ((server_text, "server"), (client_text, "client")):
             for line in blob.splitlines():
@@ -228,10 +244,14 @@ class ConfigRenderingTests(unittest.TestCase):
     def test_duplicate_client_names_delete_only_one_peer(self):
         """Regression: deleting by '# Client: <name>' match removed both blocks."""
         manager = build_manager()
-        server = manager.create_wireguard_server({
-            "name": "dup", "protocol": "AWG 1.5", "subnet": "10.27.0.0/24",
-            "auto_start": False,
-        })
+        server = manager.create_wireguard_server(
+            {
+                "name": "dup",
+                "protocol": "AWG 1.5",
+                "subnet": "10.27.0.0/24",
+                "auto_start": False,
+            }
+        )
         first, _ = manager.add_wireguard_client(server["id"], "same-name")
         second, _ = manager.add_wireguard_client(server["id"], "same-name")
 
