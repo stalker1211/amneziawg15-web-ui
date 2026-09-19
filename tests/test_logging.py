@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import unittest
+from pathlib import Path
 
 from tests.support import WEB_UI_DIR
 
@@ -26,7 +27,7 @@ BACKEND_FILES = [
 
 class LoggingSetupTests(unittest.TestCase):
     def setUp(self):
-        from core.logging_setup import configure_logging  # noqa: PLC0415
+        from core.logging_setup import configure_logging
         self.configure_logging = configure_logging
         self._saved_level = os.environ.get("LOG_LEVEL")
 
@@ -60,7 +61,7 @@ class LoggingSetupTests(unittest.TestCase):
             self.assertEqual(logging.getLogger(name).level, logging.WARNING, name)
 
     def test_records_include_timestamp_level_and_module(self):
-        from core.logging_setup import DATE_FORMAT, LOG_FORMAT  # noqa: PLC0415
+        from core.logging_setup import DATE_FORMAT, LOG_FORMAT
 
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)
@@ -84,16 +85,17 @@ class NoBarePrintTests(unittest.TestCase):
         offenders = []
         for relative in BACKEND_FILES:
             path = os.path.join(WEB_UI_DIR, relative)
-            for number, line in enumerate(open(path, encoding="utf-8"), 1):
-                # Anchored to a statement start so Blueprint(...) does not match.
-                if re.match(r"^\s*print\(", line):
-                    offenders.append(f"{relative}:{number}")
+            with open(path, encoding="utf-8") as handle:
+                for number, line in enumerate(handle, 1):
+                    # Anchored to a statement start so Blueprint(...) does not match.
+                    if re.match(r"^\s*print\(", line):
+                        offenders.append(f"{relative}:{number}")
         self.assertEqual(offenders, [], f"use logger.* instead of print(): {offenders}")
 
     def test_every_backend_module_that_logs_has_a_module_logger(self):
         for relative in BACKEND_FILES:
             path = os.path.join(WEB_UI_DIR, relative)
-            source = open(path, encoding="utf-8").read()
+            source = Path(path).read_text(encoding="utf-8")
             if "logger." not in source:
                 continue
             if relative.endswith("logging_setup.py"):

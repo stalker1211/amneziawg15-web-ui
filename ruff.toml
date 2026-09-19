@@ -1,0 +1,13 @@
+# Ruff config for this repo. Self-contained (no `extend` of ~/.config/ruff/ruff.toml, which ub does not
+# have) so the Mac and ub lint alike.
+line-length = 128
+
+[lint]
+ignore = [
+    "E741",   # ambiguous variable name (l, O, I)
+    "E401",   # multiple imports on one line
+    "BLE001", # catch-all `except Exception` is deliberate: the service must survive one bad call
+    "S110",   # try/except/pass: same reason
+    "S112",   # try/except/continue: same reason
+    "TRY004", # ValueError for a wrong payload type is what the routes turn into HTTP 400
+]

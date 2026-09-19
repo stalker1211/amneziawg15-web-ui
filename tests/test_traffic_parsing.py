@@ -9,7 +9,7 @@ which must be ignored.
 
 import unittest
 
-from tests.support import CLIENT_PUBLIC_KEY, build_manager
+from tests.support import build_manager
 
 AWG_SHOW_SAMPLE = """interface: wg-abc123
   public key: c2VydmVyUFVCTElDa2V5MDAwMDAwMDAwMDAwMDAwMDA=

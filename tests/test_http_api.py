@@ -5,24 +5,22 @@ environment at import time and constructs a real AmneziaManager, so `build_app()
 below patches the boundaries the same way tests/support.py does.
 """
 
-import json
 import os
 import re
-import sys
 import unittest
+from pathlib import Path
 
-from tests.support import GOLDEN_DIR, WEB_UI_DIR, build_manager
+from tests.support import WEB_UI_DIR, build_manager
 
 STATIC_JS = os.path.join(WEB_UI_DIR, "static", "js")
 
 
 def build_app():
     """Construct the Flask app with a stubbed manager, without touching the system."""
-    from flask import Flask, jsonify, request  # noqa: PLC0415
-
-    from core.helpers import to_bool  # noqa: PLC0415
-    from routes.servers import register_server_routes  # noqa: PLC0415
-    from routes.system import register_system_routes  # noqa: PLC0415
+    from core.helpers import to_bool
+    from flask import Flask, jsonify, request
+    from routes.servers import register_server_routes
+    from routes.system import register_system_routes
 
     manager = build_manager()
 
@@ -43,7 +41,7 @@ def build_app():
         return None
 
     def require_token(view):
-        from functools import wraps  # noqa: PLC0415
+        from functools import wraps
 
         @wraps(view)
         def wrapped(*args, **kwargs):
@@ -239,7 +237,7 @@ class ProtocolTableTests(unittest.TestCase):
 
     def test_frontend_protocols_js_matches_the_backend(self):
         """protocols.js is the UI's copy of the table; it must not drift."""
-        source = open(os.path.join(STATIC_JS, "protocols.js"), encoding="utf-8").read()
+        source = Path(os.path.join(STATIC_JS, "protocols.js")).read_text(encoding="utf-8")
 
         ids = re.findall(r"id:\s*'([^']+)'", source)
         self.assertEqual(ids, list(self.manager.SUPPORTED_PROTOCOLS),
@@ -255,7 +253,7 @@ class ProtocolTableTests(unittest.TestCase):
             r"supportsHeaderRanges:\s*(true|false),[^}]*?"
             r"supportsAwg3:\s*(true|false),[^}]*?"
             r"supportsAwg31:\s*(true|false)",
-            source, re.S)
+            source, re.DOTALL)
         self.assertEqual(len(entries), len(self.manager.SUPPORTED_PROTOCOLS),
                          "could not parse every protocol entry from protocols.js")
         for protocol, s34, ranges, awg3, awg31 in entries:
@@ -271,27 +269,27 @@ class ProtocolTableTests(unittest.TestCase):
     def test_no_hardcoded_protocol_literals_left_in_the_ui(self):
         """Capability checks must go through Protocols, not string comparison."""
         for name in ("app.js", "modals.js"):
-            source = open(os.path.join(STATIC_JS, name), encoding="utf-8").read()
+            source = Path(os.path.join(STATIC_JS, name)).read_text(encoding="utf-8")
             # Display strings such as "AWG 3.0 parameters" are fine; quoted
             # identifiers used for comparison are not.
             offenders = re.findall(r"=== '(AWG [0-9.]+)'|'(AWG [0-9.]+)' ===", source)
             self.assertEqual(offenders, [], f"{name} compares against a protocol literal")
 
     def test_create_server_checks_the_selected_protocol(self):
-        source = open(os.path.join(STATIC_JS, "app.js"), encoding="utf-8").read()
+        source = Path(os.path.join(STATIC_JS, "app.js")).read_text(encoding="utf-8")
         self.assertIn("window.Protocols.supportsAwg3(formData.protocol)", source)
         self.assertNotIn("formData.window.Protocols", source)
 
     def test_header_range_ui_uses_the_header_range_capability(self):
         for name in ("app.js", "modals.js"):
-            source = open(os.path.join(STATIC_JS, name), encoding="utf-8").read()
+            source = Path(os.path.join(STATIC_JS, name)).read_text(encoding="utf-8")
             offenders = re.findall(
                 r"(?:allowRanges|supportsRanges)\s*=\s*window\.Protocols\.supportsS34",
                 source,
             )
             self.assertEqual(offenders, [], f"{name} gates header ranges on S3/S4 support")
 
-        app_source = open(os.path.join(STATIC_JS, "app.js"), encoding="utf-8").read()
+        app_source = Path(os.path.join(STATIC_JS, "app.js")).read_text(encoding="utf-8")
         self.assertIn(
             "window.Protocols.supportsHeaderRanges(protocol) && !headers.some",
             app_source,

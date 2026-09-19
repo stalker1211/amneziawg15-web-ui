@@ -2,11 +2,12 @@
 
 import os
 import re
-import time
 import subprocess
+import time
 from collections import deque
-from flask import Blueprint, request, jsonify
+
 from core.logging_setup import get_logger
+from flask import Blueprint, jsonify, request
 
 # pylint: disable=broad-exception-caught
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
@@ -28,23 +29,21 @@ def register_system_routes(
     default_dns,
 ):
     """Register system and health-related Flask routes on the app."""
-    system_bp = Blueprint('system_routes', __name__)
+    system_bp = Blueprint("system_routes", __name__)
 
-    @system_bp.route('/api/system/status')
+    @system_bp.route("/api/system/status")
     @require_token
     def system_status():
         _, public_ip_geo_country_code = amnezia_manager.lookup_geoip(amnezia_manager.public_ip)
         status = {
-            "awg_available": (
-                os.path.exists("/usr/bin/awg")
-                and os.path.exists("/usr/bin/awg-quick")
-            ),
+            "awg_available": (os.path.exists("/usr/bin/awg") and os.path.exists("/usr/bin/awg-quick")),
             "public_ip": amnezia_manager.public_ip,
             "public_ip_geo_country_code": public_ip_geo_country_code,
             "total_servers": len(amnezia_manager.config["servers"]),
             "total_clients": len(amnezia_manager.config["clients"]),
-            "active_servers": len([s for s in amnezia_manager.config["servers"]
-                                 if amnezia_manager.get_server_status(s["id"]) == "running"]),
+            "active_servers": len(
+                [s for s in amnezia_manager.config["servers"] if amnezia_manager.get_server_status(s["id"]) == "running"]
+            ),
             "timestamp": time.time(),
             # The backend's protocol table. static/js/protocols.js mirrors it for the
             # UI; exposing it here means the mirror can be checked rather than assumed
@@ -67,12 +66,12 @@ def register_system_routes(
                 "default_mtu": default_mtu,
                 "default_subnet": default_subnet,
                 "default_port": default_port,
-                "default_dns": default_dns
-            }
+                "default_dns": default_dns,
+            },
         }
         return jsonify(status)
 
-    @system_bp.route('/api/system/awg-log')
+    @system_bp.route("/api/system/awg-log")
     @require_token
     def get_awg_log():
         """Tail amneziawg-go log with optional interface filtering.
@@ -82,15 +81,15 @@ def register_system_routes(
                     ("(wg0)" or "*** (wg0) ***").
         - Always include general lines that do not mention any interface.
         """
-        interface = (request.args.get('interface') or '').strip()
-        raw_lines = request.args.get('lines', '400')
+        interface = (request.args.get("interface") or "").strip()
+        raw_lines = request.args.get("lines", "400")
         try:
             lines_n = int(raw_lines)
         except Exception:
             lines_n = 400
         lines_n = max(50, min(5000, lines_n))
 
-        log_path = awg_log_file or '/var/log/amnezia/amneziawg-go.log'
+        log_path = awg_log_file or "/var/log/amnezia/amneziawg-go.log"
         if not os.path.exists(log_path):
             return jsonify({"path": log_path, "lines": [], "note": "log file not found"})
 
@@ -113,23 +112,19 @@ def register_system_routes(
             stripped = line.strip()
             if "[amneziawg-go-logged]" in line:
                 return True
-            if stripped.startswith("┌") or stripped.startswith("└") or stripped.startswith("│"):
+            if stripped.startswith(("┌", "└", "│")):
                 return True
-            if stripped.startswith(
-                "| https://github.com/amnezia-vpn/amneziawg-linux-kernel-module"
-            ):
+            if stripped.startswith("| https://github.com/amnezia-vpn/amneziawg-linux-kernel-module"):
                 return True
             if "amneziawg-go is not required" in line:
                 return True
-            if "kernel has first class support for AmneziaWG" in line:
-                return True
-            return False
+            return "kernel has first class support for AmneziaWG" in line
 
         try:
             buf = deque(maxlen=lines_n)
-            with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 for ln in f:
-                    buf.append(ln.rstrip('\n'))
+                    buf.append(ln.rstrip("\n"))
 
             if not interface:
                 filtered = list(buf)
@@ -155,16 +150,18 @@ def register_system_routes(
                     if banner_active and ln.strip().startswith("└"):
                         banner_active = False
 
-            return jsonify({
-                "path": log_path,
-                "lines": filtered,
-                "interface": interface,
-                "total": len(filtered),
-            })
+            return jsonify(
+                {
+                    "path": log_path,
+                    "lines": filtered,
+                    "interface": interface,
+                    "total": len(filtered),
+                }
+            )
         except Exception as e:
             return jsonify({"error": str(e), "path": log_path}), 500
 
-    @system_bp.route('/api/system/refresh-ip')
+    @system_bp.route("/api/system/refresh-ip")
     @require_token
     def refresh_ip():
         """Refresh public IP address"""
@@ -176,16 +173,18 @@ def register_system_routes(
             server["public_ip"] = new_ip
 
         amnezia_manager.save_config()
-        return jsonify({
-            "public_ip": new_ip,
-            "public_ip_geo_country_code": public_ip_geo_country_code,
-        })
+        return jsonify(
+            {
+                "public_ip": new_ip,
+                "public_ip_geo_country_code": public_ip_geo_country_code,
+            }
+        )
 
-    @system_bp.route('/api/system/iptables-test')
+    @system_bp.route("/api/system/iptables-test")
     @require_token
     def iptables_test():
         """Test iptables setup for a specific server"""
-        server_id = request.args.get('server_id')
+        server_id = request.args.get("server_id")
         if not server_id:
             return jsonify({"error": "server_id parameter required"}), 400
 
@@ -199,10 +198,9 @@ def register_system_routes(
             # Uses -S rather than -L because -L omits the interface column, which
             # made the INPUT/FORWARD checks always report "Not found".
             checks = [
-                ("iptables -S INPUT", ["iptables", "-S", "INPUT"], server['interface']),
-                ("iptables -S FORWARD", ["iptables", "-S", "FORWARD"], server['interface']),
-                ("iptables -t nat -S POSTROUTING",
-                 ["iptables", "-t", "nat", "-S", "POSTROUTING"], server['subnet']),
+                ("iptables -S INPUT", ["iptables", "-S", "INPUT"], server["interface"]),
+                ("iptables -S FORWARD", ["iptables", "-S", "FORWARD"], server["interface"]),
+                ("iptables -t nat -S POSTROUTING", ["iptables", "-t", "nat", "-S", "POSTROUTING"], server["subnet"]),
             ]
 
             results = {}
@@ -213,18 +211,20 @@ def register_system_routes(
                 else:
                     results[f"{label} | grep {needle}"] = "Found" if needle in output else "Not found"
 
-            return jsonify({
-                "server_id": server_id,
-                "server_name": server['name'],
-                "interface": server['interface'],
-                "subnet": server['subnet'],
-                "iptables_check": results
-            })
+            return jsonify(
+                {
+                    "server_id": server_id,
+                    "server_name": server["name"],
+                    "interface": server["interface"],
+                    "subnet": server["subnet"],
+                    "iptables_check": results,
+                }
+            )
 
         except Exception as e:
-            return jsonify({"error": f"iptables test failed: {str(e)}"}), 500
+            return jsonify({"error": f"iptables test failed: {e!s}"}), 500
 
-    @system_bp.route('/status')
+    @system_bp.route("/status")
     def get_container_uptime():
         """Return simple text uptime for container health checks."""
         result = subprocess.check_output(["stat", "-c %Y", "/proc/1/cmdline"], text=True)

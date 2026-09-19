@@ -48,7 +48,7 @@ class FakeSocketIO:
 
 def build_manager(**overrides):
     """Return an AmneziaManager wired to temp dirs with system edges stubbed."""
-    from services.amnezia_manager import AmneziaManager  # noqa: PLC0415
+    from services.amnezia_manager import AmneziaManager
 
     class _TestManager(AmneziaManager):
         """Overrides only the boundaries: no network, no /var/log, no real keys."""

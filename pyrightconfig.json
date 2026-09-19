@@ -1,0 +1,20 @@
+{
+    // Pylance/pyright settings for this repo. A config file overrides the editor's python.analysis
+    // settings, hence typeCheckingMode here.
+    "typeCheckingMode": "basic",
+    "executionEnvironments": [
+        {
+            // tests/support.py puts web-ui/ on sys.path at runtime, and the tests import `tests.support`
+            // from the repo root. Tests assume calls succeed (unpacking/indexing results typed `... | None`)
+            // and monkeypatch the manager, so these checks are noise here; web-ui/ keeps them all.
+            "root": "tests",
+            "extraPaths": ["web-ui", "."],
+            "reportOptionalSubscript": "none",
+            "reportOptionalIterable": "none",
+            "reportOptionalMemberAccess": "none",
+            "reportAttributeAccessIssue": "none",
+            "reportGeneralTypeIssues": "none"
+        },
+        { "root": ".", "extraPaths": ["web-ui"] }
+    ]
+}

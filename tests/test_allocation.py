@@ -4,7 +4,6 @@ import unittest
 
 # Tests exercise internals on purpose and use self-describing method names.
 # pylint: disable=missing-function-docstring,missing-class-docstring,protected-access
-
 from tests.support import build_manager
 
 

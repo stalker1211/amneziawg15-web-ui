@@ -4,6 +4,7 @@
 import argparse
 import os
 import sys
+
 import requests
 from requests.auth import HTTPBasicAuth
 
@@ -125,8 +126,9 @@ def main():
     p.add_argument("--base-url", required=True, help="Base URL (e.g. http://192.168.1.3:8080)")
     p.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout (default: 5s)")
     p.add_argument("--user", default=os.getenv("AMNEZIA_API_USER"), help="Basic auth user (or AMNEZIA_API_USER)")
-    p.add_argument("--password", default=os.getenv("AMNEZIA_API_PASSWORD"),
-                    help="Basic auth password (or AMNEZIA_API_PASSWORD)")
+    p.add_argument(
+        "--password", default=os.getenv("AMNEZIA_API_PASSWORD"), help="Basic auth password (or AMNEZIA_API_PASSWORD)"
+    )
     p.add_argument("--token", default=os.getenv("AMNEZIA_API_TOKEN"), help="Bearer token (or AMNEZIA_API_TOKEN)")
     p.add_argument("--refresh-egress", action="store_true", help="Refresh per-server egress IP before showing status")
     args = p.parse_args()
@@ -164,8 +166,9 @@ def main():
                 }
 
         sname = _colorize(server.get("name", "-"), _Ansi.BOLD, _Ansi.CYAN, enabled=color_enabled)
-        sstatus = _colorize(server.get("status", "-"), _status_color(server.get("status", "")),
-                             _Ansi.BOLD, enabled=color_enabled)
+        sstatus = _colorize(
+            server.get("status", "-"), _status_color(server.get("status", "")), _Ansi.BOLD, enabled=color_enabled
+        )
         server_public = server.get("public_ip", "-")
         server_port = server.get("port", "-")
         probe = server.get("egress_probe") if isinstance(server.get("egress_probe"), dict) else None
@@ -195,9 +198,10 @@ def main():
             if isinstance(client, dict):
                 _print_client(client, traffic or {}, color_enabled)
 
-        print("")
+        print()
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())

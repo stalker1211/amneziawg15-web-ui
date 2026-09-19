@@ -32,7 +32,7 @@ def configure_logging(level=None):
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
-    handler._amnezia_handler = True  # pylint: disable=protected-access
+    handler._amnezia_handler = True  # pyright: ignore[reportAttributeAccessIssue]  -- marker, read back above
     root.addHandler(handler)
 
     # These are chatty and drown out our own messages. urllib3 in particular logs

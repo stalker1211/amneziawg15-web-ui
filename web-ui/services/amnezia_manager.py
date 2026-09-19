@@ -17,11 +17,6 @@ from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 from requests.adapters import HTTPAdapter
 
-# pylint: disable=broad-exception-caught,too-many-lines,too-many-instance-attributes,too-many-public-methods
-# pylint: disable=too-many-arguments,missing-function-docstring,invalid-name,too-many-locals
-# pylint: disable=too-many-branches,too-many-statements,too-many-return-statements
-# pylint: disable=too-many-boolean-expressions,no-else-return
-
 logger = get_logger(__name__)
 
 
@@ -477,6 +472,7 @@ class AmneziaManager:
                         # Never crash the Web UI on boot due to a VPN startup failure.
                         server_name = server.get("name", server.get("id"))
                         logger.error("Auto-start failed for server '%s': %s", server_name, e)
+
     def normalize_protocol(self, value):
         """Map any accepted spelling to a canonical name from SUPPORTED_PROTOCOLS.
 
@@ -656,7 +652,7 @@ class AmneziaManager:
         else:
             parsed_headers = [self.parse_header_value(transport[key], protocol) for key in ("H1", "H2", "H3", "H4")]
             for index, current in enumerate(parsed_headers):
-                for other in parsed_headers[index + 1:]:
+                for other in parsed_headers[index + 1 :]:
                     if current["start"] <= other["end"] and other["start"] <= current["end"]:
                         raise ValueError(f"H1-H4 ranges must not intersect for {protocol}")
 
@@ -664,17 +660,14 @@ class AmneziaManager:
             header_protection_key = sanitize_config_value(params.get("HeaderProtectionKey") or "")
             if header_protection_key:
                 if not self.is_valid_wireguard_key(header_protection_key):
-                    raise ValueError(
-                        "HeaderProtectionKey must be a 32-byte base64 key (generate one with 'awg genkey')"
-                    )
+                    raise ValueError("HeaderProtectionKey must be a 32-byte base64 key (generate one with 'awg genkey')")
                 # amneziawg-go refuses the config outright if any S value is below
                 # the 12-byte header cipher nonce it slices out of the padding.
                 for key in ("S1", "S2", "S3", "S4"):
                     value = transport.get(key)
                     if value is None or value < self.HEADER_CIPHER_NONCE_SIZE:
                         raise ValueError(
-                            f"{key} must be at least {self.HEADER_CIPHER_NONCE_SIZE} "
-                            "when HeaderProtectionKey is set"
+                            f"{key} must be at least {self.HEADER_CIPHER_NONCE_SIZE} when HeaderProtectionKey is set"
                         )
                 transport["HeaderProtectionKey"] = header_protection_key
 
@@ -857,7 +850,7 @@ class AmneziaManager:
         S1 = random.randint(15, min(150, mtu - 148))
         s2_candidates = [s for s in range(15, min(150, mtu - 92) + 1) if s != S1 + 56]
         S2 = random.choice(s2_candidates)
-        params = {
+        params: dict[str, int | str] = {
             "S1": S1,
             "S2": S2,
             "H1": random.randint(10000, 100000),
@@ -880,11 +873,13 @@ class AmneziaManager:
         jmin = random.randint(4, mtu - 2)
         jmax = random.randint(jmin + 1, mtu)
         defaults = self.default_client_defaults()
-        defaults.update({
-            "Jc": random.randint(4, 12),
-            "Jmin": jmin,
-            "Jmax": jmax,
-        })
+        defaults.update(
+            {
+                "Jc": random.randint(4, 12),
+                "Jmin": jmin,
+                "Jmax": jmax,
+            }
+        )
         return defaults
 
     def create_wireguard_server(self, server_data):
@@ -1065,8 +1060,6 @@ AllowedIPs = {client["client_ip"]}/32
         if not isinstance(params, dict):
             raise ValueError("Invalid payload")
 
-        mtu = int(server.get("mtu", self.default_mtu))
-
         next_protocol = self.normalize_protocol(params.get("protocol", server.get("protocol")))
         next_transport_params = self.validate_transport_params(next_protocol, params)
 
@@ -1082,11 +1075,7 @@ AllowedIPs = {client["client_ip"]}/32
         for embedded in server.get("clients") or []:
             apply_to_client_obj(embedded)
             cid = embedded.get("id")
-            if (
-                cid
-                and isinstance(self.config.get("clients"), dict)
-                and cid in self.config["clients"]
-            ):
+            if cid and isinstance(self.config.get("clients"), dict) and cid in self.config["clients"]:
                 apply_to_client_obj(self.config["clients"][cid])
 
         # Rewrite server config file
@@ -1097,9 +1086,8 @@ AllowedIPs = {client["client_ip"]}/32
         # Restart if running
         was_running = self.get_server_status(server_id) == "running"
         restarted = False
-        if was_running:
-            if self.stop_server(server_id):
-                restarted = bool(self.start_server(server_id))
+        if was_running and self.stop_server(server_id):
+            restarted = bool(self.start_server(server_id))
 
         return {
             "status": "updated",
@@ -1241,9 +1229,7 @@ AllowedIPs = {client["client_ip"]}/32
 
         # Remove all clients associated with this server
         self.config["clients"] = {
-            key: value
-            for key, value in self.config["clients"].items()
-            if value.get("server_id") != server_id
+            key: value for key, value in self.config["clients"].items() if value.get("server_id") != server_id
         }
 
         # Remove the server
@@ -1679,11 +1665,7 @@ PersistentKeepalive = 25
     def get_client_configs(self, server_id=None):
         """Get all client configs, optionally filtered by server"""
         if server_id:
-            return [
-                client
-                for client in self.config["clients"].values()
-                if client.get("server_id") == server_id
-            ]
+            return [client for client in self.config["clients"].values() if client.get("server_id") == server_id]
         return list(self.config["clients"].values())
 
     def get_traffic_for_server(self, server_id):

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Main Flask entrypoint for the AmneziaWG web UI."""
 
 import os
@@ -95,6 +94,7 @@ def _load_or_create_secret_key(path):
     os.chmod(path, 0o600)
     return key
 
+
 # Socket.IO CORS origins (comma-separated list or '*' for all)
 # Empty/not set = same-origin only (recommended for production)
 ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "").strip()
@@ -102,31 +102,40 @@ if ALLOWED_ORIGINS_RAW == "*":
     ALLOWED_ORIGINS = "*"
 elif ALLOWED_ORIGINS_RAW:
     # Parse comma-separated list and strip whitespace
-    ALLOWED_ORIGINS = [
-        origin.strip()
-        for origin in ALLOWED_ORIGINS_RAW.split(",")
-        if origin.strip()
-    ]
+    ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_RAW.split(",") if origin.strip()]
 else:
     # Default: same-origin only (let Flask-SocketIO use its default behavior)
     ALLOWED_ORIGINS = []
 
 logger.info("=== AmneziaWG Web UI configuration ===")
-logger.info("dirs: base=%s templates=%s (exists=%s) static=%s (exists=%s)",
-            BASE_DIR, TEMPLATE_DIR, os.path.exists(TEMPLATE_DIR),
-            STATIC_DIR, os.path.exists(STATIC_DIR))
-logger.info("nginx_port=%s auto_start=%s api_token=%s allowed_origins=%s",
-            NGINX_PORT, AUTO_START_SERVERS,
-            "<set>" if API_TOKEN else "<not set>",
-            ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>")
-logger.info("defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s",
-            DEFAULT_MTU, DEFAULT_SUBNET, DEFAULT_PORT, DNS_SERVERS,
-            DEFAULT_ENABLE_NAT, DEFAULT_BLOCK_LAN_CIDRS, ENABLE_GEOIP)
+logger.info(
+    "dirs: base=%s templates=%s (exists=%s) static=%s (exists=%s)",
+    BASE_DIR,
+    TEMPLATE_DIR,
+    os.path.exists(TEMPLATE_DIR),
+    STATIC_DIR,
+    os.path.exists(STATIC_DIR),
+)
+logger.info(
+    "nginx_port=%s auto_start=%s api_token=%s allowed_origins=%s",
+    NGINX_PORT,
+    AUTO_START_SERVERS,
+    "<set>" if API_TOKEN else "<not set>",
+    ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>",
+)
+logger.info(
+    "defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s",
+    DEFAULT_MTU,
+    DEFAULT_SUBNET,
+    DEFAULT_PORT,
+    DNS_SERVERS,
+    DEFAULT_ENABLE_NAT,
+    DEFAULT_BLOCK_LAN_CIDRS,
+    ENABLE_GEOIP,
+)
 logger.info("config_dir=%s web_ui_port=%s (internal)", CONFIG_DIR, WEB_UI_PORT)
-logger.debug("template files: %s",
-             os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
-logger.debug("static files: %s",
-             os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
+logger.debug("template files: %s", os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
+logger.debug("static files: %s", os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
 
 app = create_flask_app(TEMPLATE_DIR, STATIC_DIR)
 app.secret_key = _load_or_create_secret_key(SECRET_KEY_FILE)
@@ -164,12 +173,14 @@ def require_json_for_mutations():
         return None
 
     if not request.is_json:
-        return jsonify({
-            "error": (
-                "Content-Type: application/json is required for this request "
-                f"(got {request.headers.get('Content-Type') or 'none'})"
-            )
-        }), 415
+        return jsonify(
+            {
+                "error": (
+                    "Content-Type: application/json is required for this request "
+                    f"(got {request.headers.get('Content-Type') or 'none'})"
+                )
+            }
+        ), 415
 
     return None
 
@@ -177,6 +188,7 @@ def require_json_for_mutations():
 # API Token Auth decorator
 def require_token(f):
     """Enforce API token auth if API_TOKEN is set (defense-in-depth with Nginx Basic Auth)."""
+
     @wraps(f)
     def decorated(*args, **kwargs):
         # If no API_TOKEN is configured, allow access (rely on Nginx Basic Auth)
@@ -195,17 +207,13 @@ def require_token(f):
                 token = auth_header[7:].strip()  # Remove 'Bearer ' prefix
 
         if not token:
-            return jsonify({
-                "error": (
-                    "Missing API token "
-                    "(use X-API-Token header or Authorization: Bearer ...)"
-                )
-            }), 401
+            return jsonify({"error": ("Missing API token (use X-API-Token header or Authorization: Bearer ...)")}), 401
 
         if token != API_TOKEN:
             return jsonify({"error": "Invalid API token"}), 401
 
         return f(*args, **kwargs)
+
     return decorated
 
 
@@ -262,9 +270,7 @@ def index():
     except OSError:
         cache_bust = int(time.time())
 
-    return render_template(
-        "index.html", cache_bust=cache_bust, build_label=BUILD_LABEL
-    )
+    return render_template("index.html", cache_bust=cache_bust, build_label=BUILD_LABEL)
 
 
 # Explicit static file route to ensure they're served
