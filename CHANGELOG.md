@@ -54,6 +54,12 @@ Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compati
   `web-ui/BUILD` by `publish_dockerhub.sh` (n = builds that day; a failed build still uses a
   number, so gaps are normal). Plain `docker build` or a bind-mounted source shows `dev`.
 
+### Tooling (2026-09-20)
+- **`scripts/api_status.py` is a uv PEP 723 script.** It declares `requests` in an inline
+  `# /// script` block and runs through a `uv run --script` shebang, so it no longer fails
+  with `ModuleNotFoundError` on a host whose `python3` has no `requests`. Run it directly;
+  it needs `uv` on `PATH`.
+
 ## Version 2.0 (2026-08-07)
 
 Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and
