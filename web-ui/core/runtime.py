@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 def create_flask_app(template_dir, static_dir):
     """Create and configure the Flask application instance.
 
-    app.secret_key is set by app.py from a persisted file, not here, so the
+    app.secret_key is set by core/guards.py from a persisted file, not here, so the
     session cookie used to authorize WebSocket handshakes (see
     register_socket_handlers) survives a container restart.
     """
@@ -41,7 +41,7 @@ def register_socket_handlers(socketio, amnezia_manager, nginx_port):
         # nginx does not gate /socket.io/ with Basic Auth (WebKit does not reliably
         # reattach cached Basic Auth credentials to a WS upgrade handshake, causing
         # endless re-prompts on iPadOS Safari). Authorization instead rides the
-        # session cookie app.py sets on any request that already cleared nginx's
+        # session cookie core/guards.py sets on any request that already cleared nginx's
         # Basic Auth, which browsers do attach to the WS handshake.
         if not session.get("nginx_authenticated"):
             logger.warning("WebSocket connect rejected (no auth cookie) from %s", request.remote_addr)

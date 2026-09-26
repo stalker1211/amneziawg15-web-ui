@@ -118,6 +118,49 @@ def build_manager(**overrides):
     return _TestManager(**kwargs)
 
 
+def build_app(api_token="", secret_key_path=None, awg_log_file="/nonexistent/awg.log", manager=None):
+    """The Flask app wired as app.py does it -- real guards and routes -- around a stubbed manager.
+
+    app.py itself is not imported: it builds everything at import time against
+    /etc/amnezia and a real AmneziaManager.
+    """
+    from core.guards import install_guards
+    from core.helpers import to_bool
+    from flask import Flask
+    from routes.servers import register_server_routes
+    from routes.system import register_system_routes
+
+    manager = manager or build_manager()
+
+    app = Flask(__name__)
+    app.config.update(TESTING=True)
+    if secret_key_path is None:
+        secret_key_path = os.path.join(manager.config_dir, ".flask_secret_key")
+    require_token = install_guards(app, secret_key_path=secret_key_path, api_token=api_token)
+
+    register_system_routes(
+        app,
+        require_token,
+        manager,
+        awg_log_file=awg_log_file,
+        nginx_port="80",
+        auto_start_servers=False,
+        default_mtu=1420,
+        default_subnet="10.0.0.0/24",
+        default_port=51820,
+        default_dns="1.1.1.1",
+    )
+    register_server_routes(
+        app,
+        require_token,
+        manager,
+        to_bool=to_bool,
+        default_enable_nat=True,
+        default_block_lan_cidrs=True,
+    )
+    return app, manager
+
+
 def normalize_conf(text):
     """Strip values that legitimately change between runs (timestamps)."""
     lines = []

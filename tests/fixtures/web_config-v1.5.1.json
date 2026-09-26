@@ -1,0 +1,103 @@
+{
+  "servers": [
+    {
+      "id": "leg151",
+      "name": "test-AWG 1.5",
+      "protocol": "wireguard",
+      "port": 51820,
+      "status": "stopped",
+      "interface": "wg-leg151",
+      "config_path": "/etc/amnezia/amneziawg/wg-leg151.conf",
+      "server_public_key": "c2VydmVyUFVCTElDa2V5MDAwMDAwMDAwMDAwMDAwMDA=",
+      "server_private_key": "c2VydmVyUFJJVkFURWtleTAwMDAwMDAwMDAwMDAwMDA=",
+      "subnet": "10.15.0.0/24",
+      "server_ip": "10.15.0.1",
+      "mtu": 1420,
+      "public_ip": "203.0.113.9",
+      "obfuscation_enabled": true,
+      "obfuscation_params": {
+        "Jc": 8,
+        "Jmin": 40,
+        "Jmax": 70,
+        "S1": 50,
+        "S2": 60,
+        "H1": 1000,
+        "H2": 2000,
+        "H3": 3000,
+        "H4": 4000,
+        "I1": "",
+        "I2": "",
+        "I3": "",
+        "I4": "",
+        "I5": ""
+      },
+      "auto_start": false,
+      "enable_nat": true,
+      "block_lan_cidrs": true,
+      "dns": ["1.1.1.1", "8.8.8.8"],
+      "clients": [
+        {
+          "id": "cli151",
+          "name": "phone",
+          "server_id": "leg151",
+          "server_name": "test-AWG 1.5",
+          "status": "inactive",
+          "created_at": 1767225600.0,
+          "client_private_key": "Y2xpZW50UFJJVkFURWtleTAwMDAwMDAwMDAwMDAwMDA=",
+          "client_public_key": "Y2xpZW50UFVCTElDa2V5MDAwMDAwMDAwMDAwMDAwMDA=",
+          "preshared_key": "cHJlc2hhcmVka2V5MDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+          "client_ip": "10.15.0.2",
+          "obfuscation_enabled": true,
+          "obfuscation_params": {
+            "Jc": 8,
+            "Jmin": 40,
+            "Jmax": 70,
+            "S1": 50,
+            "S2": 60,
+            "H1": 1000,
+            "H2": 2000,
+            "H3": 3000,
+            "H4": 4000,
+            "I1": "",
+            "I2": "",
+            "I3": "",
+            "I4": "",
+            "I5": ""
+          }
+        }
+      ],
+      "created_at": 1767225600.0
+    }
+  ],
+  "clients": {
+    "cli151": {
+      "id": "cli151",
+      "name": "phone",
+      "server_id": "leg151",
+      "server_name": "test-AWG 1.5",
+      "status": "inactive",
+      "created_at": 1767225600.0,
+      "client_private_key": "Y2xpZW50UFJJVkFURWtleTAwMDAwMDAwMDAwMDAwMDA=",
+      "client_public_key": "Y2xpZW50UFVCTElDa2V5MDAwMDAwMDAwMDAwMDAwMDA=",
+      "preshared_key": "cHJlc2hhcmVka2V5MDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+      "client_ip": "10.15.0.2",
+      "obfuscation_enabled": true,
+      "obfuscation_params": {
+        "Jc": 8,
+        "Jmin": 40,
+        "Jmax": 70,
+        "S1": 50,
+        "S2": 60,
+        "H1": 1000,
+        "H2": 2000,
+        "H3": 3000,
+        "H4": 4000,
+        "I1": "",
+        "I2": "",
+        "I3": "",
+        "I4": "",
+        "I5": ""
+      }
+    }
+  }
+}

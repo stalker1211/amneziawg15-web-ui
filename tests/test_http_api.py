@@ -1,86 +1,19 @@
 """Tests for the HTTP layer: the anti-CSRF guard, token auth, and serialization.
 
-Uses Flask's test client, so no container is needed. The app module reads a lot of
-environment at import time and constructs a real AmneziaManager, so `build_app()`
-below patches the boundaries the same way tests/support.py does.
+Uses Flask's test client, so no container is needed. `build_app()` (tests/support.py)
+installs the production guards from core/guards.py and the real routes around a
+stubbed manager.
 """
 
 import os
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
-from tests.support import WEB_UI_DIR, build_manager
+from tests.support import WEB_UI_DIR, build_app
 
 STATIC_JS = os.path.join(WEB_UI_DIR, "static", "js")
-
-
-def build_app():
-    """Construct the Flask app with a stubbed manager, without touching the system."""
-    from core.helpers import to_bool
-    from flask import Flask, jsonify, request
-    from routes.servers import register_server_routes
-    from routes.system import register_system_routes
-
-    manager = build_manager()
-
-    app = Flask(__name__)
-    app.config.update(TESTING=True)
-
-    api_token = os.environ.get("TEST_API_TOKEN", "")
-
-    # Mirrors app.py: reject non-JSON mutations before anything else runs.
-    @app.before_request
-    def require_json_for_mutations():
-        if request.method in ("GET", "HEAD", "OPTIONS"):
-            return None
-        if not request.path.startswith("/api/"):
-            return None
-        if not request.is_json:
-            return jsonify({"error": "Content-Type: application/json is required"}), 415
-        return None
-
-    def require_token(view):
-        from functools import wraps
-
-        @wraps(view)
-        def wrapped(*args, **kwargs):
-            if not api_token:
-                return view(*args, **kwargs)
-            token = (request.headers.get("X-API-Token") or "").strip()
-            if not token:
-                auth = request.headers.get("Authorization", "")
-                if auth.startswith("Bearer "):
-                    token = auth[7:].strip()
-            if not token:
-                return jsonify({"error": "Missing API token"}), 401
-            if token != api_token:
-                return jsonify({"error": "Invalid API token"}), 401
-            return view(*args, **kwargs)
-
-        return wrapped
-
-    register_system_routes(
-        app,
-        require_token,
-        manager,
-        awg_log_file="/nonexistent/awg.log",
-        nginx_port="80",
-        auto_start_servers=False,
-        default_mtu=1420,
-        default_subnet="10.0.0.0/24",
-        default_port=51820,
-        default_dns="1.1.1.1",
-    )
-    register_server_routes(
-        app,
-        require_token,
-        manager,
-        to_bool=to_bool,
-        default_enable_nat=True,
-        default_block_lan_cidrs=True,
-    )
-    return app, manager
 
 
 class CsrfGuardTests(unittest.TestCase):
@@ -169,12 +102,8 @@ class CreateServerValidationTests(unittest.TestCase):
 
 class TokenAuthTests(unittest.TestCase):
     def setUp(self):
-        os.environ["TEST_API_TOKEN"] = "s3cr3t"
-        self.app, _ = build_app()
+        self.app, _ = build_app(api_token="s3cr3t")
         self.client = self.app.test_client()
-
-    def tearDown(self):
-        os.environ.pop("TEST_API_TOKEN", None)
 
     def test_missing_token_rejected_and_message_mentions_token(self):
         response = self.client.get("/api/servers")
@@ -357,16 +286,67 @@ class SystemRoutesTests(unittest.TestCase):
         self.assertEqual(payload["lines"], [])
         self.assertIn("note", payload)
 
-    def test_awg_log_clamps_line_count(self):
-        for requested, expected in (("1", 50), ("999999", 5000), ("abc", 400)):
-            payload = self.client.get(f"/api/system/awg-log?lines={requested}").get_json()
-            # The file is missing, so only the clamping path is observable; assert it
-            # does not raise and returns the documented shape.
-            self.assertIn("path", payload)
-
     def test_iptables_test_requires_server_id(self):
         self.assertEqual(self.client.get("/api/system/iptables-test").status_code, 400)
         self.assertEqual(self.client.get("/api/system/iptables-test?server_id=nope").status_code, 404)
+
+
+# Two daemons sharing one log, as scripts/amneziawg-go-logged.sh writes it: a wrapper
+# line, the "not required" banner each daemon prints at start, then (iface) lines.
+AWG_LOG = """\
+2026-09-26T10:00:00+00:00 [amneziawg-go-logged] starting: wg-aaa111
+┌──────────────────────────────────────────────────────┐
+│   Running amneziawg-go is not required because this   │
+│   Linux kernel has first class support for AmneziaWG.  │
+| https://github.com/amnezia-vpn/amneziawg-linux-kernel-module
+└──────────────────────────────────────────────────────┘
+INFO: (wg-aaa111) 2026/09/26 10:00:01 Starting amneziawg-go version 0.2
+2026-09-26T10:00:02+00:00 [amneziawg-go-logged] starting: wg-bbb222
+┌──────────────────────────────────────────────────────┐
+│   Running amneziawg-go is not required because this   │
+└──────────────────────────────────────────────────────┘
+INFO: (wg-bbb222) 2026/09/26 10:00:03 Starting amneziawg-go version 0.2
+DEBUG: (wg-aaa111) 2026/09/26 10:00:04 Received handshake initiation
+*** (wg-bbb222) *** Interface closed
+a general line that names no interface
+"""
+
+
+class AwgLogTests(unittest.TestCase):
+    def setUp(self):
+        self.log_path = os.path.join(tempfile.mkdtemp(prefix="awg-log-"), "amneziawg-go.log")
+        Path(self.log_path).write_text(AWG_LOG, encoding="utf-8")
+        self.app, _ = build_app(awg_log_file=self.log_path)
+        self.client = self.app.test_client()
+
+    def _lines(self, query=""):
+        response = self.client.get(f"/api/system/awg-log{query}")
+        self.assertEqual(response.status_code, 200)
+        return response.get_json()["lines"]
+
+    def test_no_filter_returns_everything(self):
+        self.assertEqual(self._lines(), AWG_LOG.splitlines())
+
+    def test_interface_filter_keeps_own_lines_own_banner_and_general_lines(self):
+        lines = AWG_LOG.splitlines()
+        own_banner = lines[0:6]  # wrapper line + the banner printed while wg-aaa111 started
+        self.assertEqual(
+            self._lines("?interface=wg-aaa111"),
+            [*own_banner, lines[6], lines[12], lines[14]],
+        )
+
+    def test_interface_filter_drops_other_daemons_banner_and_lines(self):
+        lines = self._lines("?interface=wg-bbb222")
+        self.assertFalse([ln for ln in lines if "wg-aaa111" in ln])
+        self.assertIn("*** (wg-bbb222) *** Interface closed", lines)
+        self.assertEqual(sum("not required" in ln for ln in lines), 1)
+
+    def test_line_count_is_clamped(self):
+        Path(self.log_path).write_text("".join(f"line {n}\n" for n in range(6000)), encoding="utf-8")
+        for requested, expected in (("1", 50), ("60", 60), ("abc", 400), ("999999", 5000)):
+            lines = self._lines(f"?lines={requested}")
+            self.assertEqual(len(lines), expected, requested)
+            self.assertEqual(lines[-1], "line 5999")
 
 
 if __name__ == "__main__":
