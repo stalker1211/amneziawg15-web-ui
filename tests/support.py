@@ -7,8 +7,10 @@ exercise the real logic.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
+from unittest import mock
 
 # Test doubles intentionally ignore arguments and skip docstrings.
 # pylint: disable=missing-function-docstring,unused-argument,import-outside-toplevel
@@ -31,19 +33,138 @@ PUBLIC_IP = "203.0.113.9"
 
 
 class FakeSocketIO:
-    """Records emits; runs background tasks inline-free (never starts them)."""
+    """Records emits and sleeps. Background tasks are dropped unless `run_tasks`,
+    in which case they run inline (the traffic loop needs a way out: see StopLoop)."""
 
-    def __init__(self):
+    def __init__(self, run_tasks=False):
         self.emitted = []
+        self.slept = []
+        self.run_tasks = run_tasks
 
     def emit(self, event, data=None, **_kwargs):
         self.emitted.append((event, data))
 
-    def sleep(self, _seconds):
-        return None
+    def sleep(self, seconds):
+        self.slept.append(seconds)
 
-    def start_background_task(self, _target, *_args, **_kwargs):
-        return None
+    def start_background_task(self, target, *args, **kwargs):
+        if self.run_tasks:
+            target(*args, **kwargs)
+
+
+class FakeSubprocess:
+    """Stands in for `subprocess.run`: records every call and answers from a script.
+
+    `respond(prefix, result)` matches calls whose argv starts with `prefix`; the latest
+    matching rule wins, and unmatched calls succeed with empty stdout. `result` is
+    stdout (str), a non-zero exit code (int), an exception to raise, or a callable
+    taking (argv, kwargs) that returns one of those.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.rules = []
+
+    def respond(self, prefix, result):
+        self.rules.append((tuple(prefix), result))
+        return self
+
+    def with_wg_keys(self):
+        return (
+            self.respond(["wg", "genkey"], SERVER_PRIVATE_KEY)
+            .respond(["wg", "pubkey"], SERVER_PUBLIC_KEY)
+            .respond(["wg", "genpsk"], PRESHARED_KEY)
+        )
+
+    def argvs(self):
+        return [call["args"] for call in self.calls]
+
+    def __call__(self, args, **kwargs):
+        self.calls.append({"args": args, **kwargs})
+        result = ""
+        for prefix, candidate in reversed(self.rules):
+            if tuple(args[: len(prefix)]) == prefix:
+                result = candidate
+                break
+        if callable(result):
+            result = result(args, kwargs)
+        if isinstance(result, BaseException):
+            raise result
+        if isinstance(result, int):
+            if kwargs.get("check"):
+                raise subprocess.CalledProcessError(result, args, output="", stderr="failed")
+            return subprocess.CompletedProcess(args, result, stdout="", stderr="failed")
+        return subprocess.CompletedProcess(args, 0, stdout=result, stderr="")
+
+
+class SystemPaths:
+    """Patch `os.path.exists` for the two system paths the manager probes.
+
+    `interfaces` lists the names under /sys/class/net (i.e. interfaces that are up);
+    `scripts` says whether /app/scripts/*_iptables.sh exist. Every other path is real.
+    """
+
+    def __init__(self, interfaces=(), scripts=True):
+        self.interfaces = set(interfaces)
+        self.scripts = scripts
+        self._real_exists = os.path.exists
+        self._patcher = mock.patch("os.path.exists", self._exists)
+
+    def _exists(self, path):
+        path = str(path)
+        if path.startswith("/sys/class/net/"):
+            return path.rsplit("/", 1)[-1] in self.interfaces
+        if path.startswith("/app/scripts/"):
+            return self.scripts
+        return self._real_exists(path)
+
+    def start(self, test_case):
+        self._patcher.start()
+        test_case.addCleanup(self._patcher.stop)
+        return self
+
+
+def build_real_manager(test_case, fake_subprocess=None, **overrides):
+    """An AmneziaManager running its real command, key and interface code.
+
+    Only the constructor's own edges are stubbed (directories, public-IP detection,
+    the traffic thread); every subprocess call goes to a FakeSubprocess, patched for
+    the duration of `test_case`. Returns (manager, fake_subprocess).
+    """
+    from services.amnezia_manager import AmneziaManager
+
+    fake = fake_subprocess or FakeSubprocess().with_wg_keys()
+    patcher = mock.patch("services.amnezia_manager.subprocess.run", fake)
+    patcher.start()
+    test_case.addCleanup(patcher.stop)
+
+    class _RealSystemManager(AmneziaManager):
+        def ensure_directories(self):
+            os.makedirs(self.config_dir, exist_ok=True)
+            os.makedirs(self.wireguard_config_dir, exist_ok=True)
+
+        def detect_public_ip(self):
+            return PUBLIC_IP
+
+        def start_traffic_monitoring(self):
+            return None
+
+    tmp = tempfile.mkdtemp(prefix="awg-sys-")
+    kwargs = {
+        "socketio_instance": FakeSocketIO(run_tasks=True),
+        "auto_start_servers": False,
+        "default_mtu": 1420,
+        "default_subnet": "10.0.0.0/24",
+        "default_port": 51820,
+        "dns_servers": ["1.1.1.1"],
+        "default_enable_nat": True,
+        "default_block_lan_cidrs": True,
+        "config_dir": tmp,
+        "wireguard_config_dir": tmp,
+        "config_file": os.path.join(tmp, "web_config.json"),
+    }
+    kwargs.update(overrides)
+    return _RealSystemManager(**kwargs), fake
 
 
 def build_manager(**overrides):

@@ -297,5 +297,30 @@ class ServerCreationValidationTests(unittest.TestCase):
                 self.assertGreaterEqual(validated[key], self.m.HEADER_CIPHER_NONCE_SIZE, params)
 
 
+class HelperTests(unittest.TestCase):
+    """core/helpers.py: parse env/API toggles and IPs the same way everywhere."""
+
+    def test_to_bool(self):
+        from core.helpers import to_bool
+
+        for value in (True, 1, 2.5, "1", "true", "yes", "on", " ON ", "anything-else"):
+            self.assertIs(to_bool(value), True, value)
+        for value in (False, 0, 0.0, "0", "false", "no", "off", " Off "):
+            self.assertIs(to_bool(value, default=True), False, value)
+        for value in (None, "", "  ", "none", "null"):
+            self.assertIs(to_bool(value, default=True), True, value)
+            self.assertIs(to_bool(value), False, value)
+        self.assertIs(to_bool([]), False)
+        self.assertIs(to_bool(["x"]), True)
+
+    def test_is_valid_ip(self):
+        from core.helpers import is_valid_ip
+
+        for ip in ("0.0.0.0", "10.0.0.1", "255.255.255.255", "01.2.3.4"):
+            self.assertTrue(is_valid_ip(ip), ip)
+        for ip in ("1.2.3", "1.2.3.4.5", "256.1.1.1", "-1.2.3.4", "a.b.c.d", "", None, "::1", "1.2.3.4/24"):
+            self.assertFalse(is_valid_ip(ip), ip)
+
+
 if __name__ == "__main__":
     unittest.main()
