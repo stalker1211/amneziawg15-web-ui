@@ -1,5 +1,38 @@
 # CHANGELOG
 
+## Version 2.2 (unreleased)
+
+A simplification release: no feature changes, less code, and a much larger test
+suite written *before* the refactors so each one was pinned. Upgrading needs no action;
+rolling back to 2.1 keeps every server and client (verified on a real volume, including
+changes made on 2.2).
+
+### Simpler
+- **Each client is stored once**, in its server's list. The top-level `clients` map, the
+  mirroring loops in every mutation and the per-client `server_name` copy are gone. On
+  disk the v2.1 layout is still written (derived) so 2.1 can read it.
+- **`GET /api/servers` is read-only.** It used to backfill defaults and geo labels into
+  the stored config and save it on every poll; defaults now come from migration.
+- **Legacy `obfuscation_*` fields** are no longer re-derived on every load.
+- **Routes:** `server_or_404` / `client_or_404` and one error handler replace ~20
+  copy-pasted not-found blocks and the try/excepts (`routes/servers.py` 412 → 344 lines).
+- **eventlet is gone.** Socket.IO runs in threading mode with simple-websocket
+  (eventlet, greenlet and dnspython leave the image).
+
+### Fixes
+- Invalid client params or a full subnet on add-client / client-params returned an
+  HTML 500; they are now a JSON 400 with the reason.
+- A legacy server without `mtu` rendered its server `.conf` with `DEFAULT_MTU` but raised
+  on client-config generation until the first page load; migration now sets it.
+- `save_config` writes are serialized and each uses its own temp file, created 0600 —
+  before, the temp file was briefly created with default permissions.
+
+### Tests
+- 151 → 228 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
+  iptables and key-generation code under a fake `subprocess.run`; public IP, GeoIP and
+  egress probe; a 404 sweep over every id-taking route; the exact API key sets the UI
+  reads; v2.1 two-store migration; concurrent saves; a static no-shell guard.
+
 ## Version 2.1 (2026-08-15)
 
 Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compatible.
