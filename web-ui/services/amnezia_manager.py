@@ -802,9 +802,10 @@ class AmneziaManager:
     def save_config(self):
         """Persist config atomically: a crash mid-write must not lose server keys.
 
-        Also writes the top-level `clients` map that v2.1 and older read, derived
-        from the server lists, so rolling the image back to 2.1 keeps every client.
-        It is ignored on load; drop it once 2.1 is no longer a rollback target.
+        On disk it keeps the v2.1 layout -- each client also carries `server_name`,
+        and a top-level `clients` map repeats them -- all derived here from the server
+        lists, so rolling the image back to 2.1 shows exactly the same state. Both are
+        dropped on load; remove this once 2.1 is no longer a rollback target.
 
         One writer at a time (request threads and the traffic monitor both save), and
         each write gets its own temp file, created 0600 so the keys in it are never
@@ -813,12 +814,12 @@ class AmneziaManager:
         directory = os.path.dirname(self.config_file) or "."
         os.makedirs(directory, exist_ok=True)
         with self._save_lock:
-            legacy_client_map = {
-                client["id"]: {**client, "server_id": server["id"], "server_name": server["name"]}
+            servers = [
+                {**server, "clients": [{**client, "server_name": server["name"]} for client in server.get("clients", [])]}
                 for server in self.config["servers"]
-                for client in server.get("clients", [])
-            }
-            payload = json.dumps({**self.config, "clients": legacy_client_map}, indent=2)
+            ]
+            legacy_client_map = {client["id"]: client for server in servers for client in server["clients"]}
+            payload = json.dumps({**self.config, "servers": servers, "clients": legacy_client_map}, indent=2)
             fd, tmp_path = tempfile.mkstemp(prefix=".web_config-", suffix=".tmp", dir=directory)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:

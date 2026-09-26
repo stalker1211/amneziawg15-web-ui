@@ -217,6 +217,9 @@ class ClientMutationTests(unittest.TestCase):
             for client in server["clients"]
         }
         self.assertEqual(data["clients"], expected)
+        # 2.1 lists clients from the server lists, so they carry server_name on disk too.
+        for server in data["servers"]:
+            self.assertEqual({c["server_name"] for c in server["clients"]} or {server["name"]}, {server["name"]})
         self.assertEqual(
             {c["id"] for c in restart(self.manager).get_client_configs()},
             {c["id"] for c in self.manager.get_client_configs()},
