@@ -1,5 +1,5 @@
 ARG ALPINE_VERSION=latest
-ARG GO_VERSION=1.26.6
+ARG GO_VERSION=1.26.8
 
 ############################
 # Build: amneziawg-go
