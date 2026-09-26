@@ -9,12 +9,7 @@ requests==2.34.2
 
 # Flask-SocketIO's server side. python-engineio is a transitive dependency, but
 # it is pinned explicitly because CVE-2026-48802 / CVE-2026-48809 are fixed there
-# rather than in python-socketio.
+# rather than in python-socketio. async_mode is "threading" (core/runtime.py):
+# WebSockets go through simple-websocket, which python-engineio pulls in.
 python-socketio==5.17.0
 python-engineio==4.14.0
-
-# async_mode='eventlet' in core/runtime.py. Eventlet is maintained in bugfix mode
-# only and warns on import; migrating to gevent or threading is worth planning.
-# 0.41.1 caps greenlet<3.4 (resolves 3.3.x); 0.41.2 lifts the cap, so bumping it
-# also moves greenlet a major step — run tests/smoke_socket.js when you do.
-eventlet==0.41.1

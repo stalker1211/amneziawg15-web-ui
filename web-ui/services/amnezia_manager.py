@@ -8,6 +8,7 @@ import random
 import re
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from urllib.parse import urlparse
@@ -88,6 +89,9 @@ class AmneziaManager:
         config_file=None,
         enable_geoip=True,
     ):
+        # Request handlers and the traffic monitor are separate threads; config
+        # writes go through this one at a time (see save_config).
+        self._save_lock = threading.Lock()
         self.socketio = socketio_instance
 
         self.auto_start_servers_enabled = auto_start_servers
@@ -801,21 +805,31 @@ class AmneziaManager:
         Also writes the top-level `clients` map that v2.1 and older read, derived
         from the server lists, so rolling the image back to 2.1 keeps every client.
         It is ignored on load; drop it once 2.1 is no longer a rollback target.
+
+        One writer at a time (request threads and the traffic monitor both save), and
+        each write gets its own temp file, created 0600 so the keys in it are never
+        readable by others, then atomically renamed over the config.
         """
-        legacy_client_map = {
-            client["id"]: {**client, "server_id": server["id"], "server_name": server["name"]}
-            for server in self.config["servers"]
-            for client in server.get("clients", [])
-        }
         directory = os.path.dirname(self.config_file) or "."
         os.makedirs(directory, exist_ok=True)
-        tmp_path = f"{self.config_file}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump({**self.config, "clients": legacy_client_map}, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, self.config_file)
-        os.chmod(self.config_file, 0o600)
+        with self._save_lock:
+            legacy_client_map = {
+                client["id"]: {**client, "server_id": server["id"], "server_name": server["name"]}
+                for server in self.config["servers"]
+                for client in server.get("clients", [])
+            }
+            payload = json.dumps({**self.config, "clients": legacy_client_map}, indent=2)
+            fd, tmp_path = tempfile.mkstemp(prefix=".web_config-", suffix=".tmp", dir=directory)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_path, self.config_file)
+            except BaseException:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
 
     def run_command(self, args):
         """Run a command from an argv list and return stdout, or None on failure.
@@ -1599,9 +1613,8 @@ PersistentKeepalive = 25
     def emit_status_after_delay(self, server_id, status, delay_seconds=2):
         """Push a server_status update to clients once the interface has settled.
 
-        Runs as a Socket.IO background task rather than a real thread: the app runs
-        under eventlet, where a blocking sleep in a plain thread does not cooperate
-        with the event loop.
+        Runs as a Socket.IO background task, which follows whatever async mode the
+        server is in (a plain thread under async_mode="threading").
         """
 
         def emit_later():
@@ -1613,7 +1626,7 @@ PersistentKeepalive = 25
     def start_traffic_monitoring(self):
         """Start background thread for real-time traffic monitoring"""
 
-        # Use Socket.IO background tasks so this works correctly under eventlet.
+        # A Socket.IO background task, so it follows the server's async mode.
         def monitor_traffic():
             while True:
                 try:

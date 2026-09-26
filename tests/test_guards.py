@@ -86,6 +86,10 @@ class SocketAuthTests(unittest.TestCase):
         self.client.get("/api/servers")
         return {"Cookie": f"session={self.client.get_cookie('session').value}"}
 
+    def test_server_runs_in_threading_mode(self):
+        # No eventlet/greenlet: handlers and background tasks are plain threads.
+        self.assertEqual(self.socketio.server.async_mode, "threading")
+
     def test_connect_without_cookie_is_rejected(self):
         ws = self.socketio.test_client(self.app)
         self.assertFalse(ws.is_connected())

@@ -24,13 +24,13 @@ def create_flask_app(template_dir, static_dir):
 
 
 def create_socketio(app, allowed_origins):
-    """Create the Socket.IO server with optional CORS allow-list."""
-    if allowed_origins:
-        return SocketIO(
-            app, async_mode="eventlet", manage_session=False, cors_allowed_origins=allowed_origins, path="/socket.io"
-        )
+    """Create the Socket.IO server with optional CORS allow-list.
 
-    return SocketIO(app, async_mode="eventlet", manage_session=False, path="/socket.io")
+    async_mode="threading": request handlers and background tasks are plain threads
+    and WebSockets go through simple-websocket -- no eventlet, no monkey-patching.
+    """
+    cors = {"cors_allowed_origins": allowed_origins} if allowed_origins else {}
+    return SocketIO(app, async_mode="threading", manage_session=False, path="/socket.io", **cors)
 
 
 def register_socket_handlers(socketio, amnezia_manager, nginx_port):

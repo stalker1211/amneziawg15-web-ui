@@ -14,7 +14,9 @@ each change, because it is what a rollback would load.
 import json
 import os
 import shutil
+import stat
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -99,6 +101,37 @@ class LegacyConfigMigrationTests(unittest.TestCase):
             Path(self.config_file).write_text(content, encoding="utf-8")
             manager = build_manager(config_dir=self.tmp, wireguard_config_dir=self.tmp, config_file=self.config_file)
             self.assertEqual(manager.config, {"servers": []}, content)
+
+
+class SaveConfigTests(unittest.TestCase):
+    """Request threads and the traffic monitor both save; writes must not collide."""
+
+    def test_concurrent_saves_leave_one_valid_private_file(self):
+        manager = build_manager()
+        server = manager.create_wireguard_server(
+            {"name": "busy", "protocol": "AWG 2.0", "subnet": "10.43.0.0/24", "port": 51943, "auto_start": False}
+        )
+        manager.add_wireguard_client(server["id"], "phone")
+        errors = []
+
+        def hammer():
+            for _ in range(40):
+                try:
+                    manager.save_config()
+                except Exception as e:  # collected, then asserted empty
+                    errors.append(e)
+
+        threads = [threading.Thread(target=hammer) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(saved(manager)["clients"]), 1)
+        self.assertEqual(stat.S_IMODE(os.stat(manager.config_file).st_mode), 0o600)
+        leftovers = [p for p in os.listdir(os.path.dirname(manager.config_file)) if p.endswith(".tmp")]
+        self.assertEqual(leftovers, [])
 
 
 class TwoStoreMigrationTests(unittest.TestCase):
