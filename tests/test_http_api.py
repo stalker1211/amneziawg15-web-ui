@@ -636,6 +636,52 @@ class ServerRouteTests(_RealSystemApp):
         self.assertEqual(names("/api/clients"), ["mine", "theirs"])
 
 
+class RouteErrorTests(unittest.TestCase):
+    """Bad input is a 400 and anything unexpected a JSON 500 -- never Flask's HTML page."""
+
+    def setUp(self):
+        self.app, self.manager = build_app()
+        self.client = self.app.test_client()
+        self.server = _create_server(self.client, subnet="10.65.0.0/30", port=51965)
+        self.url = f"/api/servers/{self.server['id']}"
+
+    def test_invalid_client_params_are_a_400(self):
+        response = self.client.post(f"{self.url}/clients", json={"name": "x", "client_params": {"Jmin": 100, "Jmax": 10}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Jmin", response.get_json()["error"])
+
+        added = self.client.post(f"{self.url}/clients", json={"name": "ok"}).get_json()["client"]
+        response = self.client.post(
+            f"{self.url}/clients/{added['id']}/client-params", json={"client_params": {"Jmin": 100, "Jmax": 10}}
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Jmin", response.get_json()["error"])
+
+    def test_full_subnet_is_a_400(self):
+        # A /30 holds the server and exactly one client.
+        self.assertEqual(self.client.post(f"{self.url}/clients", json={"name": "one"}).status_code, 200)
+        response = self.client.post(f"{self.url}/clients", json={"name": "two"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("No free addresses", response.get_json()["error"])
+
+    def test_non_object_body_is_a_400(self):
+        response = self.client.post(f"{self.url}/rename", json=["not", "an", "object"])
+        self.assertEqual((response.status_code, response.get_json()), (400, {"error": "Name cannot be empty"}))
+
+    def test_unexpected_error_is_a_logged_json_500(self):
+        with mock.patch.object(self.manager, "rename_server", side_effect=RuntimeError("disk full")), \
+             self.assertLogs("routes.servers", "ERROR"):  # fmt: skip
+            response = self.client.post(f"{self.url}/rename", json={"name": "x"})
+        self.assertEqual((response.status_code, response.get_json()), (500, {"error": "disk full"}))
+
+    def test_client_whose_server_is_gone_is_a_404(self):
+        added = self.client.post(f"{self.url}/clients", json={"name": "orphan"}).get_json()["client"]
+        self.manager.config["servers"] = []
+        for suffix in ("/suspend", "/client-params", "/rename"):
+            response = self.client.post(f"{self.url}/clients/{added['id']}{suffix}", json={"name": "x", "client_params": {}})
+            self.assertEqual(response.status_code, 404, suffix)
+
+
 class SystemRouteExtraTests(_RealSystemApp):
     def test_refresh_ip_updates_every_server(self):
         with mock.patch.object(self.manager, "detect_public_ip", return_value="198.51.100.20"), \
