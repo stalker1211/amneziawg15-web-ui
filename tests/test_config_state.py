@@ -22,7 +22,7 @@ from tests.support import build_app, build_manager, normalize_conf, read_golden
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 # Fields both client stores must agree on. `status` is a cached display value and
-# `obfuscation_params` is derived; neither is mirrored.
+# is not mirrored.
 MIRRORED_KEYS = ("name", "server_name", "suspended", "client_ip", "client_public_key", "preshared_key", "client_params")
 
 
@@ -85,6 +85,10 @@ class LegacyConfigMigrationTests(unittest.TestCase):
     def test_client_conf_matches_a_client_created_today(self):
         text = self.manager.generate_wireguard_client_config(self.server, self.client, include_comments=True)
         self.assertEqual(normalize_conf(text), read_golden("client-awg15.conf"))
+
+    def test_legacy_obfuscation_dicts_are_not_kept(self):
+        self.manager.save_config()
+        self.assertNotIn("obfuscation", Path(self.config_file).read_text(encoding="utf-8"))
 
     def test_migration_is_stable_across_save_and_load(self):
         self.manager.save_config()

@@ -762,23 +762,23 @@ class AmneziaManager:
                     continue
                 client_params = client.get("client_params")
                 if not isinstance(client_params, dict):
-                    client_params = self.extract_client_params(client.get("obfuscation_params") or legacy_params)
-                else:
-                    client_params = self.extract_client_params(client_params)
-                client["client_params"] = client_params
-                client["obfuscation_enabled"] = True
-                client["obfuscation_params"] = self.build_effective_client_params(server, client_params)
+                    client_params = client.get("obfuscation_params") or legacy_params
+                client["client_params"] = self.extract_client_params(client_params)
 
                 client_id = client.get("id")
                 if client_id and isinstance(config.get("clients"), dict):
                     global_client = config["clients"].get(client_id)
                     if isinstance(global_client, dict):
-                        global_client["client_params"] = dict(client_params)
-                        global_client["obfuscation_enabled"] = True
-                        global_client["obfuscation_params"] = self.build_effective_client_params(server, client_params)
+                        global_client["client_params"] = dict(client["client_params"])
 
-            server["obfuscation_enabled"] = True
-            server["obfuscation_params"] = self.build_effective_client_params(server, server.get("client_defaults"))
+        # Pre-1.6 kept everything in one `obfuscation_params` dict; it has been lifted
+        # into transport_params / client_params above and is not stored any more.
+        records = [s for s in config["servers"] if isinstance(s, dict)]
+        records += [c for s in records for c in s.get("clients") or [] if isinstance(c, dict)]
+        records += [c for c in (config.get("clients") or {}).values() if isinstance(c, dict)]
+        for record in records:
+            record.pop("obfuscation_enabled", None)
+            record.pop("obfuscation_params", None)
 
         return config
 

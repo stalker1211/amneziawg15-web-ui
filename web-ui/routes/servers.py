@@ -29,8 +29,6 @@ def register_server_routes(
         if not isinstance(client, dict):
             return client
         payload = dict(client)
-        payload.pop("obfuscation_enabled", None)
-        payload.pop("obfuscation_params", None)
         payload["client_params"] = payload.get("client_params", {})
         return payload
 
@@ -38,9 +36,6 @@ def register_server_routes(
         if not isinstance(server, dict):
             return server
         payload = dict(server)
-        payload.pop("obfuscation_enabled", None)
-        payload.pop("obfuscation_params", None)
-        payload.pop("config_preview", None)
         payload["transport_params"] = payload.get("transport_params", {})
         payload["client_defaults"] = payload.get("client_defaults", {})
         payload["protocol"] = payload.get("protocol", "AWG 1.5")
