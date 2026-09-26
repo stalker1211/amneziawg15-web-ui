@@ -744,6 +744,19 @@ class AmneziaManager:
 
             server.setdefault("client_defaults", self.default_client_defaults())
 
+            # Fields added over time. Until v2.2 GET /api/servers backfilled these on
+            # every poll (and persisted them), so 1420 is what existing installs have.
+            server.setdefault("mtu", 1420)
+            server.setdefault("enable_nat", self.default_enable_nat)
+            server.setdefault("block_lan_cidrs", self.default_block_lan_cidrs)
+            server.setdefault("egress_probe", None)
+            # Display values that GET /api/servers and /info used to write into state;
+            # they are computed per response now.
+            for derived in ("public_ip_geo", "public_ip_geo_country_code", "current_status"):
+                server.pop(derived, None)
+            if isinstance(server.get("egress_probe"), dict):
+                server["egress_probe"].pop("service_name", None)
+
             for client in server.get("clients", []) or []:
                 if not isinstance(client, dict):
                     continue
@@ -972,6 +985,7 @@ class AmneziaManager:
             "auto_start": auto_start,
             "enable_nat": enable_nat,
             "block_lan_cidrs": block_lan_cidrs,
+            "egress_probe": None,
             "dns": dns_servers,  # Store DNS servers
             "clients": [],
             "created_at": time.time(),

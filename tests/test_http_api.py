@@ -489,6 +489,40 @@ class ServerListTests(unittest.TestCase):
         self.assertIsInstance(listed["transport_params"], dict)
         self.assertIsInstance(listed["client_defaults"], dict)
 
+    def test_listing_writes_nothing(self):
+        app, manager = build_app()
+        client = app.test_client()
+        _create_server(client)
+        manager.get_server(manager.config["servers"][0]["id"])["egress_probe"] = {"external_ip": "198.51.100.9"}
+        manager.save_config()
+        before_file = Path(manager.config_file).read_bytes()
+        before_state = json.dumps(manager.config, sort_keys=True)
+
+        with mock.patch.object(manager, "lookup_geoip", return_value=("Somewhere", "NL")):
+            self.assertEqual(client.get("/api/servers").status_code, 200)
+            self.assertEqual(client.get(f"/api/servers/{manager.config['servers'][0]['id']}/info").status_code, 200)
+
+        self.assertEqual(Path(manager.config_file).read_bytes(), before_file)
+        self.assertEqual(json.dumps(manager.config, sort_keys=True), before_state)
+
+    def test_display_values_persisted_by_older_versions_are_dropped_on_load(self):
+        first = build_manager()
+        first.create_wireguard_server(
+            {"name": "old", "protocol": "AWG 2.0", "subnet": "10.64.0.0/24", "port": 51964, "auto_start": False}
+        )
+        stored = json.loads(Path(first.config_file).read_text(encoding="utf-8"))
+        stored["servers"][0].update(
+            public_ip_geo="Stale", public_ip_geo_country_code="XX", current_status="running",
+            egress_probe={"external_ip": "198.51.100.9", "service": "https://ident.me", "service_name": "ident.me"},
+        )  # fmt: skip
+        Path(first.config_file).write_text(json.dumps(stored), encoding="utf-8")
+
+        server = build_manager(config_dir=first.config_dir, wireguard_config_dir=first.wireguard_config_dir,
+                               config_file=first.config_file).config["servers"][0]  # fmt: skip
+        for key in ("public_ip_geo", "public_ip_geo_country_code", "current_status"):
+            self.assertNotIn(key, server)
+        self.assertEqual(server["egress_probe"], {"external_ip": "198.51.100.9", "service": "https://ident.me"})
+
     def test_geo_labels_and_probe_service_name(self):
         app, manager = build_app()
         client = app.test_client()

@@ -218,8 +218,6 @@ def register_server_routes(
             return jsonify({"error": "Server not found"}), 404
 
         current_status = amnezia_manager.get_server_status(server_id)
-        server["current_status"] = current_status
-
         mtu_value = server.get("mtu", 1420)
 
         server_info = {
@@ -362,36 +360,24 @@ def register_server_routes(
     @server_bp.route("/api/servers", methods=["GET"])
     @require_token
     def get_servers():
+        """List servers with live status and geo labels. Read-only: the display values
+        are computed into the response, never written back to the stored config."""
+        payload = []
         for server in amnezia_manager.config["servers"]:
-            server["status"] = amnezia_manager.get_server_status(server["id"])
-            if "mtu" not in server:
-                server["mtu"] = 1420
-            if "enable_nat" not in server:
-                server["enable_nat"] = default_enable_nat
-            if "block_lan_cidrs" not in server:
-                server["block_lan_cidrs"] = default_block_lan_cidrs
-            if "egress_probe" not in server:
-                server["egress_probe"] = None
-            if "protocol" not in server:
-                server["protocol"] = "AWG 1.5"
-            if "transport_params" not in server:
-                server["transport_params"] = {}
-            if "client_defaults" not in server:
-                server["client_defaults"] = {}
+            item = serialize_server(server)
+            item["status"] = amnezia_manager.get_server_status(server["id"])
+            item["public_ip_geo"], item["public_ip_geo_country_code"] = amnezia_manager.lookup_geoip(server.get("public_ip"))
 
-            public_geo, public_geo_cc = amnezia_manager.lookup_geoip(server.get("public_ip"))
-            server["public_ip_geo"] = public_geo
-            server["public_ip_geo_country_code"] = public_geo_cc
-
-            probe = server.get("egress_probe") if isinstance(server.get("egress_probe"), dict) else None
-            if probe is not None:
-                egress_geo, egress_geo_cc = amnezia_manager.lookup_geoip(probe.get("external_ip"))
-                probe["external_ip_geo"] = egress_geo
-                probe["external_ip_geo_country_code"] = egress_geo_cc
+            if isinstance(server.get("egress_probe"), dict):
+                probe = dict(server["egress_probe"])
+                probe["external_ip_geo"], probe["external_ip_geo_country_code"] = amnezia_manager.lookup_geoip(
+                    probe.get("external_ip")
+                )
                 probe["service_name"] = amnezia_manager.format_probe_service_name(probe.get("service"))
+                item["egress_probe"] = probe
 
-        amnezia_manager.save_config()
-        return jsonify([serialize_server(server) for server in amnezia_manager.config["servers"]])
+            payload.append(item)
+        return jsonify(payload)
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/config-both")
     @require_token
