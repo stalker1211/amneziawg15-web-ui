@@ -58,8 +58,8 @@ reverse proxy), the **Flask + Socket.IO web UI** (127.0.0.1:5000), and one
 
 ```
 web-ui/
-├── app.py                      Flask entrypoint, env parsing, auth decorator
-├── core/                       runtime wiring, helpers, logging setup
+├── app.py                      Flask entrypoint, env parsing
+├── core/                       request guards (auth, CSRF), runtime wiring, helpers, logging
 ├── routes/                     servers.py + system.py (all /api routes)
 ├── services/amnezia_manager.py all business logic
 ├── templates/index.html        page shell + create-server form

@@ -60,6 +60,41 @@ Adds **AmneziaWG 3.1** while keeping AWG 1.5, 2.0 and 3.0 configurations compati
   with `ModuleNotFoundError` on a host whose `python3` has no `requests`. Run it directly;
   it needs `uv` on `PATH`.
 
+### Components (2026-09-26)
+- Go builder → `1.26.8` (net/http fixes in 1.26.7, runtime/compiler fixes in 1.26.8; no
+  advisory was open against 1.26.6).
+- `python-socketio` → `5.17.0`, `python-engineio` → `4.14.0`. 5.17.0 stops a client joining
+  another client's sid room; this UI uses no rooms, so here it is hygiene, not a fix.
+- Socket.IO browser client → `4.8.4` (bug fixes only).
+- Unchanged on purpose: `amneziawg-go` / `amneziawg-tools` (both still upstream HEAD), and
+  `eventlet` 0.41.1 — it caps `greenlet<3.4`, and 0.41.2 lifts that cap, so bumping it moves
+  greenlet a major step for no gain.
+
+### Security (2026-09-26)
+- **The cdnjs scripts carry SRI hashes.** `socket.io.js` and `qrcode.min.js` now have
+  `integrity` attributes, so a tampered CDN file is refused instead of running in the
+  panel's origin. The hashes match cdnjs's published values, and `socket.io.js` is
+  byte-identical to the npm release. `referrerpolicy="no-referrer"` also stops the panel's
+  URL being sent to cdnjs. The Tailwind play CDN is generated per request and cannot be
+  pinned this way.
+
+### Tests (2026-09-26)
+- **The auth guards moved from `app.py` to `core/guards.py`** (`install_guards()`), with no
+  behaviour change. The tests previously exercised a hand-copied mirror of the CSRF and
+  token checks; they now run the production code, and cover what had no tests at all: the
+  persisted secret key, the `/socket.io/` session-cookie check, and `nginx.conf`'s
+  per-location auth rules.
+- Legacy migration is tested on a real v1.5.1 `web_config.json`, which must render the same
+  bytes as a server created today; every mutation route is checked to keep the two client
+  stores in sync after a save/load; `/api/system/awg-log` interface filtering is covered.
+- 118 → 151 tests; backend coverage 52% → 66%.
+
+### Tooling (2026-09-26)
+- **`run_tests.sh` runs through uv** when it is on `PATH`
+  (`uv run --with-requirements web-ui/requirements.txt`), so the host needs no `.venv` and
+  the deps always match the image's pins. `--cov` adds a coverage report. Without uv — as
+  inside the image — it still runs plain `python3`.
+
 ## Version 2.0 (2026-08-07)
 
 Major version: tracks the **AmneziaWG 3.0** protocol generation. `amneziawg-go` and
