@@ -40,7 +40,7 @@ def register_system_routes(
             "public_ip": amnezia_manager.public_ip,
             "public_ip_geo_country_code": public_ip_geo_country_code,
             "total_servers": len(amnezia_manager.config["servers"]),
-            "total_clients": len(amnezia_manager.config["clients"]),
+            "total_clients": len(amnezia_manager.get_client_configs()),
             "active_servers": len(
                 [s for s in amnezia_manager.config["servers"] if amnezia_manager.get_server_status(s["id"]) == "running"]
             ),

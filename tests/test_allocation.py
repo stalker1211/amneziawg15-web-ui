@@ -64,16 +64,6 @@ class ClientIpAllocationTests(unittest.TestCase):
         server["clients"] = [{"client_ip": f"10.11.0.{n}"} for n in range(2, 256)]
         self.assertEqual(self.manager.get_client_ip(server), "10.11.1.0")
 
-    def test_addresses_used_by_the_global_map_are_respected(self):
-        """Clients are stored twice; a stale embedded list must not cause a duplicate."""
-        server = self._server("10.12.0.0/24")
-        self.manager.config["clients"]["ghost"] = {
-            "id": "ghost",
-            "server_id": server["id"],
-            "client_ip": "10.12.0.2",
-        }
-        self.assertEqual(self.manager.get_client_ip(server), "10.12.0.3")
-
     def test_full_subnet_raises_rather_than_reusing(self):
         server = self._server("10.13.0.0/30")  # exactly two usable hosts
         server["clients"] = [{"client_ip": "10.13.0.2"}]

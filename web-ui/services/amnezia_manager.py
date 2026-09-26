@@ -723,15 +723,30 @@ class AmneziaManager:
 
     def migrate_config_schema(self, config):
         if not isinstance(config, dict):
-            return {"servers": [], "clients": {}}
+            return {"servers": []}
 
-        config.setdefault("servers", [])
-        config.setdefault("clients", {})
+        legacy_client_map = config.pop("clients", None)
+        config["servers"] = [s for s in config.get("servers") or [] if isinstance(s, dict)]
 
-        for server in config.get("servers", []):
-            if not isinstance(server, dict):
-                continue
+        # Until v2.2 every client was stored twice: in its server's list and in a
+        # top-level `clients` map. The server lists are now the only store. A client
+        # found only in the map joins its server's list; one whose server is gone is
+        # dropped. Where both copies exist the embedded one wins -- it is what the
+        # .conf renderer has always used.
+        if isinstance(legacy_client_map, dict):
+            servers_by_id = {s.get("id"): s for s in config["servers"]}
+            embedded_ids = {c.get("id") for s in config["servers"] for c in s.get("clients") or [] if isinstance(c, dict)}
+            for client_id, client in legacy_client_map.items():
+                if not isinstance(client, dict) or client_id in embedded_ids:
+                    continue
+                server = servers_by_id.get(client.get("server_id"))
+                if server is None:
+                    logger.warning("Dropping client %s: its server %s no longer exists", client_id, client.get("server_id"))
+                    continue
+                client.setdefault("id", client_id)
+                server.setdefault("clients", []).append(client)
 
+        for server in config["servers"]:
             server["protocol"] = self.normalize_protocol(server.get("protocol"))
 
             legacy_params = server.get("obfuscation_params") if isinstance(server.get("obfuscation_params"), dict) else {}
@@ -757,28 +772,20 @@ class AmneziaManager:
             if isinstance(server.get("egress_probe"), dict):
                 server["egress_probe"].pop("service_name", None)
 
-            for client in server.get("clients", []) or []:
-                if not isinstance(client, dict):
-                    continue
+            server["clients"] = [c for c in server.get("clients") or [] if isinstance(c, dict)]
+            for client in server["clients"]:
                 client_params = client.get("client_params")
                 if not isinstance(client_params, dict):
                     client_params = client.get("obfuscation_params") or legacy_params
                 client["client_params"] = self.extract_client_params(client_params)
+                client["server_id"] = server.get("id")
+                client.pop("server_name", None)  # derived from the server when serialized
 
-                client_id = client.get("id")
-                if client_id and isinstance(config.get("clients"), dict):
-                    global_client = config["clients"].get(client_id)
-                    if isinstance(global_client, dict):
-                        global_client["client_params"] = dict(client["client_params"])
-
-        # Pre-1.6 kept everything in one `obfuscation_params` dict; it has been lifted
-        # into transport_params / client_params above and is not stored any more.
-        records = [s for s in config["servers"] if isinstance(s, dict)]
-        records += [c for s in records for c in s.get("clients") or [] if isinstance(c, dict)]
-        records += [c for c in (config.get("clients") or {}).values() if isinstance(c, dict)]
-        for record in records:
-            record.pop("obfuscation_enabled", None)
-            record.pop("obfuscation_params", None)
+            # Pre-1.6 kept everything in one `obfuscation_params` dict; it has been
+            # lifted into transport_params / client_params above and is not kept.
+            for record in (server, *server["clients"]):
+                record.pop("obfuscation_enabled", None)
+                record.pop("obfuscation_params", None)
 
         return config
 
@@ -786,15 +793,25 @@ class AmneziaManager:
         if os.path.exists(self.config_file):
             with open(self.config_file, "r", encoding="utf-8") as f:
                 return self.migrate_config_schema(json.load(f))
-        return self.migrate_config_schema({"servers": [], "clients": {}})
+        return self.migrate_config_schema({"servers": []})
 
     def save_config(self):
-        """Persist config atomically: a crash mid-write must not lose server keys."""
+        """Persist config atomically: a crash mid-write must not lose server keys.
+
+        Also writes the top-level `clients` map that v2.1 and older read, derived
+        from the server lists, so rolling the image back to 2.1 keeps every client.
+        It is ignored on load; drop it once 2.1 is no longer a rollback target.
+        """
+        legacy_client_map = {
+            client["id"]: {**client, "server_id": server["id"], "server_name": server["name"]}
+            for server in self.config["servers"]
+            for client in server.get("clients", [])
+        }
         directory = os.path.dirname(self.config_file) or "."
         os.makedirs(directory, exist_ok=True)
         tmp_path = f"{self.config_file}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(self.config, f, indent=2)
+            json.dump({**self.config, "clients": legacy_client_map}, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, self.config_file)
@@ -1080,17 +1097,9 @@ AllowedIPs = {client["client_ip"]}/32
         server["protocol"] = next_protocol
         server["transport_params"] = dict(next_transport_params)
 
-        def apply_to_client_obj(client_obj):
-            if not isinstance(client_obj, dict):
-                return
-            client_params = self.extract_client_params(client_obj.get("client_params") or {})
-            client_obj["client_params"] = client_params
-
-        for embedded in server.get("clients") or []:
-            apply_to_client_obj(embedded)
-            cid = embedded.get("id")
-            if cid and isinstance(self.config.get("clients"), dict) and cid in self.config["clients"]:
-                apply_to_client_obj(self.config["clients"][cid])
+        # Re-extract so client params the new protocol does not support are dropped.
+        for client in server.get("clients") or []:
+            client["client_params"] = self.extract_client_params(client.get("client_params") or {})
 
         # Rewrite server config file
         self.write_server_conf(server)
@@ -1150,10 +1159,8 @@ AllowedIPs = {client["client_ip"]}/32
     def get_client_ip(self, server):
         """Return the first free client address in the server's subnet.
 
-        Derived from the subnet rather than assuming a /24, and checks both places
-        clients are stored so a stale embedded list cannot hand out a duplicate.
-        Raises when the subnet is full — silently reusing an address would break the
-        existing client that holds it.
+        Derived from the subnet rather than assuming a /24. Raises when the subnet is
+        full — silently reusing an address would break the existing client that holds it.
         """
         subnet = server.get("subnet") or self.default_subnet
         server_ip = server.get("server_ip")
@@ -1165,19 +1172,13 @@ AllowedIPs = {client["client_ip"]}/32
 
         used = {server_ip}
         used.update(c.get("client_ip") for c in server.get("clients") or [])
-        # The global map is the other half of the double bookkeeping (see DEVELOPMENT
-        # §3); a client missing from the embedded list still owns its address.
-        server_id = server.get("id")
-        for client in (self.config.get("clients") or {}).values():
-            if isinstance(client, dict) and client.get("server_id") == server_id:
-                used.add(client.get("client_ip"))
 
         for candidate in network.hosts():
             text = str(candidate)
             if text not in used:
                 return text
 
-        raise ValueError(f"No free addresses left in {network} for server {server_id}")
+        raise ValueError(f"No free addresses left in {network} for server {server.get('id')}")
 
     def get_server(self, server_id):
         return next((s for s in self.config.get("servers", []) if s.get("id") == server_id), None)
@@ -1224,7 +1225,8 @@ AllowedIPs = {client["client_ip"]}/32
         )
 
     def get_client(self, client_id):
-        return self.config.get("clients", {}).get(client_id)
+        """The client with this id, looked up through the servers' client lists."""
+        return next((c for c in self.get_client_configs() if c.get("id") == client_id), None)
 
     def delete_server(self, server_id):
         """Delete a server and all its clients"""
@@ -1241,12 +1243,7 @@ AllowedIPs = {client["client_ip"]}/32
         if os.path.exists(server["config_path"]):
             os.remove(server["config_path"])
 
-        # Remove all clients associated with this server
-        self.config["clients"] = {
-            key: value for key, value in self.config["clients"].items() if value.get("server_id") != server_id
-        }
-
-        # Remove the server
+        # Remove the server (its clients live in its list and go with it)
         self.config["servers"] = [s for s in self.config["servers"] if s["id"] != server_id]
         self.save_config()
         return True
@@ -1289,7 +1286,6 @@ AllowedIPs = {client["client_ip"]}/32
             "id": client_id,
             "name": client_name,
             "server_id": server_id,
-            "server_name": server["name"],
             "status": "inactive",
             "created_at": time.time(),
             "client_private_key": client_keys["private_key"],
@@ -1306,9 +1302,6 @@ AllowedIPs = {client["client_ip"]}/32
         # Rewrite the whole file from state rather than appending a peer block, so
         # the config always matches self.config exactly.
         self.write_server_conf(server)
-
-        # Store in global clients dict
-        self.config["clients"][client_id] = client_config
         self.save_config()
         # Check the live interface, not the cached status field: it is only
         # refreshed by GET /api/servers, so a stale "stopped" would skip the
@@ -1338,17 +1331,7 @@ AllowedIPs = {client["client_ip"]}/32
         if isinstance(params, dict):
             raw_client_params.update(self.extract_client_params(params))
 
-        client_params = self.validate_client_params(raw_client_params)
-
-        client["client_params"] = client_params
-
-        # Mirror update into the server-embedded client list too
-        for embedded in server.get("clients", []):
-            if embedded.get("id") != client_id:
-                continue
-            embedded["client_params"] = dict(client_params)
-            break
-
+        client["client_params"] = self.validate_client_params(raw_client_params)
         self.save_config()
         return client
 
@@ -1357,13 +1340,7 @@ AllowedIPs = {client["client_ip"]}/32
         server = self.get_server(server_id)
         if not server:
             return None
-        new_name = self.sanitize_name(new_name)
-        server["name"] = new_name
-        for client in server.get("clients", []):
-            client["server_name"] = new_name
-            global_client = self.config.get("clients", {}).get(client["id"])
-            if global_client:
-                global_client["server_name"] = new_name
+        server["name"] = self.sanitize_name(new_name)
         self.save_config()
         return server
 
@@ -1375,12 +1352,7 @@ AllowedIPs = {client["client_ip"]}/32
         client = self.get_client(client_id)
         if not client or client.get("server_id") != server_id:
             return None
-        new_name = self.sanitize_name(new_name)
-        client["name"] = new_name
-        for embedded in server.get("clients", []):
-            if embedded.get("id") == client_id:
-                embedded["name"] = new_name
-                break
+        client["name"] = self.sanitize_name(new_name)
         self.write_server_conf(server)
         self.save_config()
         return client
@@ -1395,14 +1367,7 @@ AllowedIPs = {client["client_ip"]}/32
         if not client or client.get("server_id") != server_id:
             return None
 
-        new_state = not client.get("suspended", False)
-        client["suspended"] = new_state
-
-        for embedded in server.get("clients", []):
-            if embedded.get("id") == client_id:
-                embedded["suspended"] = new_state
-                break
-
+        client["suspended"] = not client.get("suspended", False)
         self.write_server_conf(server)
 
         self.save_config()
@@ -1422,12 +1387,7 @@ AllowedIPs = {client["client_ip"]}/32
         if not client:
             return False
 
-        # Remove client from server's client list
         server["clients"] = [c for c in server["clients"] if c["id"] != client_id]
-
-        # Remove from global clients dict
-        if client_id in self.config["clients"]:
-            del self.config["clients"][client_id]
 
         # Rebuild the config from state. Previously this stripped the peer block by
         # matching a "# Client: <name>" comment, which deleted both blocks when two
@@ -1677,10 +1637,9 @@ PersistentKeepalive = 25
         self.socketio.start_background_task(monitor_traffic)
 
     def get_client_configs(self, server_id=None):
-        """Get all client configs, optionally filtered by server"""
-        if server_id:
-            return [client for client in self.config["clients"].values() if client.get("server_id") == server_id]
-        return list(self.config["clients"].values())
+        """All clients, or only those of `server_id` (none for an unknown server)."""
+        servers = [s for s in self.config["servers"] if not server_id or s.get("id") == server_id]
+        return [client for server in servers for client in server.get("clients", [])]
 
     def get_traffic_for_server(self, server_id):
         server = self.get_server(server_id)
@@ -1776,40 +1735,32 @@ PersistentKeepalive = 25
 
         # Map peer data to clients by matching public keys
         clients_traffic = {}
-        for client_id, client in self.config["clients"].items():
-            if client.get("server_id") == server_id:
-                pubkey = client.get("client_public_key")
-                info = peer_data.get(pubkey) if pubkey else None
-                received = (info or {}).get("received") or "0 B"
-                sent = (info or {}).get("sent") or "0 B"
-                endpoint = (info or {}).get("endpoint")
-                latest_handshake = (info or {}).get("latest_handshake")
-                latest_handshake_seconds = parse_handshake_seconds(latest_handshake)
-                active = latest_handshake_seconds is not None and latest_handshake_seconds <= 5 * 60
-                endpoint_ip = extract_ip_from_endpoint(endpoint)
-                geo_label, geo_country_code = geoip_lookup(endpoint_ip)
+        for client in server.get("clients", []):
+            pubkey = client.get("client_public_key")
+            info = (peer_data.get(pubkey) if pubkey else None) or {}
+            endpoint = info.get("endpoint")
+            latest_handshake = info.get("latest_handshake")
+            latest_handshake_seconds = parse_handshake_seconds(latest_handshake)
+            active = latest_handshake_seconds is not None and latest_handshake_seconds <= 5 * 60
+            geo_label, geo_country_code = geoip_lookup(extract_ip_from_endpoint(endpoint))
 
-                # Persist derived status into the existing client config field.
-                # This makes /api/* clients reflect live activity without the UI needing traffic.
-                try:
-                    desired_status = "active" if active else "inactive"
-                    if client.get("status") != desired_status:
-                        client["status"] = desired_status
-                        self._client_status_dirty = True
-                except Exception:
-                    # Don't let status persistence break traffic reporting.
-                    pass
+            # Persist derived status into the client record, so /api/* clients reflect
+            # live activity without the UI needing traffic.
+            desired_status = "active" if active else "inactive"
+            if client.get("status") != desired_status:
+                client["status"] = desired_status
+                self._client_status_dirty = True
 
-                clients_traffic[client_id] = {
-                    "received": received,
-                    "sent": sent,
-                    "endpoint": endpoint,
-                    "geo": geo_label,
-                    "geo_country_code": geo_country_code,
-                    "latest_handshake": latest_handshake,
-                    "latest_handshake_seconds": latest_handshake_seconds,
-                    "active": active,
-                }
+            clients_traffic[client.get("id")] = {
+                "received": info.get("received") or "0 B",
+                "sent": info.get("sent") or "0 B",
+                "endpoint": endpoint,
+                "geo": geo_label,
+                "geo_country_code": geo_country_code,
+                "latest_handshake": latest_handshake,
+                "latest_handshake_seconds": latest_handshake_seconds,
+                "active": active,
+            }
 
         # Throttle config writes: persist derived status at most once per minute.
         if self._client_status_dirty:

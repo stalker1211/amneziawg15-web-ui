@@ -59,11 +59,13 @@ def register_server_routes(
         data = request.get_json(silent=True)
         return data if isinstance(data, dict) else {}
 
-    def serialize_client(client):
-        return dict(client)
+    def serialize_client(client, server=None):
+        # server_name is not stored per client; it always comes from the server.
+        server = server or amnezia_manager.get_server(client.get("server_id")) or {}
+        return {**client, "server_name": server.get("name")}
 
     def serialize_server(server):
-        return {**server, "clients": [serialize_client(client) for client in server.get("clients", [])]}
+        return {**server, "clients": [serialize_client(client, server) for client in server.get("clients", [])]}
 
     # --- servers ------------------------------------------------------------------
 

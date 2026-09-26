@@ -1,13 +1,14 @@
-"""Tests for the persisted state in web_config.json: legacy migration and the two client stores.
+"""Tests for the persisted state in web_config.json: migrations and the client store.
 
 migrate_config_schema() runs on every load and is the only upgrade path for old
 installs, so it is checked against a real v1.5.1-era file (tests/fixtures/), which
-must render byte-for-byte the same .conf files as a server created today.
+must render byte-for-byte the same .conf files as a server created today, and
+against a v2.1-era file, which stored every client twice.
 
-Clients are stored twice (servers[].clients[] and the top-level clients{} map).
-A freshly added client is one dict referenced from both, so the mirroring code is
-only exercised once the config has been through a save/load -- the tests restart
-the manager from disk before mutating.
+Since v2.2 each client lives only in its server's `clients` list. save_config()
+still writes the top-level `clients` map v2.1 reads, derived from those lists, so
+rolling the image back keeps every client; the mutation tests check that map after
+each change, because it is what a rollback would load.
 """
 
 import json
@@ -21,10 +22,6 @@ from tests.support import build_app, build_manager, normalize_conf, read_golden
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-# Fields both client stores must agree on. `status` is a cached display value and
-# is not mirrored.
-MIRRORED_KEYS = ("name", "server_name", "suspended", "client_ip", "client_public_key", "preshared_key", "client_params")
-
 
 def restart(manager):
     """A new manager loaded from `manager`'s files, as after a container restart."""
@@ -33,6 +30,10 @@ def restart(manager):
         wireguard_config_dir=manager.wireguard_config_dir,
         config_file=manager.config_file,
     )
+
+
+def saved(manager):
+    return json.loads(Path(manager.config_file).read_text(encoding="utf-8"))
 
 
 class LegacyConfigMigrationTests(unittest.TestCase):
@@ -68,14 +69,13 @@ class LegacyConfigMigrationTests(unittest.TestCase):
             self.assertNotIn(key, transport)
         self.assertIn("client_defaults", self.server)
 
-    def test_client_params_lifted_into_both_stores(self):
-        embedded = self.server["clients"][0]
-        for client in (embedded, self.client):
-            self.assertEqual(
-                {key: client["client_params"][key] for key in ("Jc", "Jmin", "Jmax")},
-                {"Jc": 8, "Jmin": 40, "Jmax": 70},
-            )
-        self.assertEqual(embedded["client_params"], self.client["client_params"])
+    def test_client_params_lifted(self):
+        self.assertIs(self.client, self.server["clients"][0])
+        expected = {"Jc": 8, "Jmin": 40, "Jmax": 70}
+        self.assertEqual({key: self.client["client_params"][key] for key in expected}, expected)
+        self.manager.save_config()
+        rollback = saved(self.manager)["clients"]["cli151"]
+        self.assertEqual({key: rollback["client_params"][key] for key in expected}, expected)
 
     def test_server_conf_matches_a_server_created_today(self):
         self.manager.write_server_conf(self.server)
@@ -95,14 +95,64 @@ class LegacyConfigMigrationTests(unittest.TestCase):
         self.assertEqual(restart(self.manager).config, self.manager.config)
 
     def test_malformed_or_partial_files_load_as_empty_state(self):
-        for content in ("[]", "{}", '{"servers": []}'):
+        for content in ("[]", "{}", '{"servers": []}', '{"servers": [], "clients": {}}'):
             Path(self.config_file).write_text(content, encoding="utf-8")
             manager = build_manager(config_dir=self.tmp, wireguard_config_dir=self.tmp, config_file=self.config_file)
-            self.assertEqual(manager.config, {"servers": [], "clients": {}}, content)
+            self.assertEqual(manager.config, {"servers": []}, content)
 
 
-class ClientStoreConsistencyTests(unittest.TestCase):
-    """Every mutation route must leave servers[].clients[] and clients{} in agreement."""
+class TwoStoreMigrationTests(unittest.TestCase):
+    """A v2.1 file: clients in each server's list *and* in a top-level map."""
+
+    def setUp(self):
+        first = build_manager()
+        self.home = first.create_wireguard_server(
+            {"name": "home", "protocol": "AWG 2.0", "subnet": "10.42.0.0/24", "port": 51942, "auto_start": False}
+        )
+        self.phone, _ = first.add_wireguard_client(self.home["id"], "phone")
+        self.first = first
+
+    def _load(self, edit):
+        data = saved(self.first)
+        edit(data)
+        Path(self.first.config_file).write_text(json.dumps(data), encoding="utf-8")
+        return restart(self.first)
+
+    def test_each_client_is_held_once_and_the_map_is_gone_from_memory(self):
+        manager = self._load(lambda data: None)
+        self.assertNotIn("clients", manager.config)
+        self.assertEqual([c["id"] for c in manager.get_client_configs()], [self.phone["id"]])
+        self.assertIs(manager.get_client(self.phone["id"]), manager.get_server(self.home["id"])["clients"][0])
+        self.assertNotIn("server_name", manager.get_client(self.phone["id"]))
+
+    def test_a_client_only_in_the_map_joins_its_servers_list(self):
+        def orphan_from_list(data):
+            data["servers"][0]["clients"] = []
+
+        manager = self._load(orphan_from_list)
+        self.assertEqual([c["id"] for c in manager.get_server(self.home["id"])["clients"]], [self.phone["id"]])
+        # And it still owns its address.
+        self.assertNotEqual(manager.get_client_ip(manager.get_server(self.home["id"])), self.phone["client_ip"])
+
+    def test_a_client_whose_server_is_gone_is_dropped(self):
+        def dangling(data):
+            data["clients"]["ghost"] = {"id": "ghost", "server_id": "gone", "client_ip": "10.99.0.2"}
+
+        with self.assertLogs("services.amnezia_manager", "WARNING") as logs:
+            manager = self._load(dangling)
+        self.assertIsNone(manager.get_client("ghost"))
+        self.assertIn("ghost", "\n".join(logs.output))
+
+    def test_the_embedded_copy_wins_when_they_disagree(self):
+        def diverge(data):
+            data["clients"][self.phone["id"]]["name"] = "stale-map-name"
+
+        manager = self._load(diverge)
+        self.assertEqual(manager.get_client(self.phone["id"])["name"], "phone")
+
+
+class ClientMutationTests(unittest.TestCase):
+    """Every mutation route updates the one store, and the rollback map follows it."""
 
     def setUp(self):
         first = build_manager()
@@ -110,12 +160,10 @@ class ClientStoreConsistencyTests(unittest.TestCase):
         self.phone, _ = first.add_wireguard_client(self.server["id"], "phone")
         self.laptop, _ = first.add_wireguard_client(self.server["id"], "laptop")
 
+        # Mutate a manager loaded from disk, as the running app does.
         self.manager = restart(first)
         self.app, _ = build_app(manager=self.manager)
         self.http = self.app.test_client()
-        # The point of restarting: the two stores are now separate objects.
-        embedded = self.manager.get_server(self.server["id"])["clients"][0]
-        self.assertIsNot(embedded, self.manager.config["clients"][embedded["id"]])
 
     @staticmethod
     def _create_server(manager, name, subnet, port):
@@ -126,15 +174,20 @@ class ClientStoreConsistencyTests(unittest.TestCase):
     def _url(self, *parts):
         return "/".join(("/api/servers", self.server["id"], *parts))
 
-    def assert_consistent(self):
-        for manager in (self.manager, restart(self.manager)):  # in memory and as persisted
-            embedded = {c["id"]: (s["id"], c) for s in manager.config["servers"] for c in s["clients"]}
-            self.assertEqual(set(embedded), set(manager.config["clients"]))
-            for client_id, (server_id, client) in embedded.items():
-                stored = manager.config["clients"][client_id]
-                self.assertEqual(stored["server_id"], server_id)
-                for key in MIRRORED_KEYS:
-                    self.assertEqual(client.get(key), stored.get(key), f"{client_id}.{key}")
+    def assert_rollback_map_matches(self):
+        """The saved `clients` map is exactly what v2.1 expects: every client, once, with
+        its server's id and current name -- nothing stale, nothing missing."""
+        data = saved(self.manager)
+        expected = {
+            client["id"]: {**client, "server_id": server["id"], "server_name": server["name"]}
+            for server in data["servers"]
+            for client in server["clients"]
+        }
+        self.assertEqual(data["clients"], expected)
+        self.assertEqual(
+            {c["id"] for c in restart(self.manager).get_client_configs()},
+            {c["id"] for c in self.manager.get_client_configs()},
+        )
 
     def _conf(self):
         return Path(self.manager.get_server(self.server["id"])["config_path"]).read_text(encoding="utf-8")
@@ -149,25 +202,26 @@ class ClientStoreConsistencyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.manager.get_client(self.phone["id"])["name"], "tablet")
         self.assertIn("# Client: tablet", self._conf())
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
-    def test_rename_server_updates_every_client(self):
+    def test_rename_server_is_seen_by_every_client(self):
         response = self.http.post(self._url("rename"), json={"name": "cabin"})
         self.assertEqual(response.status_code, 200)
-        for client_id in (self.phone["id"], self.laptop["id"]):
-            self.assertEqual(self.manager.get_client(client_id)["server_name"], "cabin")
-        self.assert_consistent()
+        listed = self.http.get(self._url("clients")).get_json()
+        self.assertEqual({c["server_name"] for c in listed}, {"cabin"})
+        self.assertEqual({c["server_name"] for c in saved(self.manager)["clients"].values()}, {"cabin"})
+        self.assert_rollback_map_matches()
 
     def test_suspend_and_reactivate(self):
         url = self._url("clients", self.phone["id"], "suspend")
         self.assertTrue(self.http.post(url, json={}).get_json()["suspended"])
         self.assertNotIn(self._peer(self.phone), self._conf())
         self.assertIn(self._peer(self.laptop), self._conf())
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
         self.assertFalse(self.http.post(url, json={}).get_json()["suspended"])
         self.assertIn(self._peer(self.phone), self._conf())
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
     def test_update_client_params(self):
         params = {"Jc": 5, "Jmin": 30, "Jmax": 60}
@@ -175,7 +229,7 @@ class ClientStoreConsistencyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         stored = self.manager.get_client(self.phone["id"])["client_params"]
         self.assertEqual({key: stored[key] for key in params}, params)
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
     def test_update_transport_params(self):
         payload = {"protocol": "AWG 2.0", "S1": 70, "S2": 80, "S3": 30, "S4": 25,
@@ -183,7 +237,7 @@ class ClientStoreConsistencyTests(unittest.TestCase):
         response = self.http.post(self._url("transport-params"), json=payload)
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertIn("S1 = 70", self._conf())
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
     def test_delete_client(self):
         response = self.http.delete(self._url("clients", self.phone["id"]), json={})
@@ -192,7 +246,7 @@ class ClientStoreConsistencyTests(unittest.TestCase):
         self.assertIsNotNone(self.manager.get_client(self.laptop["id"]))
         self.assertNotIn(self._peer(self.phone), self._conf())
         self.assertIn(self._peer(self.laptop), self._conf())
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
     def test_delete_server_removes_only_its_clients(self):
         other = self._create_server(self.manager, "office", "10.41.0.0/24", 51941)
@@ -200,9 +254,9 @@ class ClientStoreConsistencyTests(unittest.TestCase):
 
         response = self.http.delete(self._url(), json={})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(set(self.manager.config["clients"]), {desk["id"]})
+        self.assertEqual({c["id"] for c in self.manager.get_client_configs()}, {desk["id"]})
         self.assertFalse(os.path.exists(self.server["config_path"]))
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
     def test_client_ids_are_scoped_to_their_server(self):
         other = self._create_server(self.manager, "office", "10.41.0.0/24", 51941)
@@ -215,7 +269,7 @@ class ClientStoreConsistencyTests(unittest.TestCase):
 
         phone = self.manager.get_client(self.phone["id"])
         self.assertEqual((phone["name"], phone["suspended"]), ("phone", False))
-        self.assert_consistent()
+        self.assert_rollback_map_matches()
 
 
 if __name__ == "__main__":
