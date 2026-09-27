@@ -413,8 +413,8 @@ class RouteNotFoundTests(_RealSystemApp):
         self.assertEqual(self.fake.calls, [])
 
 
-# Keys the UI consumes. Secrets (private and preshared keys) are deliberately not
-# pinned here: nothing in the UI reads them, so dropping them must stay a free change.
+# Keys the UI consumes. Private and preshared keys are never sent as JSON fields; the
+# configs that need them are rendered server-side.
 SECRET_KEYS = {"server_private_key", "client_private_key", "preshared_key"}
 SERVER_KEYS = {
     "auto_start", "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns",
@@ -437,7 +437,7 @@ class ApiContractTests(unittest.TestCase):
 
     def test_server_and_client_payloads(self):
         server = self.client.get("/api/servers").get_json()[0]
-        self.assertEqual(set(server) - SECRET_KEYS, SERVER_KEYS)
+        self.assertEqual(set(server), SERVER_KEYS)
         payloads = {
             "GET /api/servers": server["clients"][0],
             "POST .../clients": self.added["client"],
@@ -445,9 +445,47 @@ class ApiContractTests(unittest.TestCase):
             "GET /api/clients": self.client.get("/api/clients").get_json()[0],
         }
         for label, client in payloads.items():
-            self.assertEqual(set(client) - SECRET_KEYS, CLIENT_KEYS, label)
+            self.assertEqual(set(client), CLIENT_KEYS, label)
             self.assertEqual(client["server_name"], self.server["name"], label)
         self.assertIn("[Interface]", self.added["config"])
+
+    def test_no_json_payload_carries_a_private_key(self):
+        manager_server = self.manager.get_server(self.server["id"])
+        secrets = {manager_server["server_private_key"]}
+        for client in manager_server["clients"]:
+            secrets |= {client["client_private_key"], client["preshared_key"]}
+        client_url = f"/api/servers/{self.server['id']}/clients/{self.added['client']['id']}"
+
+        responses = {
+            "POST /api/servers": self.client.post(
+                "/api/servers",
+                json={"name": "t", "protocol": "AWG 2.0", "subnet": "10.66.0.0/24", "port": 51966, "auto_start": False},
+            ),
+            "GET /api/servers": self.client.get("/api/servers"),
+            "GET /api/clients": self.client.get("/api/clients"),
+            "GET .../clients": self.client.get(f"/api/servers/{self.server['id']}/clients"),
+            "GET .../info": self.client.get(f"/api/servers/{self.server['id']}/info"),
+            "POST .../suspend": self.client.post(f"{client_url}/suspend", json={}),
+            "POST .../client-params": self.client.post(f"{client_url}/client-params", json={"client_params": {"Jc": 6}}),
+        }
+        for label, response in responses.items():
+            self.assertEqual(response.status_code, 200, label)
+            body = response.get_data(as_text=True)
+            for field in SECRET_KEYS:
+                self.assertNotIn(f'"{field}"', body, label)
+        # The key values themselves must not leak under some other name either.
+        for label in ("GET /api/servers", "GET /api/clients", "GET .../clients"):
+            body = responses[label].get_data(as_text=True)
+            for secret in secrets:
+                self.assertNotIn(secret, body, label)
+
+    def test_configs_that_need_keys_still_have_them(self):
+        client = self.manager.get_client(self.added["client"]["id"])
+        both = self.client.get(f"/api/servers/{self.server['id']}/clients/{client['id']}/config-both").get_json()
+        self.assertIn(client["client_private_key"], both["clean_config"])
+        self.assertIn(client["preshared_key"], both["clean_config"])
+        server_conf = self.client.get(f"/api/servers/{self.server['id']}/config").get_json()["config_content"]
+        self.assertIn(self.manager.get_server(self.server["id"])["server_private_key"], server_conf)
 
     def test_info_payload(self):
         info = self.client.get(f"/api/servers/{self.server['id']}/info").get_json()

@@ -59,13 +59,19 @@ def register_server_routes(
         data = request.get_json(silent=True)
         return data if isinstance(data, dict) else {}
 
+    # Never sent to the browser: the UI reads none of them, and every config that needs
+    # them is rendered server-side (config-both, the .conf downloads, /config).
+    secret_keys = frozenset({"server_private_key", "client_private_key", "preshared_key"})
+
     def serialize_client(client, server=None):
         # server_name is not stored per client; it always comes from the server.
         server = server or amnezia_manager.get_server(client.get("server_id")) or {}
-        return {**client, "server_name": server.get("name")}
+        payload = {key: value for key, value in client.items() if key not in secret_keys}
+        return {**payload, "server_name": server.get("name")}
 
     def serialize_server(server):
-        return {**server, "clients": [serialize_client(client, server) for client in server.get("clients", [])]}
+        payload = {key: value for key, value in server.items() if key not in secret_keys}
+        return {**payload, "clients": [serialize_client(client, server) for client in server.get("clients", [])]}
 
     # --- servers ------------------------------------------------------------------
 
@@ -99,7 +105,7 @@ def register_server_routes(
         # fully-defaulted (and auto-started) server.
         if not str(data.get("name") or "").strip():
             return jsonify({"error": "A server name is required"}), 400
-        return jsonify(amnezia_manager.create_wireguard_server(data))
+        return jsonify(serialize_server(amnezia_manager.create_wireguard_server(data)))
 
     @server_bp.route("/api/servers/<server_id>", methods=["DELETE"])
     @require_token
