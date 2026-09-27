@@ -111,9 +111,20 @@ class PublishRulesTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("git tag -a v2.3", output)
 
+    def test_mismatch_hint_matches_the_situation(self):
+        self.tag("v2.2")
+        (self.dir / "change.txt").write_text("edited", encoding="utf-8")
+        code, _, output = self.publish("2.2")
+        self.assertEqual(code, 1)
+        self.assertIn("uncommitted or untracked changes", output)
+
         self.commit("after the release")
         code, _, output = self.publish("2.2")
-        self.assertEqual(code, 1, output)
+        self.assertEqual(code, 1)
+        self.assertIn("v2.2 already exists on another commit", output)
+        self.assertIn("run without a version", output)
+        # Re-creating an existing tag would fail, so it must not be suggested.
+        self.assertNotIn("git tag -a v2.2", output)
 
     def test_only_v_tags_are_releases(self):
         self.tag("1.5.1")

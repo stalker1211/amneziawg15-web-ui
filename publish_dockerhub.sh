@@ -49,8 +49,18 @@ VERSION="$(version_describe)"
 RELEASE="$(version_release)"
 
 if [[ -n "${EXPECTED}" && "v${EXPECTED#v}" != "${RELEASE}" ]]; then
-	echo "Error: asked for v${EXPECTED#v}, but HEAD is ${VERSION}." >&2
-	echo "Commit everything and tag the release first: git tag -a v${EXPECTED#v} -m ${EXPECTED#v}" >&2
+	WANTED="v${EXPECTED#v}"
+	WANTED_AT="$(git rev-parse -q --verify "refs/tags/${WANTED}^{commit}" 2>/dev/null || true)"
+	echo "Error: asked for ${WANTED}, but HEAD is ${VERSION}." >&2
+	if [[ -n "${WANTED_AT}" && "${WANTED_AT}" == "$(git rev-parse HEAD)" ]]; then
+		echo "HEAD is ${WANTED}, but the tree has uncommitted or untracked changes; commit or remove them." >&2
+	elif [[ -n "${WANTED_AT}" ]]; then
+		echo "${WANTED} already exists on another commit ($(git log -1 --format='%h, %cs' "${WANTED_AT}"))." >&2
+		echo "To publish HEAD, run without a version (pushes :latest), or tag a new release:" >&2
+		echo "  git tag -a vX.Y -m X.Y" >&2
+	else
+		echo "Commit any changes and tag the release first: git tag -a ${WANTED} -m ${WANTED#v}" >&2
+	fi
 	exit 1
 fi
 
