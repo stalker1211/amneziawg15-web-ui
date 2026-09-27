@@ -68,7 +68,8 @@ class AmneziaApp {
     init() {
         document.addEventListener('DOMContentLoaded', () => {
             console.log("AmneziaWG Web UI initializing...");
-            this.applyTheme(this.getPreferredTheme(), false);
+            this.setTheme(this.getThemePreference(), false);
+            this.watchSystemTheme();
             this.setupEventListeners();
             this.setupSocketLifecycleHandlers();
             this.setupSocketIO();
@@ -277,7 +278,7 @@ class AmneziaApp {
 
         if (!value.trim()) {
             qrContainer.innerHTML = `
-                <div class="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-3">
+                <div class="text-sm text-red-600 dark:text-[#fca5a5] bg-red-50 dark:bg-[#7f1d1d] border border-red-200 rounded-lg p-3">
                     No configuration text to encode.
                 </div>
             `;
@@ -316,10 +317,10 @@ class AmneziaApp {
             const bytes = this.getUtf8ByteLength(value);
             const safeMsg = this.escapeHtml(lastError?.message || String(lastError));
             qrContainer.innerHTML = `
-                <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                <div class="text-sm text-red-700 bg-red-50 dark:bg-[#7f1d1d] border border-red-200 rounded-lg p-3">
                     <div class="font-semibold mb-1">QR code could not be generated</div>
                     <div class="mb-2">Most commonly this happens when the config is too large for a QR code (payload: <span class=\"font-mono\">${bytes}</span> bytes).</div>
-                    <div class="text-xs text-red-600 font-mono break-all">${safeMsg}</div>
+                    <div class="text-xs text-red-600 dark:text-[#fca5a5] font-mono break-all">${safeMsg}</div>
                     <div class="mt-2">Use “Download Config File (.conf)” instead.</div>
                 </div>
             `;
@@ -354,7 +355,7 @@ class AmneziaApp {
         const themeToggleBtn = this.getElement('themeToggleBtn');
         if (themeToggleBtn) {
             themeToggleBtn.addEventListener('click', () => {
-                this.toggleTheme();
+                this.cycleTheme();
             });
         }
 
@@ -397,47 +398,58 @@ class AmneziaApp {
         this.setupFormValidation();
     }
 
-    getPreferredTheme() {
+    // Theme preference: 'system' (follow the OS, the default), 'light' or 'dark'.
+    // The effective theme is a `dark` class on <body>; Tailwind's dark: variants and
+    // the few body.dark rules in style.css key off it.
+    getThemePreference() {
         try {
             const saved = localStorage.getItem('amnezia_theme');
-            if (saved === 'dark') return true;
-            if (saved === 'light') return false;
+            if (saved === 'system' || saved === 'light' || saved === 'dark') return saved;
         } catch (_) {
-            // ignore
+            // storage unavailable (private mode): fall through
         }
-
-        return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        return 'system';
     }
 
-    applyTheme(isDark, persist = true) {
-        document.body.classList.toggle('dark', !!isDark);
-        this.updateThemeButton(!!isDark);
+    systemPrefersDark() {
+        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    }
+
+    setTheme(preference, persist = true) {
+        this.themePreference = preference;
+        const isDark = preference === 'dark' || (preference === 'system' && this.systemPrefersDark());
+        document.body.classList.toggle('dark', isDark);
+        this.updateThemeButton(preference, isDark);
 
         if (persist) {
             try {
-                localStorage.setItem('amnezia_theme', isDark ? 'dark' : 'light');
+                localStorage.setItem('amnezia_theme', preference);
             } catch (_) {
                 // ignore
             }
         }
     }
 
-    toggleTheme() {
-        const isDark = document.body.classList.contains('dark');
-        this.applyTheme(!isDark, true);
+    cycleTheme() {
+        const order = ['system', 'light', 'dark'];
+        this.setTheme(order[(order.indexOf(this.themePreference) + 1) % order.length]);
     }
 
-    updateThemeButton(isDark) {
+    watchSystemTheme() {
+        const query = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+        if (!query || !query.addEventListener) return;
+        query.addEventListener('change', () => {
+            if (this.themePreference === 'system') this.setTheme('system', false);
+        });
+    }
+
+    updateThemeButton(preference, isDark) {
         const btn = this.getElement('themeToggleBtn');
         if (!btn) return;
-        btn.textContent = isDark ? '☀️' : '🌙';
-        btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
-        btn.classList.toggle('bg-gray-100', !isDark);
-        btn.classList.toggle('bg-gray-800', isDark);
-        btn.classList.toggle('text-gray-700', !isDark);
-        btn.classList.toggle('text-gray-200', isDark);
-        btn.classList.toggle('hover:bg-gray-200', !isDark);
-        btn.classList.toggle('hover:bg-gray-700', isDark);
+        btn.textContent = { system: '🖥️', light: '☀️', dark: '🌙' }[preference];
+        const now = preference === 'system' ? ` (${isDark ? 'dark' : 'light'} right now)` : '';
+        btn.title = `Theme: ${preference}${now}. Click for ${
+            { system: 'light', light: 'dark', dark: 'system' }[preference]}.`;
     }
 
     openCreateServerModal() {
@@ -911,7 +923,7 @@ class AmneziaApp {
         const statusDiv = this.getElement('formStatus');
         if (statusDiv) {
             statusDiv.textContent = message;
-            statusDiv.className = `text-sm mt-2 ${type === 'success' ? 'text-green-600' : 'text-red-600'}`;
+            statusDiv.className = `text-sm mt-2 ${type === 'success' ? 'text-green-600 dark:text-[#4ade80]' : 'text-red-600 dark:text-[#fca5a5]'}`;
             statusDiv.classList.remove('hidden');
             
             setTimeout(() => {
@@ -1554,7 +1566,7 @@ class AmneziaApp {
         const serversList = this.getElement('serversList');
         if (serversList) {
             serversList.innerHTML = `
-                <div class="text-center py-8 text-red-500">
+                <div class="text-center py-8 text-red-500 dark:text-[#fca5a5]">
                     ${message}
                 </div>
             `;
@@ -1970,9 +1982,9 @@ class AmneziaApp {
             if (qrContainer) {
                 const safeMsg = this.escapeHtml(error?.message || String(error));
                 qrContainer.innerHTML = `
-                    <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                    <div class="text-sm text-red-700 bg-red-50 dark:bg-[#7f1d1d] border border-red-200 rounded-lg p-3">
                         <div class="font-semibold mb-1">Failed to load configuration for QR</div>
-                        <div class="text-xs text-red-600 font-mono break-all">${safeMsg}</div>
+                        <div class="text-xs text-red-600 dark:text-[#fca5a5] font-mono break-all">${safeMsg}</div>
                     </div>
                 `;
             }

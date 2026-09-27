@@ -166,9 +166,8 @@ def index():
     logger.debug("Serving index.html")
     # Cache-bust static assets so browsers pick up new JS/CSS immediately.
     try:
-        js_path = os.path.join(STATIC_DIR, "js", "app.js")
-        css_path = os.path.join(STATIC_DIR, "css", "style.css")
-        cache_bust = int(max(os.path.getmtime(js_path), os.path.getmtime(css_path)))
+        assets = (("js", "app.js"), ("css", "style.css"), ("css", "tailwind.css"))
+        cache_bust = int(max(os.path.getmtime(os.path.join(STATIC_DIR, *asset)) for asset in assets))
     except OSError:
         cache_bust = int(time.time())
 

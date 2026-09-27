@@ -7,50 +7,25 @@
     transition: all 0.2s ease;
 }
 
-/* Dark theme base */
+/* Dark theme. Colour utilities carry their own `dark:` classes in the markup
+   (Tailwind, see tailwind.config.js); what remains here is element-level defaults
+   and a few components. The element rules must stay below the `dark:` classes in
+   specificity (no !important) so a coloured label or heading keeps its colour. */
 body.dark {
     background-color: #111827;
     color: #e5e7eb;
 }
 
-/* Common background/text overrides for Tailwind utility classes */
-body.dark .bg-gray-100 { background-color: #111827 !important; }
-body.dark .bg-white { background-color: #1f2937 !important; }
-body.dark .bg-gray-50 { background-color: #1e293b !important; }
-body.dark .bg-blue-50 { background-color: #123255 !important; }
-body.dark .bg-blue-100 { background-color: #173b63 !important; }
+body.dark label { color: #e0e7ff; }
+body.dark h3, body.dark h4 { color: #bfdbfe; }
 
-body.dark .text-gray-800 { color: #e5e7eb !important; }
-body.dark .text-gray-900 { color: #f1f5f9 !important; }
-body.dark .text-gray-700 { color: #d1d5db !important; }
-body.dark .text-gray-600 { color: #e0e7ff !important; }
-body.dark .text-gray-500 { color: #94a3b8 !important; }
-body.dark label { color: #e0e7ff !important; }
-body.dark h3, body.dark h4 { color: #bfdbfe !important; }
-body.dark .text-blue-800 { color: #93c5fd !important; }
-body.dark .text-blue-900 { color: #bfdbfe !important; }
-body.dark .text-blue-800\/80 { color: #93c5fd !important; opacity: 1 !important; }
-/* Secondary help text inside blue panels (AWG 3.0 fields, header protection
-   warning). Without this the /60 opacity keeps the dark navy default and is
-   almost unreadable on the dark panel background. */
-body.dark .text-blue-800\/60 { color: #93c5fd !important; opacity: 1 !important; }
-body.dark .text-blue-800\/70 { color: #93c5fd !important; opacity: 1 !important; }
-body.dark .text-blue-800 { color: #bfdbfe !important; }
-body.dark .text-blue-600 { color: #93c5fd !important; }
-body.dark .text-blue-500 { color: #60a5fa !important; }
-body.dark .text-purple-600 { color: #c084fc !important; }
-body.dark .text-sky-600 { color: #7dd3fc !important; }
-body.dark .text-emerald-700 { color: #6ee7b7 !important; }
-
-/* Dark mode: header refresh button */
+/* Header refresh button (its text colour comes from dark:text-* in the markup) */
 body.dark #refreshIpBtn {
     background-color: rgba(30, 58, 95, 0.9);
-    color: #bfdbfe;
     border-color: rgba(59, 130, 246, 0.4);
 }
 body.dark #refreshIpBtn:hover {
     background-color: rgba(37, 75, 122, 0.95);
-    color: #dbeafe;
 }
 
 body.dark .egress-refresh-btn {
@@ -74,58 +49,6 @@ body.dark .egress-probe-updating .egress-probe-ts {
     color: #94a3b8 !important;
 }
 
-body.dark .border-gray-200 { border-color: #1f2937 !important; }
-body.dark .border-gray-300 { border-color: #334155 !important; }
-body.dark .border-blue-200 { border-color: #1e3a5f !important; }
-body.dark .shadow-md { box-shadow: 0 4px 8px rgba(0,0,0,0.35) !important; }
-
-/* Dark mode: icon button backgrounds */
-body.dark .bg-purple-50 { background-color: #2e1065 !important; }
-body.dark .bg-purple-100 { background-color: #3b0d80 !important; }
-body.dark .bg-slate-50 { background-color: #1e293b !important; }
-body.dark .bg-slate-100 { background-color: #273549 !important; }
-body.dark .bg-amber-50 { background-color: #451a03 !important; }
-body.dark .bg-amber-100 { background-color: #5c2508 !important; }
-body.dark .bg-sky-50 { background-color: #0c2d48 !important; }
-body.dark .bg-sky-100 { background-color: #0e3a5e !important; }
-body.dark .bg-red-50 { background-color: #7f1d1d !important; }
-body.dark .bg-red-100 { background-color: #991b1b !important; }
-
-/* Dark mode: icon button text colors */
-body.dark .text-purple-600 { color: #c084fc !important; }
-body.dark .text-slate-600 { color: #94a3b8 !important; }
-body.dark .text-amber-600 { color: #fbbf24 !important; }
-body.dark .text-amber-500 { color: #f59e0b !important; }
-/* Warning/callout text on the dark amber panel background (bg-amber-50 -> #451a03) */
-body.dark .text-amber-800 { color: #fcd34d !important; }
-body.dark .text-amber-700 { color: #fbbf24 !important; }
-body.dark .text-sky-600 { color: #7dd3fc !important; }
-body.dark .text-red-500 { color: #fca5a5 !important; }
-body.dark .text-green-500 { color: #4ade80 !important; }
-
-/* Dark mode: suspend bulb button */
-body.dark .bg-green-50 { background-color: #14532d !important; }
-body.dark .bg-green-100 { background-color: #166534 !important; }
-body.dark .text-green-600 { color: #4ade80 !important; }
-body.dark .text-green-800 { color: #86efac !important; }
-body.dark .bg-red-100 { background-color: #7f1d1d !important; }
-body.dark .text-red-800 { color: #fca5a5 !important; }
-body.dark .text-red-600 { color: #fca5a5 !important; }
-body.dark .border-green-200\/70 { border-color: #16a34a !important; }
-body.dark .border-green-300 { border-color: #22c55e !important; }
-
-/* Dark mode: icon button borders */
-body.dark .border-purple-200\/70 { border-color: #5b21b6 !important; }
-body.dark .border-purple-300 { border-color: #7c3aed !important; }
-body.dark .border-slate-200\/70 { border-color: #334155 !important; }
-body.dark .border-slate-300 { border-color: #475569 !important; }
-body.dark .border-amber-200\/70 { border-color: #92400e !important; }
-body.dark .border-amber-300 { border-color: #b45309 !important; }
-body.dark .border-sky-200\/70 { border-color: #0369a1 !important; }
-body.dark .border-sky-300 { border-color: #0284c7 !important; }
-body.dark .border-red-200\/70 { border-color: #b91c1c !important; }
-body.dark .border-red-300 { border-color: #dc2626 !important; }
-
 body.dark input,
 body.dark textarea,
 body.dark select {
@@ -139,9 +62,6 @@ body.dark textarea::placeholder {
     color: #64748b;
 }
 
-body.dark .bg-gray-800 { background-color: #111827 !important; }
-body.dark .bg-gray-900 { background-color: #0f172a !important; }
-body.dark .text-green-400 { color: #86efac !important; }
 
 /* Collapsible parameter help (keeps config dialogs short) */
 .param-help > summary {

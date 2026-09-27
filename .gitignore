@@ -12,3 +12,7 @@ Thumbs.db
 
 # Generated per build by publish_dockerhub.sh; baked into the image, never committed
 web-ui/BUILD
+
+# build_css.sh: its downloaded CLI, and its output (built in the Dockerfile)
+.cache/
+web-ui/static/css/tailwind.css

@@ -13,7 +13,7 @@ class ServerUi {
 
             const details = cc && geoText ? `${cc} / ${geoText}` : (cc || geoText);
             const prefix = flag ? `${safe(flag)} ` : '';
-            return ` <span class="text-gray-500">(${prefix}${safe(details)})</span>`;
+            return ` <span class="text-gray-500 dark:text-[#94a3b8]">(${prefix}${safe(details)})</span>`;
         };
         const probeServiceSuffix = (serviceName) => {
             const serviceText = String(serviceName || '').trim();
@@ -23,7 +23,7 @@ class ServerUi {
 
         if (!Array.isArray(servers) || servers.length === 0) {
             return `
-                <div class="text-center py-8 text-gray-500">
+                <div class="text-center py-8 text-gray-500 dark:text-[#94a3b8]">
                     No servers created yet. Create your first server above.
                 </div>
             `;
@@ -38,10 +38,10 @@ class ServerUi {
             const serviceSuffix = probeServiceSuffix(probe?.service_name || probe?.service);
 
             return `
-            <div class="server-card bg-white rounded-lg shadow-md p-6 ${server.status !== 'running' ? 'opacity-60' : ''}">
+            <div class="server-card bg-white dark:bg-[#1f2937] rounded-lg shadow-md dark:shadow-[0_4px_8px_rgba(0,0,0,0.35)] p-6 ${server.status !== 'running' ? 'opacity-60' : ''}">
                 <div class="flex justify-between items-center mb-4">
                     <div class="flex items-start gap-3">
-                        <div class="w-9 h-9 flex items-center justify-center bg-blue-100 text-blue-600 rounded-full mt-0.5">
+                        <div class="w-9 h-9 flex items-center justify-center bg-blue-100 dark:bg-[#173b63] text-blue-600 dark:text-[#93c5fd] rounded-full mt-0.5">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                 <rect x="3" y="4" width="18" height="6" rx="1.5" stroke-width="2"></rect>
                                 <rect x="3" y="14" width="18" height="6" rx="1.5" stroke-width="2"></rect>
@@ -51,23 +51,23 @@ class ServerUi {
                         </div>
                         <div>
                             <div class="flex items-center gap-3">
-                                <h3 class="text-lg font-semibold"><span class="text-purple-600">${safe(server.name)}</span></h3>
+                                <h3 class="text-lg font-semibold"><span class="text-purple-600 dark:text-[#c084fc]">${safe(server.name)}</span></h3>
                                 <label class="relative inline-flex items-center cursor-pointer" title="${server.status === 'running' ? 'Stop server' : 'Start server'}">
                                     <input type="checkbox" class="sr-only peer" ${server.status === 'running' ? 'checked' : ''}
                                         onchange="amneziaApp.toggleServer('${server.id}', this.checked)">
                                     <div class="w-9 h-5 bg-gray-300 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-green-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-green-500"></div>
                                 </label>
-                                <span class="text-sm font-bold ${server.status === 'running' ? 'text-green-600' : 'text-red-500'}">${server.status === 'running' ? 'Running' : 'Stopped'}</span>
+                                <span class="text-sm font-bold ${server.status === 'running' ? 'text-green-600 dark:text-[#4ade80]' : 'text-red-500 dark:text-[#fca5a5]'}">${server.status === 'running' ? 'Running' : 'Stopped'}</span>
                             </div>
-                            <p class="text-sm text-gray-600">
+                            <p class="text-sm text-gray-600 dark:text-[#e0e7ff]">
                                 ID: ${safe(server.id)} | Port: ${safe(server.port)} | Subnet: ${safe(server.subnet)}
                                 | Protocol: ${safe(server.protocol || 'AWG 1.5')}
                                 | NAT: ${server.enable_nat ? 'On' : 'Off'}
                                 | LAN Block: ${server.block_lan_cidrs ? 'On' : 'Off'}
                             </p>
-                            <p class="text-sm text-gray-500 flex items-center gap-2">Client's egress IP: <span class="egress-probe-value font-medium ${hasExternalAccess ? 'text-gray-700' : 'text-red-400'}">${safe(finalExternalIp)}</span>${egressGeo}${checkedAt ? ` <span class="egress-probe-ts text-xs text-gray-400">(${safe(checkedAt)})</span>` : ''}${serviceSuffix}
+                            <p class="text-sm text-gray-500 dark:text-[#94a3b8] flex items-center gap-2">Client's egress IP: <span class="egress-probe-value font-medium ${hasExternalAccess ? 'text-gray-700 dark:text-[#d1d5db]' : 'text-red-400'}">${safe(finalExternalIp)}</span>${egressGeo}${checkedAt ? ` <span class="egress-probe-ts text-xs text-gray-400">(${safe(checkedAt)})</span>` : ''}${serviceSuffix}
                             <button onclick="amneziaApp.probeServerEgressIp('${server.id}', this)"
-                                class="egress-refresh-btn w-7 h-7 rounded-full bg-white/80 text-blue-600 hover:text-blue-700 shadow-sm border border-blue-200/70 hover:border-blue-300/80 backdrop-blur flex items-center justify-center transition"
+                                class="egress-refresh-btn w-7 h-7 rounded-full bg-white/80 text-blue-600 dark:text-[#93c5fd] hover:text-blue-700 shadow-sm border border-blue-200/70 hover:border-blue-300/80 backdrop-blur flex items-center justify-center transition"
                                 title="Refresh final external IP">
                                 <span class="text-[12px] leading-none">↻</span>
                             </button>
@@ -76,7 +76,7 @@ class ServerUi {
                     </div>
                     <div class="flex items-center gap-1.5">
                         <button onclick="amneziaApp.addClient('${server.id}')"
-                            class="w-8 h-8 rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200/70 hover:border-blue-300 flex items-center justify-center transition shadow-sm"
+                            class="w-8 h-8 rounded-full bg-blue-50 dark:bg-[#123255] text-blue-600 dark:text-[#93c5fd] hover:bg-blue-100 border border-blue-200/70 hover:border-blue-300 flex items-center justify-center transition shadow-sm"
                             title="Add Client">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"></path>
@@ -86,7 +86,7 @@ class ServerUi {
                             </svg>
                         </button>
                         <button onclick="amneziaApp.showServerConfig('${server.id}')"
-                            class="w-8 h-8 rounded-full bg-purple-50 text-purple-600 hover:bg-purple-100 border border-purple-200/70 hover:border-purple-300 flex items-center justify-center transition shadow-sm"
+                            class="w-8 h-8 rounded-full bg-purple-50 dark:bg-[#2e1065] text-purple-600 dark:text-[#c084fc] hover:bg-purple-100 border border-purple-200/70 dark:border-[#5b21b6] hover:border-purple-300 flex items-center justify-center transition shadow-sm"
                             title="Edit Config">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <circle cx="12" cy="12" r="3"></circle>
@@ -94,7 +94,7 @@ class ServerUi {
                             </svg>
                         </button>
                         <button onclick="amneziaApp.showServerLogs('${server.id}', '${server.interface || ''}')"
-                            class="w-8 h-8 rounded-full bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200/70 hover:border-slate-300 flex items-center justify-center transition shadow-sm"
+                            class="w-8 h-8 rounded-full bg-slate-50 dark:bg-[#1e293b] text-slate-600 dark:text-[#94a3b8] hover:bg-slate-100 border border-slate-200/70 dark:border-[#334155] hover:border-slate-300 flex items-center justify-center transition shadow-sm"
                             title="View Logs">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path>
@@ -105,7 +105,7 @@ class ServerUi {
                         </button>
                         <span class="w-px h-5 bg-gray-200 mx-0.5"></span>
                         <button onclick="amneziaApp.deleteServer('${server.id}')"
-                            class="w-8 h-8 rounded-full bg-red-50 text-red-500 hover:bg-red-100 border border-red-200/70 hover:border-red-300 flex items-center justify-center transition shadow-sm"
+                            class="w-8 h-8 rounded-full bg-red-50 dark:bg-[#7f1d1d] text-red-500 dark:text-[#fca5a5] hover:bg-red-100 border border-red-200/70 dark:border-[#b91c1c] hover:border-red-300 flex items-center justify-center transition shadow-sm"
                             title="Delete Server">
                             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="3 6 5 6 21 6"></polyline>
@@ -125,7 +125,7 @@ class ServerUi {
 
     static renderServerClientsHtml({ serverId, clients, traffic, escapeHtml, isClientActiveFromTraffic, countryCodeToFlagEmoji }) {
         if (clients.length === 0) {
-            return '<p class="text-gray-500 text-sm">No clients yet.</p>';
+            return '<p class="text-gray-500 dark:text-[#94a3b8] text-sm">No clients yet.</p>';
         }
 
         const safe = (value) => escapeHtml(value);
@@ -147,18 +147,18 @@ class ServerUi {
                     const flagPrefix = flag ? `${safe(flag)} ` : '';
                     const latestHandshake = clientTraffic.latest_handshake;
                     const endpointLine = endpoint && endpoint !== '(none)'
-                        ? `${flagPrefix}${safe(endpoint)}${geo ? ` <span class=\"text-gray-500\">(${safe(geo)})</span>` : ''}`
+                        ? `${flagPrefix}${safe(endpoint)}${geo ? ` <span class=\"text-gray-500 dark:text-[#94a3b8]\">(${safe(geo)})</span>` : ''}`
                         : '<span class="text-gray-400">(not connected)</span>';
                     const handshakeLine = (endpoint && endpoint !== '(none)' && latestHandshake)
-                        ? `<span class="text-xs text-gray-500">latest handshake: ${safe(latestHandshake)}</span>`
+                        ? `<span class="text-xs text-gray-500 dark:text-[#94a3b8]">latest handshake: ${safe(latestHandshake)}</span>`
                         : '';
                     const rxFlashClass = clientTraffic._rx_changed ? 'traffic-flash' : '';
                     const txFlashClass = clientTraffic._tx_changed ? 'traffic-flash' : '';
 
                     return `
-                    <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg hover:bg-gray-100 transition-colors duration-200 ${rowOpacity}">
+                    <div class="flex justify-between items-center bg-gray-50 dark:bg-[#1e293b] p-3 rounded-lg hover:bg-gray-100 transition-colors duration-200 ${rowOpacity}">
                         <div class="flex items-center">
-                            <div class="w-8 h-8 flex items-center justify-center bg-blue-100 text-blue-600 rounded-full mr-3">
+                            <div class="w-8 h-8 flex items-center justify-center bg-blue-100 dark:bg-[#173b63] text-blue-600 dark:text-[#93c5fd] rounded-full mr-3">
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
                                 </svg>
@@ -167,8 +167,8 @@ class ServerUi {
                                 <div class="flex flex-col">
                                     <span class="font-medium flex items-center gap-2 flex-wrap">
                                         <span class="inline-block w-2 h-2 rounded-full ${statusDotClass}" title="${statusDotTitle}"></span>
-                                        <span><span class="text-sky-600">${safe(client.name)}</span> <span class="text-sm text-gray-600">(${safe(client.client_ip)})</span></span>
-                                        <span class="text-xs text-gray-500">
+                                        <span><span class="text-sky-600 dark:text-[#7dd3fc]">${safe(client.name)}</span> <span class="text-sm text-gray-600 dark:text-[#e0e7ff]">(${safe(client.client_ip)})</span></span>
+                                        <span class="text-xs text-gray-500 dark:text-[#94a3b8]">
                                             <span class="traffic-arrow ${rxFlashClass}" aria-label="received">
                                                 <svg class="traffic-arrow-icon traffic-arrow-icon-rx" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path fill-rule="evenodd" d="M10 15a1 1 0 01-.707-.293l-5-5a1 1 0 111.414-1.414L9 11.586V3a1 1 0 112 0v8.586l3.293-3.293a1 1 0 111.414 1.414l-5 5A1 1 0 0110 15z" clip-rule="evenodd" />
@@ -184,7 +184,7 @@ class ServerUi {
                                             ${safe(clientTraffic.sent)}
                                         </span>
                                     </span>
-                                    <span class="text-xs text-gray-600">${endpointLine}</span>
+                                    <span class="text-xs text-gray-600 dark:text-[#e0e7ff]">${endpointLine}</span>
                                     ${handshakeLine}
                                 </div>
                             </div>
@@ -196,7 +196,7 @@ class ServerUi {
                                     <div class="w-8 h-[18px] bg-amber-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-[14px] rtl:peer-checked:after:-translate-x-[14px] peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-[14px] after:w-[14px] after:transition-all peer-checked:bg-green-500"></div>
                                 </label>
                                 <button onclick="amneziaApp.showClientQRCode('${serverId}', '${client.id}')"
-                                    class="inline-flex items-center gap-1 rounded-full bg-amber-50 text-amber-600 hover:bg-amber-100 border border-amber-200/70 hover:border-amber-300 px-2.5 py-1 text-xs font-medium shadow-sm transition"
+                                    class="inline-flex items-center gap-1 rounded-full bg-amber-50 dark:bg-[#451a03] text-amber-600 dark:text-[#fbbf24] hover:bg-amber-100 border border-amber-200/70 dark:border-[#92400e] hover:border-amber-300 px-2.5 py-1 text-xs font-medium shadow-sm transition"
                                     title="Show QR Code">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
@@ -204,7 +204,7 @@ class ServerUi {
                                 QR
                             </button>
                                 <button onclick="amneziaApp.showClientParamsModal('${serverId}', '${client.id}')"
-                                    class="inline-flex items-center gap-1 rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100 border border-sky-200/70 hover:border-sky-300 px-2.5 py-1 text-xs font-medium shadow-sm transition"
+                                    class="inline-flex items-center gap-1 rounded-full bg-sky-50 dark:bg-[#0c2d48] text-sky-600 dark:text-[#7dd3fc] hover:bg-sky-100 border border-sky-200/70 dark:border-[#0369a1] hover:border-sky-300 px-2.5 py-1 text-xs font-medium shadow-sm transition"
                                     title="Edit client config parameters">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l9.586-9.586z"/>
@@ -213,7 +213,7 @@ class ServerUi {
                             </button>
                                 <span class="w-px h-4 bg-gray-200"></span>
                                 <button onclick="amneziaApp.deleteClient('${serverId}', '${client.id}')"
-                                    class="w-7 h-7 rounded-full bg-red-50 text-red-500 hover:bg-red-100 border border-red-200/70 hover:border-red-300 flex items-center justify-center transition shadow-sm"
+                                    class="w-7 h-7 rounded-full bg-red-50 dark:bg-[#7f1d1d] text-red-500 dark:text-[#fca5a5] hover:bg-red-100 border border-red-200/70 dark:border-[#b91c1c] hover:border-red-300 flex items-center justify-center transition shadow-sm"
                                     title="Delete client">
                                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="3 6 5 6 21 6"></polyline>

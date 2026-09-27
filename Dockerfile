@@ -77,6 +77,23 @@ RUN /opt/venv/bin/pip install --no-cache-dir --upgrade pip \
 
 
 ############################
+# Build: Tailwind CSS
+############################
+# Tailwind's standalone CLI (statically linked, no Node), downloaded and
+# checksum-verified by build_css.sh. Runs on the build platform: the output is plain
+# CSS, the same for every target architecture.
+FROM --platform=$BUILDPLATFORM alpine:${ALPINE_VERSION} AS css_builder
+
+RUN apk add --no-cache bash curl
+
+WORKDIR /src
+COPY build_css.sh tailwind.config.js tailwind.input.css ./
+COPY web-ui/templates web-ui/templates
+COPY web-ui/static/js web-ui/static/js
+RUN ./build_css.sh
+
+
+############################
 # Runtime
 ############################
 FROM alpine:${ALPINE_VERSION}
@@ -119,6 +136,7 @@ RUN ln -sf /usr/bin/awg /usr/bin/wg \
 RUN mkdir -p /app/web-ui /var/log/supervisor /var/log/webui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg /run/nginx
 
 COPY web-ui /app/web-ui/
+COPY --from=css_builder /src/web-ui/static/css/tailwind.css /app/web-ui/static/css/tailwind.css
 
 COPY config/nginx.conf /etc/nginx/http.d/default.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf

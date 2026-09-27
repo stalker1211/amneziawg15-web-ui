@@ -1,0 +1,5 @@
+/* Input for build_css.sh -> web-ui/static/css/tailwind.css. Project CSS lives in
+   web-ui/static/css/style.css, which index.html loads before this output. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

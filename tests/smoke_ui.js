@@ -36,9 +36,38 @@ function check(label, condition, detail) {
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
     page.on('dialog', (d) => d.accept());
+    // Everything is served from the panel itself (no CDN): record every origin asked.
+    const foreignRequests = new Set();
+    page.on('request', (r) => {
+        const url = r.url();
+        if (!url.startsWith('data:') && !url.startsWith('blob:') && new URL(url).origin !== new URL(BASE).origin) {
+            foreignRequests.add(new URL(url).origin);
+        }
+    });
 
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
+    await page.evaluateOnNewDocument(() => localStorage.removeItem('amnezia_theme'));
     await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise((r) => setTimeout(r, 3000));
+
+    // Theme: System (default) follows the OS, then the button cycles Light -> Dark -> System.
+    const themeState = () => page.evaluate(() => ({
+        pref: amneziaApp.themePreference, dark: document.body.classList.contains('dark'),
+        stored: localStorage.getItem('amnezia_theme'),
+    }));
+    check('theme defaults to System and follows an OS dark preference', JSON.stringify(await themeState()) ===
+        JSON.stringify({ pref: 'system', dark: true, stored: null }), await themeState());
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+    await new Promise((r) => setTimeout(r, 200));
+    check('System theme follows the OS live', (await themeState()).dark === false, await themeState());
+    const cycle = [];
+    for (let i = 0; i < 3; i++) {
+        await page.click('#themeToggleBtn');
+        cycle.push(await themeState());
+    }
+    check('theme button cycles Light -> Dark -> System and remembers the choice',
+        cycle.map((s) => `${s.pref}:${s.dark}:${s.stored}`).join(' ') === 'light:false:light dark:true:dark system:false:system',
+        cycle);
 
     const servers = await page.evaluate(() => (amneziaApp.lastServers || []).map((s) => ({ id: s.id, protocol: s.protocol })));
     check('at least one server exists to test against', servers.length > 0, servers.length);
@@ -179,6 +208,7 @@ function check(label, condition, detail) {
     }
 
     console.log('');
+    check('no request left the panel\'s origin', foreignRequests.size === 0, [...foreignRequests]);
     check('no uncaught page errors', pageErrors.length === 0, pageErrors);
     await browser.close();
 

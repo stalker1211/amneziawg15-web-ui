@@ -1,6 +1,7 @@
 # Keep the build context small and stop non-runtime files reaching the image.
-# The Dockerfile only COPYs web-ui/, scripts/, config/ and web-ui/requirements.txt,
-# so everything here is either never used or must never be baked in.
+# The Dockerfile only COPYs web-ui/, scripts/, config/, web-ui/requirements.txt and
+# the CSS build inputs (build_css.sh, tailwind.config.js, tailwind.input.css), so
+# everything here is either never used or must never be baked in.
 
 # VCS and editor state (.git alone is several MB of context)
 .git
@@ -20,6 +21,12 @@ screenshot.png
 run.sh
 publish_dockerhub.sh
 publish_github.sh
+
+# Host-side build state: the image builds its own tailwind.css in the css_builder
+# stage, and a host .cache/ holds a CLI for the wrong platform.
+.cache
+.venv
+web-ui/static/css/tailwind.css
 
 # Python bytecode: stale .pyc files inside the image are worse than useless
 __pycache__
