@@ -3,10 +3,11 @@ set -euo pipefail
 
 # Build the image for linux/amd64 + linux/arm64 and push it to Docker Hub.
 #
-# The version comes from git (see version.sh), never from what is typed:
-#   - HEAD exactly on release tag vX.Y[.Z], clean tree -> pushes :X.Y[.Z], plus
-#     :latest when it is the newest release -- so :latest is always the newest release
-#   - anything else (commits after a release, uncommitted changes) -> pushes :edge
+# Every publish updates :latest. The version comes from git (see version.sh), never
+# from what is typed:
+#   - HEAD exactly on release tag vX.Y[.Z], clean tree -> also pushes :X.Y[.Z]
+#   - rebuilding an older release (a newer tag exists) -> only :X.Y[.Z], so :latest
+#     never goes backwards
 # Each image carries a build label shown under the page heading, e.g.
 # "v2.2 build 20260926.1" or "v2.2-3-gabc1234 build 20260926.2".
 #
@@ -33,7 +34,7 @@ for arg in "$@"; do
 	case "${arg}" in
 	--dry-run) DRY_RUN=1 ;;
 	-h | --help)
-		sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	-*)
@@ -53,14 +54,12 @@ if [[ -n "${EXPECTED}" && "v${EXPECTED#v}" != "${RELEASE}" ]]; then
 	exit 1
 fi
 
-if [[ -n "${RELEASE}" ]]; then
-	TAGS=("${RELEASE#v}")
-	# Rebuilding an older release must not move :latest backwards.
-	if [[ "${RELEASE}" == "$(version_newest)" ]]; then
-		TAGS+=(latest)
-	fi
+if [[ -z "${RELEASE}" ]]; then
+	TAGS=(latest)
+elif [[ "${RELEASE}" == "$(version_newest)" ]]; then
+	TAGS=("${RELEASE#v}" latest)
 else
-	TAGS=(edge)
+	TAGS=("${RELEASE#v}") # older release: leave :latest where it is
 fi
 
 # Build label "<version> build <YYYYMMDD>.<n>": n counts publishes from this machine
@@ -85,7 +84,7 @@ echo "Version:  ${VERSION}${RELEASE:+ (release ${RELEASE})}"
 echo "Label:    ${LABEL}"
 echo "Push:     ${IMAGES[*]}"
 if [[ -z "${RELEASE}" ]]; then
-	echo "          (not a clean release commit, so :edge only; tag vX.Y to publish a release)"
+	echo "          (not a clean release commit, so no version tag; tag vX.Y to publish one)"
 fi
 if [[ ${DRY_RUN} -eq 1 ]]; then
 	echo "Dry run: nothing built or pushed."

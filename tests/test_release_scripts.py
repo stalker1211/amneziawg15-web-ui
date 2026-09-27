@@ -2,9 +2,9 @@
 
 Each test builds a throwaway git repository holding copies of the two scripts and
 runs `publish_dockerhub.sh --dry-run`, which prints the version, label and Docker
-tags without touching Docker. The rules pinned here: an image carries a version only
-when HEAD is exactly on a clean release tag vX.Y[.Z]; :latest is always the newest
-release; everything else goes to :edge.
+tags without touching Docker. The rules pinned here: every publish updates :latest,
+except a rebuild of an older release (so :latest never goes backwards); an image also
+gets a version tag only when HEAD is exactly on a clean release tag vX.Y[.Z].
 """
 
 import os
@@ -71,24 +71,24 @@ class PublishRulesTests(unittest.TestCase):
         self.assertEqual(fields["Version"], "v2.2 (release v2.2)")
         self.assertRegex(fields["Label"], r"^v2\.2 build \d{8}\.\d+$")
 
-    def test_commits_after_a_release_go_to_edge_with_their_commit_in_the_label(self):
+    def test_commits_after_a_release_go_to_latest_with_their_commit_in_the_label(self):
         self.tag("v2.2")
         self.commit("after the release")
-        self.assertEqual(self.pushed(), ["edge"])
+        self.assertEqual(self.pushed(), ["latest"])
         _, fields, _ = self.publish()
         self.assertRegex(fields["Label"], r"^v2\.2-1-g[0-9a-f]{7,} build \d{8}\.\d+$")
 
     def test_uncommitted_changes_never_get_a_version(self):
         self.tag("v2.2")
         (self.dir / "change.txt").write_text("edited", encoding="utf-8")
-        self.assertEqual(self.pushed(), ["edge"])
+        self.assertEqual(self.pushed(), ["latest"])
         self.assertIn("-dirty", self.publish()[1]["Version"])
 
     def test_untracked_files_count_as_dirty(self):
         # They would be in the Docker build context.
         self.tag("v2.2")
         (self.dir / "new.js").write_text("x", encoding="utf-8")
-        self.assertEqual(self.pushed(), ["edge"])
+        self.assertEqual(self.pushed(), ["latest"])
 
     def test_rebuilding_an_older_release_does_not_move_latest(self):
         self.tag("v2.1")
@@ -117,10 +117,10 @@ class PublishRulesTests(unittest.TestCase):
 
     def test_only_v_tags_are_releases(self):
         self.tag("1.5.1")
-        self.assertEqual(self.pushed(), ["edge"])
+        self.assertEqual(self.pushed(), ["latest"])
 
     def test_no_release_tag_at_all(self):
-        self.assertEqual(self.pushed(), ["edge"])
+        self.assertEqual(self.pushed(), ["latest"])
         self.assertRegex(self.publish()[1]["Version"], r"^[0-9a-f]{7,}$")
 
     def test_dry_run_leaves_the_build_counter_alone(self):

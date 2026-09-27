@@ -62,8 +62,9 @@ volume, including changes made on 2.2).
 - **The version comes from git release tags** (`vX.Y[.Z]`, read by `version.sh`), no
   longer from the argument typed to `publish_dockerhub.sh` — `:2.1` had been published
   three times with different code. `:X.Y` is pushed only from a clean commit exactly on
-  its tag; **`:latest` is always the newest release**; everything else goes to the new
-  **`:edge`** tag. A version argument must match the tag; `--dry-run` shows the plan.
+  its tag. Every publish still updates `:latest`, except a rebuild of an older release,
+  so `:latest` never goes backwards. A version argument must match the tag;
+  `--dry-run` shows the plan.
   Release: `git tag -a v2.2 -m 2.2 && ./publish_dockerhub.sh`.
 - **Build labels are consistent and never stale.** They reach the image as a build arg:
   publish writes `v2.2 build 20260926.1` (or `v2.2-3-gabc1234 build …` between

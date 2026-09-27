@@ -211,8 +211,9 @@ This repo includes a convenience script that builds and runs a local container:
 
 ### Image tags
 
-`stalker1211/amneziawg15-web-ui:latest` is always the newest release; `:2.2` and so on
-pin a release; `:edge` carries builds between releases.
+`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.2` and so on pin a
+release. The version under the page heading (e.g. `v2.2 build 20260926.1`) shows
+exactly which one is running.
 
 ### Docker Compose Example
 
