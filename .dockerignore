@@ -27,6 +27,8 @@ publish_github.sh
 .cache
 .venv
 web-ui/static/css/tailwind.css
+# The build label arrives as a build arg; an old file here must never be baked in.
+web-ui/BUILD
 
 # Python bytecode: stale .pyc files inside the image are worse than useless
 __pycache__

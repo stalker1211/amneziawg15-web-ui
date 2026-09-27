@@ -209,6 +209,11 @@ This repo includes a convenience script that builds and runs a local container:
   - `INTERACTIVE=1 ./run.sh` (run interactively)
   - `ENTRYPOINT=/bin/sh INTERACTIVE=1 ./run.sh` (debug shell)
 
+### Image tags
+
+`stalker1211/amneziawg15-web-ui:latest` is always the newest release; `:2.2` and so on
+pin a release; `:edge` carries builds between releases.
+
 ### Docker Compose Example
 
 ```yaml

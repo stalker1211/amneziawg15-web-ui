@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")"
+# shellcheck source=version.sh
+source ./version.sh
+
 CONTAINER_NAME="amnezia-web-ui"
 IMAGE_NAME="amneziawg-web-ui:local"
 INTERACTIVE="${INTERACTIVE:-0}"
@@ -15,8 +19,11 @@ BUILD="${BUILD:-1}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 
 if [ "${BUILD}" = "1" ]; then
-	echo "Building image ${IMAGE_NAME} (dockerfile: ${DOCKERFILE})..."
-	docker build -f "${DOCKERFILE}" -t "${IMAGE_NAME}" .
+	# Same version as publish_dockerhub.sh would use, marked local so a dev image is
+	# never mistaken for a published one.
+	LABEL="$(version_describe) (local)"
+	echo "Building image ${IMAGE_NAME}: ${LABEL} (dockerfile: ${DOCKERFILE})..."
+	docker build -f "${DOCKERFILE}" --build-arg "BUILD_LABEL=${LABEL}" -t "${IMAGE_NAME}" .
 fi
 
 RUN_FLAGS=(-d)

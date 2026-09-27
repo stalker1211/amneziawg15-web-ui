@@ -50,12 +50,27 @@ volume, including changes made on 2.2).
   before, the temp file was briefly created with default permissions.
 
 ### Tests
-- 151 → 236 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
+- 151 → 246 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
   iptables and key-generation code under a fake `subprocess.run`; public IP, GeoIP and
   egress probe; a 404 sweep over every id-taking route; the exact API key sets the UI
   reads and no key in any JSON payload; v2.1 two-store migration; concurrent saves; a
-  static no-shell guard; frontend checks (no foreign hosts, vendored hashes, dark pairs).
+  static no-shell guard; frontend checks (no foreign hosts, vendored hashes, dark pairs);
+  the publishing rules below.
 - `smoke_ui.js` also checks the theme toggle and that no request leaves the origin.
+
+### Versioning and publishing
+- **The version comes from git release tags** (`vX.Y[.Z]`, read by `version.sh`), no
+  longer from the argument typed to `publish_dockerhub.sh` — `:2.1` had been published
+  three times with different code. `:X.Y` is pushed only from a clean commit exactly on
+  its tag; **`:latest` is always the newest release**; everything else goes to the new
+  **`:edge`** tag. A version argument must match the tag; `--dry-run` shows the plan.
+  Release: `git tag -a v2.2 -m 2.2 && ./publish_dockerhub.sh`.
+- **Build labels are consistent and never stale.** They reach the image as a build arg:
+  publish writes `v2.2 build 20260926.1` (or `v2.2-3-gabc1234 build …` between
+  releases), `run.sh` writes `<git version> (local)`, a plain build shows `dev`. Before,
+  publish left `web-ui/BUILD` in the source tree, so later `run.sh` builds and
+  bind-mounted dev containers showed the last release's label; without an argument the
+  label read `vdev`.
 
 ## Version 2.1 (2026-08-15)
 

@@ -1,101 +1,120 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build + publish this repo's Docker image to Docker Hub.
+# Build the image for linux/amd64 + linux/arm64 and push it to Docker Hub.
 #
-# Simplified workflow:
-#   - Always builds and pushes :latest
-#   - If a version tag is provided, also builds and pushes that tag
+# The version comes from git (see version.sh), never from what is typed:
+#   - HEAD exactly on release tag vX.Y[.Z], clean tree -> pushes :X.Y[.Z], plus
+#     :latest when it is the newest release -- so :latest is always the newest release
+#   - anything else (commits after a release, uncommitted changes) -> pushes :edge
+# Each image carries a build label shown under the page heading, e.g.
+# "v2.2 build 20260926.1" or "v2.2-3-gabc1234 build 20260926.2".
 #
-# Examples:
-#   ./publish_dockerhub.sh            # pushes :latest
-#   ./publish_dockerhub.sh 1.4.1      # pushes :1.4.1 and :latest
-#   TAG=1.4.1 ./publish_dockerhub.sh  # same as above
+# Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh
+#
+# Usage:
+#   ./publish_dockerhub.sh             publish HEAD as described above
+#   ./publish_dockerhub.sh 2.3         same, but stop unless HEAD is release v2.3
+#   ./publish_dockerhub.sh --dry-run   print version, label and tags; build nothing
+#
+# Env: IMAGE_REPO, DOCKERFILE, PLATFORMS; TAG=2.3 works like the argument.
+
+cd "$(dirname "$0")"
+# shellcheck source=version.sh
+source ./version.sh
 
 IMAGE_REPO="${IMAGE_REPO:-stalker1211/amneziawg15-web-ui}"
-ARG_TAG="${1:-}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
-CONTEXT_DIR="${CONTEXT_DIR:-.}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 
-usage() {
-	cat <<EOF
-Usage:
-  $0 [tag]
+DRY_RUN=0
+EXPECTED="${TAG:-}"
+for arg in "$@"; do
+	case "${arg}" in
+	--dry-run) DRY_RUN=1 ;;
+	-h | --help)
+		sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	-*)
+		echo "Unknown option: ${arg}" >&2
+		exit 1
+		;;
+	*) EXPECTED="${arg}" ;;
+	esac
+done
 
-Publishes:
-  - Always publishes: ${IMAGE_REPO}:latest
-  - If tag is provided: also publishes ${IMAGE_REPO}:<tag>
+VERSION="$(version_describe)"
+RELEASE="$(version_release)"
 
-Env vars:
-  IMAGE_REPO     Docker Hub repo (default: ${IMAGE_REPO})
-  TAG            Optional version tag (overrides positional arg)
-  DOCKERFILE     Dockerfile path (default: ${DOCKERFILE})
-  CONTEXT_DIR    Build context dir (default: ${CONTEXT_DIR})
-
-Examples:
-  $0
-	$0 1.4.1
-	TAG=1.4.1 $0
-EOF
-}
-
-if [[ "${ARG_TAG}" == "-h" || "${ARG_TAG}" == "--help" ]]; then
-	usage
-	exit 0
+if [[ -n "${EXPECTED}" && "v${EXPECTED#v}" != "${RELEASE}" ]]; then
+	echo "Error: asked for v${EXPECTED#v}, but HEAD is ${VERSION}." >&2
+	echo "Commit everything and tag the release first: git tag -a v${EXPECTED#v} -m ${EXPECTED#v}" >&2
+	exit 1
 fi
 
-TAG="${TAG:-${ARG_TAG:-}}"
+if [[ -n "${RELEASE}" ]]; then
+	TAGS=("${RELEASE#v}")
+	# Rebuilding an older release must not move :latest backwards.
+	if [[ "${RELEASE}" == "$(version_newest)" ]]; then
+		TAGS+=(latest)
+	fi
+else
+	TAGS=(edge)
+fi
+
+# Build label "<version> build <YYYYMMDD>.<n>": n counts publishes from this machine
+# today (a failed build still uses a number, so gaps are normal). The counter lives in
+# .cache/, outside the build context; the label reaches the image as a build arg.
+COUNTER_FILE=".cache/build_counter"
+TODAY="$(date +%Y%m%d)"
+LAST="$(cat "${COUNTER_FILE}" 2>/dev/null || true)"
+if [[ "${LAST%% *}" == "${TODAY}" ]]; then
+	N=$((${LAST##* } + 1))
+else
+	N=1
+fi
+LABEL="${VERSION} build ${TODAY}.${N}"
+
+IMAGES=()
+for t in "${TAGS[@]}"; do
+	IMAGES+=("${IMAGE_REPO}:${t}")
+done
+
+echo "Version:  ${VERSION}${RELEASE:+ (release ${RELEASE})}"
+echo "Label:    ${LABEL}"
+echo "Push:     ${IMAGES[*]}"
+if [[ -z "${RELEASE}" ]]; then
+	echo "          (not a clean release commit, so :edge only; tag vX.Y to publish a release)"
+fi
+if [[ ${DRY_RUN} -eq 1 ]]; then
+	echo "Dry run: nothing built or pushed."
+	exit 0
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
 	echo "Error: docker is not installed or not on PATH" >&2
 	exit 1
 fi
-
 if ! docker info >/dev/null 2>&1; then
 	echo "Error: docker daemon not reachable. Is Docker running?" >&2
 	exit 1
 fi
 
-IMAGE_LATEST="${IMAGE_REPO}:latest"
-IMAGE_TAGGED=""
+mkdir -p .cache
+echo "${TODAY} ${N}" >"${COUNTER_FILE}"
 
-echo "Publishing Docker image"
-echo "  Repo:       ${IMAGE_REPO}"
-echo "  Dockerfile: ${DOCKERFILE}"
-echo "  Context:    ${CONTEXT_DIR}"
+BUILD_TAGS=()
+for image in "${IMAGES[@]}"; do
+	BUILD_TAGS+=(-t "${image}")
+done
 
-BUILD_TAGS=("-t" "${IMAGE_LATEST}")
-if [[ -n "${TAG}" && "${TAG}" != "latest" ]]; then
-	IMAGE_TAGGED="${IMAGE_REPO}:${TAG}"
-	BUILD_TAGS+=("-t" "${IMAGE_TAGGED}")
-fi
-
-# Build label shown under the page heading: "v<tag> build <YYYYMMDD>.<n>", where
-# n counts builds for the day. Written into the build context so the Dockerfile's
-# existing `COPY web-ui` bakes it in; app.py falls back to "dev" when absent, so a
-# plain `docker build` or a source bind-mount is never mislabelled as a release.
-#
-# The file has to exist before the build, so a failed build still consumes a
-# number. Gaps in the sequence are expected and harmless.
-BUILD_FILE="${CONTEXT_DIR}/web-ui/BUILD"
-BUILD_DATE="$(date +%Y%m%d)"
-PREV="$(cat "${BUILD_FILE}" 2>/dev/null || true)"
-if [[ "${PREV}" == *" ${BUILD_DATE}."* ]]; then
-	BUILD_N=$(( ${PREV##*.} + 1 ))
-else
-	BUILD_N=1
-fi
-BUILD_LABEL="v${TAG:-dev} build ${BUILD_DATE}.${BUILD_N}"
-echo "${BUILD_LABEL}" > "${BUILD_FILE}"
-echo "  Build:      ${BUILD_LABEL}"
-
-echo "Building image..."
 docker buildx build \
-    --platform "${PLATFORMS}" \
-    -f "${DOCKERFILE}" \
-    "${BUILD_TAGS[@]}" \
-    --push \
-    "${CONTEXT_DIR}"
+	--platform "${PLATFORMS}" \
+	-f "${DOCKERFILE}" \
+	"${BUILD_TAGS[@]}" \
+	--build-arg "BUILD_LABEL=${LABEL}" \
+	--push \
+	.
 
 echo "Done."

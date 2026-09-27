@@ -10,7 +10,8 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Generated per build by publish_dockerhub.sh; baked into the image, never committed
+# Written by publish_dockerhub.sh before v2.2 (the label is a build arg now); ignored
+# so a leftover one is never committed
 web-ui/BUILD
 
 # build_css.sh: its downloaded CLI, and its output (built in the Dockerfile)

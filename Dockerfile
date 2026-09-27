@@ -138,6 +138,12 @@ RUN mkdir -p /app/web-ui /var/log/supervisor /var/log/webui /var/log/amnezia /va
 COPY web-ui /app/web-ui/
 COPY --from=css_builder /src/web-ui/static/css/tailwind.css /app/web-ui/static/css/tailwind.css
 
+# Build label shown under the page heading. run.sh and publish_dockerhub.sh pass it
+# (version from git tags, see version.sh); a plain `docker build` gets none and the
+# page shows "dev". Declared late so a new label only rebuilds this layer.
+ARG BUILD_LABEL=""
+RUN if [ -n "${BUILD_LABEL}" ]; then printf '%s\n' "${BUILD_LABEL}" > /app/web-ui/BUILD; fi
+
 COPY config/nginx.conf /etc/nginx/http.d/default.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
