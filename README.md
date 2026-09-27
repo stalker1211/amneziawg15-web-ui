@@ -28,7 +28,9 @@ Current version: **2.1**
 - **Client suspend** — revoke access without deleting; keys are preserved.
 - **Automatic networking** — iptables NAT and optional private-LAN blocking per
   server, auto-start on container restart, smart port/subnet/IP proposals.
-- **Dark theme**, collapsible help, inline rename.
+- **System / Light / Dark theme** (follows the OS by default), collapsible help, inline rename.
+- **Self-contained UI** — no CDN: the page loads nothing from other hosts, so it works
+  without internet access and never tells a third party where your panel is.
 - Behind nginx HTTP Basic Auth, with an optional `API_TOKEN` for scripted access.
 
 ## 📝 Logging
@@ -64,7 +66,8 @@ web-ui/
 ├── services/amnezia_manager.py all business logic
 ├── templates/index.html        page shell + create-server form
 └── static/
-    ├── css/style.css           incl. dark-theme overrides
+    ├── css/style.css           component styles (tailwind.css is built by build_css.sh)
+    ├── vendor/                 socket.io + qrcode, unmodified release files
     └── js/  app.js             state, sockets, API calls, validation
               modals.js         all dialogs
               server-ui.js      server/client card rendering

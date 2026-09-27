@@ -2,10 +2,33 @@
 
 ## Version 2.2 (unreleased)
 
-A simplification release: no feature changes, less code, and a much larger test
-suite written *before* the refactors so each one was pinned. Upgrading needs no action;
-rolling back to 2.1 keeps every server and client (verified on a real volume, including
-changes made on 2.2).
+A simplification and hardening release: less code, a much larger test suite written
+*before* the refactors so each one was pinned, no private keys in API responses, and a
+self-contained UI (no CDN). The look is unchanged apart from the theme button. Upgrading
+needs no action; rolling back to 2.1 keeps every server and client (verified on a real
+volume, including changes made on 2.2).
+
+### Security
+- **Private keys stay on the server.** `GET /api/servers`, the client lists, create-server
+  and the client-mutation responses no longer include `server_private_key`,
+  `client_private_key` or `preshared_key` — the UI never used them, and create-server's
+  response was even logged to the browser console. Configs that need the keys (QR,
+  `.conf` downloads, raw server config) are still rendered server-side.
+- **No third-party requests.** Tailwind used to be compiled in the browser by a script
+  from `cdn.tailwindcss.com` that could not be SRI-pinned; socket.io and qrcode came from
+  cdnjs. All three are gone from the page (see UI), so it works offline and nothing
+  outside your network learns the panel's address.
+
+### UI
+- **Tailwind is compiled at image build** by the standalone CLI (`build_css.sh`,
+  pinned v3.4.19, checksum-verified; no Node): 32 KB of CSS instead of a 407 KB compiler
+  downloaded and run on every page load. socket.io and qrcode are served from
+  `static/vendor/`, byte-identical to their releases.
+- **Dark mode is `dark:` classes** next to each colour utility; the 62 hand-written
+  `body.dark` overrides are gone and a test fails if a colour class lacks its partner.
+  Screenshots of both themes at desktop and iPad widths match 2.1 except the theme icon.
+- **Theme: System / Light / Dark.** Defaults to System and follows the OS live; the
+  button cycles and remembers the choice (an existing light/dark choice is kept).
 
 ### Simpler
 - **Each client is stored once**, in its server's list. The top-level `clients` map, the
@@ -28,10 +51,12 @@ changes made on 2.2).
   before, the temp file was briefly created with default permissions.
 
 ### Tests
-- 151 → 228 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
+- 151 → 236 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
   iptables and key-generation code under a fake `subprocess.run`; public IP, GeoIP and
   egress probe; a 404 sweep over every id-taking route; the exact API key sets the UI
-  reads; v2.1 two-store migration; concurrent saves; a static no-shell guard.
+  reads and no key in any JSON payload; v2.1 two-store migration; concurrent saves; a
+  static no-shell guard; frontend checks (no foreign hosts, vendored hashes, dark pairs).
+- `smoke_ui.js` also checks the theme cycle and that no request leaves the origin.
 
 ## Version 2.1 (2026-08-15)
 
