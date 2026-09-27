@@ -28,7 +28,7 @@ Current version: **2.1**
 - **Client suspend** — revoke access without deleting; keys are preserved.
 - **Automatic networking** — iptables NAT and optional private-LAN blocking per
   server, auto-start on container restart, smart port/subnet/IP proposals.
-- **System / Light / Dark theme** (follows the OS by default), collapsible help, inline rename.
+- **Dark theme** (the OS preference picks the first one), collapsible help, inline rename.
 - **Self-contained UI** — no CDN: the page loads nothing from other hosts, so it works
   without internet access and never tells a third party where your panel is.
 - Behind nginx HTTP Basic Auth, with an optional `API_TOKEN` for scripted access.

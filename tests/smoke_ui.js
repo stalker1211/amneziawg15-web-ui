@@ -50,24 +50,17 @@ function check(label, condition, detail) {
     await page.goto(BASE + '/', { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Theme: System (default) follows the OS, then the button cycles Light -> Dark -> System.
-    const themeState = () => page.evaluate(() => ({
-        pref: amneziaApp.themePreference, dark: document.body.classList.contains('dark'),
-        stored: localStorage.getItem('amnezia_theme'),
-    }));
-    check('theme defaults to System and follows an OS dark preference', JSON.stringify(await themeState()) ===
-        JSON.stringify({ pref: 'system', dark: true, stored: null }), await themeState());
-    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
-    await new Promise((r) => setTimeout(r, 200));
-    check('System theme follows the OS live', (await themeState()).dark === false, await themeState());
-    const cycle = [];
-    for (let i = 0; i < 3; i++) {
+    // Theme: two states. With nothing saved the OS preference picks the first one;
+    // the button toggles light/dark and remembers the choice.
+    const themeState = () => page.evaluate(() => `${document.body.classList.contains('dark') ? 'dark' : 'light'}:${localStorage.getItem('amnezia_theme')}`);
+    check('first visit follows the OS dark preference', await themeState() === 'dark:null', await themeState());
+    const toggles = [];
+    for (let i = 0; i < 2; i++) {
         await page.click('#themeToggleBtn');
-        cycle.push(await themeState());
+        toggles.push(await themeState());
     }
-    check('theme button cycles Light -> Dark -> System and remembers the choice',
-        cycle.map((s) => `${s.pref}:${s.dark}:${s.stored}`).join(' ') === 'light:false:light dark:true:dark system:false:system',
-        cycle);
+    check('theme button toggles light/dark and remembers the choice',
+        toggles.join(' ') === 'light:light dark:dark', toggles);
 
     const servers = await page.evaluate(() => (amneziaApp.lastServers || []).map((s) => ({ id: s.id, protocol: s.protocol })));
     check('at least one server exists to test against', servers.length > 0, servers.length);

@@ -68,8 +68,7 @@ class AmneziaApp {
     init() {
         document.addEventListener('DOMContentLoaded', () => {
             console.log("AmneziaWG Web UI initializing...");
-            this.setTheme(this.getThemePreference(), false);
-            this.watchSystemTheme();
+            this.applyTheme(this.getPreferredTheme(), false);
             this.setupEventListeners();
             this.setupSocketLifecycleHandlers();
             this.setupSocketIO();
@@ -355,7 +354,7 @@ class AmneziaApp {
         const themeToggleBtn = this.getElement('themeToggleBtn');
         if (themeToggleBtn) {
             themeToggleBtn.addEventListener('click', () => {
-                this.cycleTheme();
+                this.toggleTheme();
             });
         }
 
@@ -398,58 +397,44 @@ class AmneziaApp {
         this.setupFormValidation();
     }
 
-    // Theme preference: 'system' (follow the OS, the default), 'light' or 'dark'.
-    // The effective theme is a `dark` class on <body>; Tailwind's dark: variants and
-    // the few body.dark rules in style.css key off it.
-    getThemePreference() {
+    // Light/dark toggle. The OS preference only picks the first theme; after a click
+    // the choice is remembered. The theme is a `dark` class on <body>, which the
+    // Tailwind dark: classes and the few body.dark rules in style.css key off.
+    getPreferredTheme() {
         try {
             const saved = localStorage.getItem('amnezia_theme');
-            if (saved === 'system' || saved === 'light' || saved === 'dark') return saved;
+            if (saved === 'dark') return true;
+            if (saved === 'light') return false;
         } catch (_) {
-            // storage unavailable (private mode): fall through
+            // ignore
         }
-        return 'system';
+
+        return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
     }
 
-    systemPrefersDark() {
-        return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    }
-
-    setTheme(preference, persist = true) {
-        this.themePreference = preference;
-        const isDark = preference === 'dark' || (preference === 'system' && this.systemPrefersDark());
-        document.body.classList.toggle('dark', isDark);
-        this.updateThemeButton(preference, isDark);
+    applyTheme(isDark, persist = true) {
+        document.body.classList.toggle('dark', !!isDark);
+        this.updateThemeButton(!!isDark);
 
         if (persist) {
             try {
-                localStorage.setItem('amnezia_theme', preference);
+                localStorage.setItem('amnezia_theme', isDark ? 'dark' : 'light');
             } catch (_) {
                 // ignore
             }
         }
     }
 
-    cycleTheme() {
-        const order = ['system', 'light', 'dark'];
-        this.setTheme(order[(order.indexOf(this.themePreference) + 1) % order.length]);
+    toggleTheme() {
+        const isDark = document.body.classList.contains('dark');
+        this.applyTheme(!isDark, true);
     }
 
-    watchSystemTheme() {
-        const query = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-        if (!query || !query.addEventListener) return;
-        query.addEventListener('change', () => {
-            if (this.themePreference === 'system') this.setTheme('system', false);
-        });
-    }
-
-    updateThemeButton(preference, isDark) {
+    updateThemeButton(isDark) {
         const btn = this.getElement('themeToggleBtn');
         if (!btn) return;
-        btn.textContent = { system: '🖥️', light: '☀️', dark: '🌙' }[preference];
-        const now = preference === 'system' ? ` (${isDark ? 'dark' : 'light'} right now)` : '';
-        btn.title = `Theme: ${preference}${now}. Click for ${
-            { system: 'light', light: 'dark', dark: 'system' }[preference]}.`;
+        btn.textContent = isDark ? '☀️' : '🌙';
+        btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
     }
 
     openCreateServerModal() {

@@ -4,7 +4,7 @@
 
 A simplification and hardening release: less code, a much larger test suite written
 *before* the refactors so each one was pinned, no private keys in API responses, and a
-self-contained UI (no CDN). The look is unchanged apart from the theme button. Upgrading
+self-contained UI (no CDN). The look is unchanged. Upgrading
 needs no action; rolling back to 2.1 keeps every server and client (verified on a real
 volume, including changes made on 2.2).
 
@@ -26,9 +26,8 @@ volume, including changes made on 2.2).
   `static/vendor/`, byte-identical to their releases.
 - **Dark mode is `dark:` classes** next to each colour utility; the 62 hand-written
   `body.dark` overrides are gone and a test fails if a colour class lacks its partner.
-  Screenshots of both themes at desktop and iPad widths match 2.1 except the theme icon.
-- **Theme: System / Light / Dark.** Defaults to System and follows the OS live; the
-  button cycles and remembers the choice (an existing light/dark choice is kept).
+  Screenshots of both themes at desktop and iPad widths match 2.1.
+- The theme toggle is unchanged: light/dark, the OS preference picks the first one.
 
 ### Simpler
 - **Each client is stored once**, in its server's list. The top-level `clients` map, the
@@ -56,7 +55,7 @@ volume, including changes made on 2.2).
   egress probe; a 404 sweep over every id-taking route; the exact API key sets the UI
   reads and no key in any JSON payload; v2.1 two-store migration; concurrent saves; a
   static no-shell guard; frontend checks (no foreign hosts, vendored hashes, dark pairs).
-- `smoke_ui.js` also checks the theme cycle and that no request leaves the origin.
+- `smoke_ui.js` also checks the theme toggle and that no request leaves the origin.
 
 ## Version 2.1 (2026-08-15)
 
