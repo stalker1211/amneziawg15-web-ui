@@ -9,7 +9,7 @@ environment variables: `NGINX_PORT`, `NGINX_USER`/`NGINX_PASSWORD`, `API_TOKEN`,
 `ENABLE_GEOIP`, `WAN_IF`, `ALLOWED_ORIGINS`, `LOG_LEVEL` (`ENABLE_NAT` and
 `BLOCK_LAN_CIDRS` are only *defaults* — override them per server in the UI).
 
-Current version: **2.2**
+Current version: **2.3**
 
 > Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, the
 > state model, protocol/parameter details, conventions and open items.
@@ -222,8 +222,8 @@ This repo includes a convenience script that builds and runs a local container:
 
 ### Image tags
 
-`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.2` and so on pin a
-release. The version under the page heading (e.g. `v2.2 build 20260926.1`) shows
+`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.3` and so on pin a
+release. The version under the page heading (e.g. `v2.3 build 20260928.1`) shows
 exactly which one is running.
 
 ### Docker Compose Example
