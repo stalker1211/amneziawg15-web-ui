@@ -36,7 +36,7 @@ for arg in "$@"; do
 	case "${arg}" in
 	--publish) PUBLISH=1 ;;
 	-h | --help)
-		sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '4,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	-*)

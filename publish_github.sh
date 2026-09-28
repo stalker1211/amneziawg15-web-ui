@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Publish master and tags to GitHub without the private docs.
 #
-# The NAS remote (`local`) keeps the full history. GitHub gets a copy in which
+# The NAS remote (`origin`) keeps the full history. GitHub gets a copy in which
 # PRIVATE_FILES were never committed: each affected commit is re-created with
 # the files dropped from its tree and every other byte (author, committer,
 # dates, message) unchanged. That makes the copy deterministic -- every run
@@ -11,17 +11,18 @@ set -euo pipefail
 # Commits that never contained the files keep their original IDs.
 #
 # Only refs are pushed; no local branch or tag is created or changed.
-# Pushes go to the remote's fetch URL, so `remote.origin.pushurl` can be set to
-# a dummy value to make a plain `git push origin` fail. The script refuses any
-# URL that is not on github.com, so a clone whose origin is the NAS cannot
-# overwrite the full history there with the stripped copy.
+# Pushes go to the fetch URL of the `github` remote, so `remote.github.pushurl`
+# can be set to a dummy value to make a plain `git push github` fail (and
+# `remote.github.tagOpt --no-tags` keeps GitHub's rewritten tags out of fetches).
+# The script refuses any URL that is not on github.com, so it can never
+# overwrite the full history on the NAS with the stripped copy.
 #
 # Usage:
 #   ./publish_github.sh                     # dry run: show what would be pushed
 #   ./publish_github.sh --publish           # push master + all tags
 #   ./publish_github.sh --publish --force   # replace history already on GitHub
 
-REMOTE="${REMOTE:-origin}"
+REMOTE="${REMOTE:-github}"
 BRANCH="${BRANCH:-master}"
 PRIVATE_FILES=(CLAUDE.md DEVELOPMENT.md GUI_REDESIGN_PLAN.md)
 
@@ -31,7 +32,7 @@ for arg in "$@"; do
 	case "${arg}" in
 		--publish) PUBLISH=1 ;;
 		--force) PUSH_FLAGS+=(--force) ;;
-		-h|--help) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '4,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "Unknown argument: ${arg}" >&2; exit 1 ;;
 	esac
 done
