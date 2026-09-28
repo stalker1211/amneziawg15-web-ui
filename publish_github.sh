@@ -21,7 +21,7 @@ set -euo pipefail
 
 REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-master}"
-PRIVATE_FILES=(CLAUDE.md DEVELOPMENT.md)
+PRIVATE_FILES=(CLAUDE.md DEVELOPMENT.md GUI_REDESIGN_PLAN.md)
 
 PUSH_FLAGS=()
 for arg in "$@"; do

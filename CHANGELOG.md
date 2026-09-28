@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Version 2.2 (unreleased)
+## Version 2.2 (2026-09-26)
 
 A simplification and hardening release: less code, a much larger test suite written
 *before* the refactors so each one was pinned, no private keys in API responses, and a
@@ -50,7 +50,7 @@ volume, including changes made on 2.2).
   before, the temp file was briefly created with default permissions.
 
 ### Tests
-- 151 → 246 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
+- 151 → 247 tests, backend coverage 66% → 89%. New: the real start/stop, live-reload,
   iptables and key-generation code under a fake `subprocess.run`; public IP, GeoIP and
   egress probe; a 404 sweep over every id-taking route; the exact API key sets the UI
   reads and no key in any JSON payload; v2.1 two-store migration; concurrent saves; a
@@ -63,7 +63,8 @@ volume, including changes made on 2.2).
   longer from the argument typed to `publish_dockerhub.sh` — `:2.1` had been published
   three times with different code. `:X.Y` is pushed only from a clean commit exactly on
   its tag. Every publish still updates `:latest`, except a rebuild of an older release,
-  so `:latest` never goes backwards. A version argument must match the tag;
+  so `:latest` never goes backwards. A version argument must match the tag (if it
+  does not, the error says where that tag is and what to run instead);
   `--dry-run` shows the plan.
   Release: `git tag -a v2.2 -m 2.2 && ./publish_dockerhub.sh`.
 - **Build labels are consistent and never stale.** They reach the image as a build arg:
