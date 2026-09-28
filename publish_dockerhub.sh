@@ -8,6 +8,8 @@ set -euo pipefail
 #   - HEAD exactly on release tag vX.Y[.Z], clean tree -> also pushes :X.Y[.Z]
 #   - rebuilding an older release (a newer tag exists) -> only :X.Y[.Z], so :latest
 #     never goes backwards
+# --publish runs only on master or on a clean release commit, so work on a feature
+# branch never reaches :latest.
 # Each image carries a build label shown under the page heading, e.g.
 # "v2.2 build 20260926.1" or "v2.2-3-gabc1234 build 20260926.2".
 #
@@ -34,7 +36,7 @@ for arg in "$@"; do
 	case "${arg}" in
 	--publish) PUBLISH=1 ;;
 	-h | --help)
-		sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '4,23p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	-*)
@@ -96,9 +98,21 @@ echo "Push:     ${IMAGES[*]}"
 if [[ -z "${RELEASE}" ]]; then
 	echo "          (not a clean release commit, so no version tag; tag vX.Y to publish one)"
 fi
+
+BRANCH="$(git symbolic-ref -q --short HEAD || true)"
+OFF_MASTER=""
+if [[ -z "${RELEASE}" && "${BRANCH}" != master ]]; then
+	OFF_MASTER="HEAD is ${BRANCH:-detached}, not master; only master or a clean release commit is published"
+fi
+
 if [[ ${PUBLISH} -eq 0 ]]; then
+	[[ -z "${OFF_MASTER}" ]] || echo "Note: --publish would refuse: ${OFF_MASTER}."
 	echo "Dry run: nothing built or pushed. Add --publish to build and push."
 	exit 0
+fi
+if [[ -n "${OFF_MASTER}" ]]; then
+	echo "Error: ${OFF_MASTER}." >&2
+	exit 1
 fi
 
 if ! command -v docker >/dev/null 2>&1; then

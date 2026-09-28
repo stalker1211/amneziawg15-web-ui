@@ -4,7 +4,8 @@ Each test builds a throwaway git repository holding copies of the two scripts an
 runs `publish_dockerhub.sh` without `--publish` (a dry run), which prints the version, label and Docker
 tags without touching Docker. The rules pinned here: every publish updates :latest,
 except a rebuild of an older release (so :latest never goes backwards); an image also
-gets a version tag only when HEAD is exactly on a clean release tag vX.Y[.Z].
+gets a version tag only when HEAD is exactly on a clean release tag vX.Y[.Z]; and
+--publish runs only on master or on a clean release commit.
 """
 
 import os
@@ -133,6 +134,44 @@ class PublishRulesTests(unittest.TestCase):
     def test_no_release_tag_at_all(self):
         self.assertEqual(self.pushed(), ["latest"])
         self.assertRegex(self.publish()[1]["Version"], r"^[0-9a-f]{7,}$")
+
+    def real_publish(self, *args):
+        # A stub docker whose daemon is unreachable: getting that error means the
+        # script passed its own checks, and nothing can ever be built. It lives
+        # outside the repository, where it would count as an untracked change.
+        stub = Path(tempfile.mkdtemp(prefix="awg-stub-"))
+        self.addCleanup(shutil.rmtree, stub, ignore_errors=True)
+        (stub / "docker").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (stub / "docker").chmod(0o755)
+        env = {**self.env, "PATH": f"{stub}{os.pathsep}{self.env['PATH']}"}
+        result = subprocess.run(
+            ["bash", "publish_dockerhub.sh", "--publish", *args],
+            cwd=self.dir, env=env, capture_output=True, text=True, check=False,  # exit code is asserted
+        )  # fmt: skip
+        return result.returncode, result.stdout + result.stderr
+
+    def test_publish_refuses_a_branch_other_than_master(self):
+        self.git("switch", "-q", "-c", "feature")
+        self.commit("work in progress")
+        _, _, dry = self.publish()
+        self.assertIn("--publish would refuse: HEAD is feature, not master", dry)
+        code, output = self.real_publish()
+        self.assertEqual(code, 1)
+        self.assertIn("HEAD is feature, not master", output)
+        self.assertNotIn("docker", output)
+
+    def test_publish_allows_master_and_a_detached_release(self):
+        self.tag("v2.1")
+        self.commit("next")
+        self.assertNotIn("would refuse", self.publish()[2])
+        self.assertIn("docker daemon not reachable", self.real_publish()[1])
+
+        self.git("switch", "-q", "--detach", "v2.1")  # rebuilding an older release
+        self.assertNotIn("would refuse", self.publish()[2])
+        self.assertIn("docker daemon not reachable", self.real_publish()[1])
+
+        self.git("switch", "-q", "--detach", "master")  # detached, but no release
+        self.assertIn("HEAD is detached, not master", self.real_publish()[1])
 
     def test_dry_run_leaves_the_build_counter_alone(self):
         self.tag("v2.2")
