@@ -1,6 +1,7 @@
 """Core service logic for managing AmneziaWG servers and clients."""
 
 import base64
+import hashlib
 import ipaddress
 import json
 import os
@@ -110,6 +111,9 @@ class AmneziaManager:
 
         self.config = self.load_config()
         self.ensure_directories()
+        # Saved at once, so a public IP change before the next save is still caught.
+        if self.backfill_config_fingerprints():
+            self.save_config()
         self.public_ip = self.detect_public_ip()
 
         # Track derived client status updates (active/inactive) and persist with throttling.
@@ -1310,6 +1314,10 @@ AllowedIPs = {client["client_ip"]}/32
             "protocol": server.get("protocol", self.DEFAULT_PROTOCOL),
             "suspended": False,
             "client_params": dict(base_client_params),
+            # Not handed out yet; set by mark_config_issued. None, not absent, so
+            # backfill_config_fingerprints leaves it alone.
+            "config_issued_fingerprint": None,
+            "config_issued_at": None,
         }
 
         server["clients"].append(client_config)
@@ -1485,6 +1493,40 @@ AllowedIPs = 0.0.0.0/0
 PersistentKeepalive = 25
 """
         return config
+
+    def config_fingerprint(self, server, client):
+        """Hash of the config a device imports (the QR text: no timestamp, no name)."""
+        config = self.generate_wireguard_client_config(server, client, include_comments=False)
+        return hashlib.sha256(config.encode("utf-8")).hexdigest()[:16]
+
+    def is_config_outdated(self, server, client):
+        """True when the config issued now would differ from the one the device got."""
+        issued = client.get("config_issued_fingerprint")
+        return bool(issued) and issued != self.config_fingerprint(server, client)
+
+    def mark_config_issued(self, server, client):
+        client["config_issued_fingerprint"] = self.config_fingerprint(server, client)
+        client["config_issued_at"] = time.time()
+        self.save_config()
+
+    def backfill_config_fingerprints(self):
+        """Give clients from before config tracking their current fingerprint.
+
+        Devices are assumed up to date at upgrade. Returns how many were filled.
+        """
+        filled = 0
+        for server in self.config["servers"]:
+            for client in server["clients"]:
+                if "config_issued_fingerprint" in client:
+                    continue
+                try:
+                    client["config_issued_fingerprint"] = self.config_fingerprint(server, client)
+                except (KeyError, TypeError):
+                    logger.warning("Cannot fingerprint client %s: incomplete record", client.get("id"))
+                    continue
+                client["config_issued_at"] = None
+                filled += 1
+        return filled
 
     def _run_iptables_script(self, action, interface, subnet, enable_nat, block_lan_cidrs):
         """Run the setup/cleanup iptables script for an interface.

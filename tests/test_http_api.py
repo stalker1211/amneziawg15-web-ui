@@ -414,8 +414,9 @@ class RouteNotFoundTests(_RealSystemApp):
 
 
 # Keys the UI consumes. Private and preshared keys are never sent as JSON fields; the
-# configs that need them are rendered server-side.
-SECRET_KEYS = {"server_private_key", "client_private_key", "preshared_key"}
+# configs that need them are rendered server-side. Nor is the config fingerprint: it
+# hashes a config that holds the client's private key.
+SECRET_KEYS = {"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"}
 SERVER_KEYS = {
     "auto_start", "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns",
     "egress_probe", "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip",
@@ -423,8 +424,8 @@ SERVER_KEYS = {
     "transport_params",
 }  # fmt: skip
 CLIENT_KEYS = {
-    "client_ip", "client_params", "client_public_key", "created_at", "id", "name", "protocol", "server_id",
-    "server_name", "status", "suspended",
+    "client_ip", "client_params", "client_public_key", "config_issued_at", "config_outdated", "created_at", "id",
+    "name", "protocol", "server_id", "server_name", "status", "suspended",
 }  # fmt: skip
 
 
@@ -441,6 +442,9 @@ class ApiContractTests(unittest.TestCase):
         payloads = {
             "GET /api/servers": server["clients"][0],
             "POST .../clients": self.added["client"],
+            "POST .../issued": self.client.post(
+                f"/api/servers/{self.server['id']}/clients/{self.added['client']['id']}/issued", json={}
+            ).get_json()["client"],
             "GET .../clients": self.client.get(f"/api/servers/{self.server['id']}/clients").get_json()[0],
             "GET /api/clients": self.client.get("/api/clients").get_json()[0],
         }
@@ -450,13 +454,9 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("[Interface]", self.added["config"])
 
     def test_no_json_payload_carries_a_private_key(self):
-        manager_server = self.manager.get_server(self.server["id"])
-        secrets = {manager_server["server_private_key"]}
-        for client in manager_server["clients"]:
-            secrets |= {client["client_private_key"], client["preshared_key"]}
         client_url = f"/api/servers/{self.server['id']}/clients/{self.added['client']['id']}"
-
         responses = {
+            "POST .../issued": self.client.post(f"{client_url}/issued", json={}),
             "POST /api/servers": self.client.post(
                 "/api/servers",
                 json={"name": "t", "protocol": "AWG 2.0", "subnet": "10.66.0.0/24", "port": 51966, "auto_start": False},
@@ -474,6 +474,12 @@ class ApiContractTests(unittest.TestCase):
             for field in SECRET_KEYS:
                 self.assertNotIn(f'"{field}"', body, label)
         # The key values themselves must not leak under some other name either.
+        manager_server = self.manager.get_server(self.server["id"])
+        secrets = {manager_server["server_private_key"]}
+        for client in manager_server["clients"]:
+            secrets |= {client["client_private_key"], client["preshared_key"]}
+            secrets |= {client["config_issued_fingerprint"]} - {None}
+        self.assertTrue(any(len(secret) == 16 for secret in secrets))  # a fingerprint is among them
         for label in ("GET /api/servers", "GET /api/clients", "GET .../clients"):
             body = responses[label].get_data(as_text=True)
             for secret in secrets:

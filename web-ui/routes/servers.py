@@ -60,14 +60,20 @@ def register_server_routes(
         return data if isinstance(data, dict) else {}
 
     # Never sent to the browser: the UI reads none of them, and every config that needs
-    # them is rendered server-side (config-both, the .conf downloads, /config).
-    secret_keys = frozenset({"server_private_key", "client_private_key", "preshared_key"})
+    # them is rendered server-side (config-both, the .conf downloads, /config). The
+    # fingerprint hashes a config that holds the client's private key.
+    secret_keys = frozenset({"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"})
 
     def serialize_client(client, server=None):
         # server_name is not stored per client; it always comes from the server.
         server = server or amnezia_manager.get_server(client.get("server_id")) or {}
         payload = {key: value for key, value in client.items() if key not in secret_keys}
-        return {**payload, "server_name": server.get("name")}
+        return {
+            **payload,
+            "server_name": server.get("name"),
+            "config_issued_at": client.get("config_issued_at"),
+            "config_outdated": bool(server) and amnezia_manager.is_config_outdated(server, client),
+        }
 
     def serialize_server(server):
         payload = {key: value for key, value in server.items() if key not in secret_keys}
@@ -313,6 +319,15 @@ def register_server_routes(
                 "client": serialize_client(client),
             }
         )
+
+    @server_bp.route("/api/servers/<server_id>/clients/<client_id>/issued", methods=["POST"])
+    @require_token
+    def mark_client_config_issued(server_id, client_id):
+        """The UI calls this after showing the QR or downloading the .conf. A POST, not a
+        side effect of the GET config routes, so it stays behind the JSON-only guard."""
+        server, client = client_or_404(server_id, client_id)
+        amnezia_manager.mark_config_issued(server, client)
+        return jsonify({"status": "issued", "client": serialize_client(client, server)})
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/config")
     @require_token
