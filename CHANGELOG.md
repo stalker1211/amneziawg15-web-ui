@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## Version 2.3 (2026-09-28)
+
+A redesigned panel, and the panel now tells you which devices hold a config that no
+longer matches. Upgrading needs no action: devices are assumed up to date at the
+upgrade. Rolling back to 2.2 or 2.1 keeps every server and client; they ignore the two
+new per-client fields.
+
+### Outdated-config flags
+- **Re-import marks.** The server remembers which config each device last received
+  (a fingerprint of the QR text, set when the QR is shown or the `.conf` downloaded)
+  and marks a client **Re-import** when the config it would issue now is different:
+  after a transport or protocol change (every client of that server), a change to
+  that client's parameters, or a new public IP through ↻ (every client; this used to
+  break every device silently). Reverting a change clears the mark; renaming,
+  suspending, NAT/LAN and start/stop never set it.
+- Each server card counts "N to re-import", and the settings drawer says before you
+  save how many devices a change sends back to re-import.
+- API: client payloads gain `config_outdated` and `config_issued_at`;
+  `POST /api/servers/<sid>/clients/<cid>/issued` records a hand-out. The fingerprint
+  itself never reaches the browser.
+
+### UI
+- **Page:** a status strip (public IP, servers running, clients online), one card per
+  server with its facts on one line and a ⋯ menu (Logs, Full config, Rename, Delete),
+  and client rows with endpoint and location, last handshake, ↓/↑ totals, a suspend
+  switch, QR, Edit and ⋯ (Rename, Download .conf, Delete). Works down to phone width.
+- **Forms in a side drawer** (new server, server settings, add and edit client),
+  checked by the server as you type: problems and warnings appear under the fields,
+  and Save is enabled only when something changed and nothing is invalid.
+- **No more browser pop-ups:** toasts, an in-app confirm that names what is deleted,
+  inline rename, and an in-app API-token prompt replace all 22 `alert`/`confirm`/
+  `prompt` calls.
+- **QR view:** larger, encodes the config without comments (smaller, scans more
+  easily), with Copy config, Download .conf and QR image. There is deliberately no
+  Share button: it would hand the private key to the OS share sheet.
+- **Logs and Full config** as dialogs whose code boxes follow the theme; this fixed
+  the last dark-mode gaps. Light theme: grey page, white cards; one purple primary
+  button style; a sun/moon theme button.
+
+### Backend
+- **`POST /api/validate`**, a dry run of each form, so the validation rules live only
+  in Python; the JS copy of them (and its drift) is gone. The transport and client
+  warnings moved from JS to Python.
+- A non-numeric MTU on create is a 400 with a message instead of a 500.
+
+### Development
+- `tests/demo_server.py` serves the real panel with example data and no container,
+  for UI work, the smoke tests and screenshots. The smoke tests drive the drawer and
+  dialogs and fail on any native pop-up. 287 tests, 90% of the backend.
+
 ## Version 2.2.1 (2026-09-28)
 
 Release tooling only; the image is the same as 2.2 apart from its build label.

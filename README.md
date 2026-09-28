@@ -25,9 +25,15 @@ Current version: **2.2**
   random packet trailers and optional cookie-reply suppression.
 - **Live monitoring** — per-client traffic, endpoint and handshake age over WebSocket,
   with country flags for endpoint / server / egress IPs.
+- **Re-import marks** — the panel remembers which config each device received and
+  marks a client **Re-import** when its config has changed since (new transport
+  parameters, new client parameters, a new public IP). Server settings say how many
+  devices a change affects before you save.
 - **Client suspend** — revoke access without deleting; keys are preserved.
 - **Automatic networking** — iptables NAT and optional private-LAN blocking per
   server, auto-start on container restart, smart port/subnet/IP proposals.
+- **Forms checked as you type** by the server, in a side drawer; toasts and in-app
+  confirmations instead of browser pop-ups; works down to phone width.
 - **Dark theme** (the OS preference picks the first one), collapsible help, inline rename.
 - **Self-contained UI** — no CDN: the page loads nothing from other hosts, so it works
   without internet access and never tells a third party where your panel is.
@@ -42,7 +48,7 @@ There are two independent log streams, each with its own variable.
 - `AWG_LOG_LEVEL`: `debug|verbose|error|silent` to enable logs (empty/`off` disables). Sets the daemon's own `LOG_LEVEL` internally.
 - `AWG_LOG_FILE`: log file path (default: `/var/log/amnezia/amneziawg-go.log`).
 
-Once enabled, use **Server → View Logs** in the UI. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
+Once enabled, use **⋯ → Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
 
 **Web UI** — always on, written to `/var/log/webui/access.log` with timestamps, levels and module names:
 
@@ -64,13 +70,15 @@ web-ui/
 ├── core/                       request guards (auth, CSRF), runtime wiring, helpers, logging
 ├── routes/                     servers.py + system.py (all /api routes)
 ├── services/amnezia_manager.py all business logic
-├── templates/index.html        page shell + create-server form
+├── templates/index.html        page shell
 └── static/
-    ├── css/style.css           component styles (tailwind.css is built by build_css.sh)
+    ├── css/style.css           a few styles (tailwind.css is built by build_css.sh)
     ├── vendor/                 socket.io + qrcode, unmodified release files
-    └── js/  app.js             state, sockets, API calls, validation
-              modals.js         all dialogs
-              server-ui.js      server/client card rendering
+    └── js/  app.js             state, sockets, API calls, page actions
+              forms.js          the forms (side drawer), checked by /api/validate
+              modals.js         the QR, logs and full-config views
+              ui.js             toasts, dialogs, drawer, menus, inline rename
+              server-ui.js      server card and client row rendering
               protocols.js      the protocol table
               api.js            fetch/token plumbing
 ```
@@ -111,12 +119,13 @@ Example: `I1 = <b 0xf6ab3267fa><t><r 10>`
 
 In the UI:
 
-- **Server → Show Config**: edit I1–I5 defaults for new clients.
-- **Client row → I1–I5**: edit I1–I5 for that specific client.
+- **+ Client**: set I1–I5 for a new client, starting from the server's defaults or
+  copying another client.
+- **Client row → Edit**: change I1–I5 for that client.
 
 ## 📷 QR code notes
 
-WireGuard configs can become too large to fit into a single QR code (especially with long I1–I5 values). When this happens, the UI will show an error in the QR modal and you should use **Download Config File (.conf)** instead.
+WireGuard configs can become too large to fit into a single QR code (especially with long I1–I5 values). When this happens, the QR view shows an error and you should use **Download .conf** instead. The QR carries the config without comments, which keeps it as small as possible.
 
 ## 🔧 API Endpoints
 
@@ -155,6 +164,8 @@ Basic Auth credentials.
 | GET | `/api/servers/<id>/clients/<cid>/config-both` | JSON: clean + commented, for QR |
 | POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.x timings |
 | POST | `/api/servers/<id>/clients/<cid>/rename` \| `/suspend` | rename, or toggle access |
+| POST | `/api/servers/<id>/clients/<cid>/issued` | record that the current config was handed to the device (clears `config_outdated`) |
+| POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params"}` or `{"server_id", "client_params"}` → `{"errors", "warnings"}` |
 | GET | `/api/clients` | all clients across all servers |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
