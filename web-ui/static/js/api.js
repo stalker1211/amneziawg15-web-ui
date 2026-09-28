@@ -59,9 +59,16 @@ class ApiClient {
         let response = await window.fetch(input, nextInit);
 
         if (response.status === 401 && await this.isMissingApiToken(response)) {
-            const entered = prompt('API token required. Paste API_TOKEN value:', this.getToken());
-            if (entered && String(entered).trim()) {
-                this.setToken(String(entered).trim());
+            const entered = await window.Ui.askText({
+                title: 'API token required',
+                body: 'This panel has API_TOKEN set. Paste its value; the browser keeps it for next time.',
+                label: 'API token',
+                value: this.getToken(),
+                confirmLabel: 'Use token',
+                type: 'password',
+            });
+            if (entered) {
+                this.setToken(entered);
                 const retryInit = { ...(init || {}) };
                 retryInit.headers = this.buildHeaders(retryInit.headers, method);
                 response = await window.fetch(input, retryInit);

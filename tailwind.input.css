@@ -3,3 +3,85 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Shared components for the markup in templates/ and static/js/ (buttons, fields,
+   pills, switches, the drawer/dialog/toast transitions). Each carries its dark
+   look via dark: variants, like the utilities in the markup. */
+@layer components {
+    .btn {
+        @apply inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-md text-sm font-medium whitespace-nowrap transition
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 focus-visible:ring-offset-1
+            disabled:opacity-45 disabled:cursor-not-allowed dark:focus-visible:ring-offset-[#1f2937];
+    }
+    .btn-sm { @apply h-8 px-2.5 text-xs; }
+    .btn-primary { @apply bg-purple-600 text-white hover:bg-purple-700 dark:bg-[#7c3aed] dark:hover:bg-[#6d28d9]; }
+    .btn-secondary {
+        @apply bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 hover:border-gray-400
+            dark:bg-[#1e293b] dark:text-[#e5e7eb] dark:border-[#3b4a60] dark:hover:bg-[#273449];
+    }
+    .btn-ghost { @apply text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-[#cbd5e1] dark:hover:bg-[#273449] dark:hover:text-white; }
+    .btn-danger { @apply bg-red-600 text-white hover:bg-red-700 dark:bg-[#dc2626] dark:hover:bg-[#b91c1c]; }
+
+    .icon-btn {
+        @apply inline-flex items-center justify-center flex-none w-9 h-9 rounded-md text-gray-500 transition
+            hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400
+            dark:text-[#94a3b8] dark:hover:bg-[#273449] dark:hover:text-white;
+    }
+    .icon-btn-sm { @apply w-8 h-8; }
+
+    .field {
+        @apply block w-full h-9 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-900 placeholder-gray-400
+            focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200
+            dark:bg-[#111827] dark:border-[#3b4a60] dark:text-[#e5e7eb] dark:placeholder-[#64748b] dark:focus:ring-[#4c1d95];
+    }
+    .field-area { @apply h-auto py-1.5 font-mono text-xs leading-5; }
+    .label { @apply block mb-1 text-xs font-medium text-gray-600 dark:text-[#cbd5e1]; }
+    .hint { @apply mt-1 text-xs text-gray-500 dark:text-[#94a3b8]; }
+    .section-title { @apply text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-[#94a3b8]; }
+
+    .pill { @apply inline-flex items-center gap-1 h-[1.375rem] px-2 rounded-full text-xs font-semibold whitespace-nowrap; }
+
+    /* On/off switch: a real checkbox over a drawn track. */
+    .switch { position: relative; display: inline-flex; flex: none; width: 2.25rem; height: 1.25rem; }
+    .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+    .switch .track { position: absolute; inset: 0; border-radius: 9999px; background: #d1d5db; transition: background-color .15s; }
+    .switch .track::after {
+        content: ""; position: absolute; top: 2px; left: 2px; width: 1rem; height: 1rem; border-radius: 9999px;
+        background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .15s;
+    }
+    .switch input:checked + .track { background: #22c55e; }
+    .switch input:checked + .track::after { transform: translateX(1rem); }
+    .switch input:focus-visible + .track { outline: 2px solid #a855f7; outline-offset: 2px; }
+    .switch-sm { width: 1.875rem; height: 1rem; }
+    .switch-sm .track::after { width: .75rem; height: .75rem; }
+    .switch-sm input:checked + .track::after { transform: translateX(.875rem); }
+    .switch-amber .track { background: #fbbf24; }
+    .dark .switch .track { background: #475569; }
+    .dark .switch-amber .track { background: #b45309; }
+    .dark .switch input:checked + .track { background: #16a34a; }
+
+    .help > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: .35rem; }
+    .help > summary::-webkit-details-marker { display: none; }
+    .help > summary::before { content: "\25B8"; transition: transform .15s; }
+    .help[open] > summary::before { transform: rotate(90deg); }
+
+    .drawer-panel {
+        transform: translateX(100%); transition: transform .22s ease;
+        padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .drawer-overlay, .dialog-overlay { opacity: 0; transition: opacity .2s ease; }
+    .is-open .drawer-panel { transform: none; }
+    .is-open .drawer-overlay, .is-open .dialog-overlay { opacity: 1; }
+    .dialog-panel { transform: translateY(8px) scale(.98); opacity: 0; transition: transform .18s ease, opacity .18s ease; }
+    .is-open .dialog-panel { transform: none; opacity: 1; }
+    .toast-root { bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); }
+    /* While a drawer is open, keep toasts clear of its footer buttons. */
+    .toast-root.lift { bottom: calc(5rem + env(safe-area-inset-bottom, 0px)); }
+    .toast { animation: toast-in .2s ease; }
+}
+
+@keyframes toast-in { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
+}

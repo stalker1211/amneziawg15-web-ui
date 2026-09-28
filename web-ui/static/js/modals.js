@@ -263,7 +263,7 @@ class ModalUi {
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
                             <h3 class="text-xl font-bold text-gray-900 dark:text-[#f1f5f9]">Server: <span class="text-purple-600 dark:text-[#c084fc] cursor-pointer hover:underline" title="Click to rename"
-                                onclick="amneziaApp.renameServer('${serverInfo.id}')">${safe(serverInfo.name)}</span></h3>
+                                onclick="amneziaApp.renameServer('${serverInfo.id}', this)">${safe(serverInfo.name)}</span></h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -434,7 +434,7 @@ class ModalUi {
                     <div class="mt-3">
                         <div class="flex justify-between items-center mb-4">
                             <h3 class="text-xl font-bold text-gray-900 dark:text-[#f1f5f9]">Client: <span class="text-sky-600 dark:text-[#7dd3fc] cursor-pointer hover:underline" title="Click to rename"
-                                onclick="amneziaApp.renameClient('${serverId}', '${clientId}')">${safeName}</span></h3>
+                                onclick="amneziaApp.renameClient('${serverId}', '${clientId}', this)">${safeName}</span></h3>
                             <button onclick="amneziaApp.closeModal()" class="text-gray-400 hover:text-gray-600">
                                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>

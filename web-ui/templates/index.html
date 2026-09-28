@@ -243,7 +243,46 @@
 
     </div>
 
+    <!-- Roots for static/js/ui.js: the drawer (forms), centred dialogs (views and
+         questions), the ⋯ menu and toasts. Hidden until used. -->
+    <div id="drawerRoot" hidden>
+        <div class="drawer-overlay fixed inset-0 z-40 bg-gray-900/40 dark:bg-black/60" data-close="drawer"></div>
+        <aside id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle"
+               class="drawer-panel fixed inset-y-0 right-0 z-40 w-full sm:w-[34rem] flex flex-col bg-white border-l border-gray-200 shadow-2xl dark:bg-[#1f2937] dark:border-[#334155]">
+            <header class="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 dark:border-[#334155]">
+                <div class="min-w-0">
+                    <h2 id="drawerTitle" class="text-lg font-semibold text-gray-900 dark:text-[#f1f5f9]"></h2>
+                    <p id="drawerSub" class="text-sm text-gray-500 dark:text-[#94a3b8]"></p>
+                </div>
+                <button type="button" class="icon-btn" data-close="drawer" aria-label="Close">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+            </header>
+            <form id="drawerForm" class="flex-1 min-h-0 flex flex-col" novalidate>
+                <div id="drawerBody" class="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-6"></div>
+                <footer id="drawerFoot" class="px-5 py-3 border-t border-gray-200 dark:border-[#334155] flex flex-wrap items-center gap-2"></footer>
+            </form>
+        </aside>
+    </div>
+
+    <div id="dialogRoot" hidden>
+        <div class="dialog-overlay fixed inset-0 z-50 bg-gray-900/50 dark:bg-black/70" data-close="dialog"></div>
+        <div class="fixed inset-0 z-50 overflow-y-auto pointer-events-none">
+            <div class="min-h-full flex items-center justify-center p-4">
+                <div id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"
+                     class="dialog-panel pointer-events-auto w-full max-w-lg rounded-xl bg-white shadow-2xl border border-gray-200 dark:bg-[#1f2937] dark:border-[#334155]"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="menu" role="menu" hidden
+         class="fixed z-[55] min-w-[12rem] py-1 rounded-lg border border-gray-200 bg-white shadow-lg dark:bg-[#1f2937] dark:border-[#334155]"></div>
+
+    <div id="toasts" aria-live="polite"
+         class="toast-root fixed z-[60] right-4 left-4 sm:left-auto flex flex-col items-stretch sm:items-end gap-2 pointer-events-none"></div>
+
     <script src="{{ url_for('static', filename='js/protocols.js') }}?v={{ cache_bust }}"></script>
+    <script src="{{ url_for('static', filename='js/ui.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/api.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/server-ui.js') }}?v={{ cache_bust }}"></script>
     <!-- app.js defines AmneziaApp; modals.js extends its prototype and must load

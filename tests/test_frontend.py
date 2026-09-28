@@ -83,6 +83,20 @@ class SelfContainedTests(unittest.TestCase):
         self.assertLess(html.index("css/style.css"), html.index("css/tailwind.css"))
 
 
+class NativeDialogTests(unittest.TestCase):
+    def test_no_alert_confirm_or_prompt(self):
+        # They block the page and cannot follow the theme; ui.js has toasts, an in-app
+        # confirm, askText and inline rename instead.
+        call = re.compile(r"(?<![.\w])(?<!function )(?:window\.)?(alert|confirm|prompt)\(")
+        found = []
+        for path in sorted((WEB_UI / "static" / "js").glob("*.js")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                code = line.split("//", 1)[0]
+                if call.search(code):
+                    found.append(f"{path.name}:{number}: {line.strip()}")
+        self.assertEqual(found, [])
+
+
 class DarkModeTests(unittest.TestCase):
     def test_every_colour_class_has_a_dark_partner(self):
         unpaired = set()

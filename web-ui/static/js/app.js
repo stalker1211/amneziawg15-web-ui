@@ -847,7 +847,7 @@ class AmneziaApp {
             })
             .catch((error) => {
                 console.error('Error probing server egress IP:', error);
-                alert('Error probing egress IP: ' + error.message);
+                this.showTempMessage('Error probing egress IP: ' + error.message, 'error');
             })
             .finally(() => {
                 if (buttonElement) {
@@ -1274,7 +1274,7 @@ class AmneziaApp {
         }
     }
 
-    createServer() {
+    async createServer() {
         console.log("Creating server...");
 
         if (!this.validateForm()) {
@@ -1344,11 +1344,9 @@ class AmneziaApp {
         }
 
         const transportWarnings = this.getTransportParamWarningsJS(formData.protocol, formData.transport_params, formData.mtu);
-        if (transportWarnings.length > 0) {
-            const proceed = confirm(`Transport parameter warnings:\n\n- ${transportWarnings.join('\n- ')}\n\nCreate server anyway?`);
-            if (!proceed) {
-                return;
-            }
+        if (transportWarnings.length > 0
+            && !await this.confirmWarnings('Transport parameter warnings', transportWarnings, 'Create anyway')) {
+            return;
         }
 
         // Warn if port/subnet already used by any existing server
@@ -1358,11 +1356,9 @@ class AmneziaApp {
                 const parts = [];
                 if (c.portConflict) parts.push(`port ${c.port}`);
                 if (c.subnetConflict) parts.push(`subnet ${c.subnet}`);
-                return `- ${c.name} (${c.id}, ${c.status || 'unknown'}): ${parts.join(' & ')}`;
-            }).join('\n');
-
-            const msg = `An existing server already uses the same port or subnet:\n\n${details}\n\nCreate anyway?`;
-            if (!confirm(msg)) {
+                return `${c.name} (${c.id}, ${c.status || 'unknown'}): ${parts.join(' & ')}`;
+            });
+            if (!await this.confirmWarnings('An existing server uses the same port or subnet', details, 'Create anyway')) {
                 return;
             }
         }
@@ -1559,76 +1555,96 @@ class AmneziaApp {
     }
 
     // Server management methods
-    deleteServer(serverId) {
-        if (confirm('Are you sure you want to delete this server and all its clients?')) {
-            this.apiFetch(`/api/servers/${serverId}`, { method: 'DELETE' })
-                .then(() => this.loadServers())
-                .catch(error => {
-                    console.error('Error deleting server:', error);
-                    alert('Error deleting server: ' + error.message);
-                });
-        }
-    }
-
-    deleteClient(serverId, clientId) {
-        if (confirm('Are you sure you want to delete this client?')) {
-            this.apiFetch(`/api/servers/${serverId}/clients/${clientId}`, { method: 'DELETE' })
-                .then(() => this.loadServers())
-                .catch(error => {
-                    console.error('Error deleting client:', error);
-                    alert('Error deleting client: ' + error.message);
-                });
-        }
-    }
-
-    renameServer(serverId) {
+    async deleteServer(serverId) {
         const server = (this.lastServers || []).find(s => s.id === serverId);
-        const currentName = server ? server.name : '';
-        const newName = prompt('Rename server:', currentName);
-        if (newName === null || newName.trim() === '' || newName.trim() === currentName) return;
-        this.apiFetch(`/api/servers/${serverId}/rename`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: newName.trim() })
-        })
-            .then(() => {
-                this.loadServers();
-                this.closeModal();
-                // Reopen with fresh data from API
-                this.showServerConfig(serverId);
-            })
-            .catch(error => {
-                console.error('Error renaming server:', error);
-                alert('Error renaming server: ' + error.message);
-            });
+        const count = (server?.clients || []).length;
+        const ok = await window.Ui.confirm({
+            title: `Delete ${this.escapeHtml(server?.name || 'this server')}?`,
+            body: `The interface <span class="font-mono">${this.escapeHtml(server?.interface || '')}</span> stops and `
+                + `${count === 1 ? 'its client config stops' : `its ${count} client configs stop`} working. This cannot be undone.`,
+            confirmLabel: 'Delete server',
+        });
+        if (!ok) return;
+        try {
+            await this.postJson(`/api/servers/${serverId}`, undefined, 'DELETE');
+            this.showTempMessage(`${server?.name || 'Server'} deleted`, 'success');
+        } catch (error) {
+            console.error('Error deleting server:', error);
+            this.showTempMessage('Error deleting server: ' + error.message, 'error');
+        }
+        this.loadServers();
     }
 
-    renameClient(serverId, clientId) {
+    async deleteClient(serverId, clientId) {
         const server = (this.lastServers || []).find(s => s.id === serverId);
-        const client = server ? (server.clients || []).find(c => c.id === clientId) : null;
-        const currentName = client ? client.name : '';
-        const newName = prompt('Rename client:', currentName);
-        if (newName === null || newName.trim() === '' || newName.trim() === currentName) return;
-        this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/rename`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: newName.trim() })
-        })
-            .then(() => {
+        const client = (server?.clients || []).find(c => c.id === clientId);
+        const ok = await window.Ui.confirm({
+            title: `Delete ${this.escapeHtml(client?.name || 'this client')}?`,
+            body: `Its config stops working on the device right away and `
+                + `<span class="font-mono">${this.escapeHtml(client?.client_ip || '')}</span> becomes free. This cannot be undone.`,
+            confirmLabel: 'Delete client',
+        });
+        if (!ok) return;
+        try {
+            await this.postJson(`/api/servers/${serverId}/clients/${clientId}`, undefined, 'DELETE');
+            this.showTempMessage(`${client?.name || 'Client'} deleted`, 'success');
+        } catch (error) {
+            console.error('Error deleting client:', error);
+            this.showTempMessage('Error deleting client: ' + error.message, 'error');
+        }
+        this.loadServers();
+    }
+
+    // Inline rename: `target` is the element showing the name; it becomes a text field.
+    renameServer(serverId, target) {
+        const server = (this.lastServers || []).find(s => s.id === serverId);
+        window.Ui.startRename(target, {
+            value: server ? server.name : (target?.textContent || '').trim(),
+            label: 'New server name',
+            onSave: async (name) => {
+                await this.postJson(`/api/servers/${serverId}/rename`, { name });
+                this.showTempMessage(`Renamed to ${name}`, 'success');
                 this.loadServers();
-                this.closeModal();
-                // Update cached client name so modal shows it immediately
-                const cachedClients = this.serverClients.get(serverId);
-                if (cachedClients) {
-                    const c = cachedClients.find(cl => cl.id === clientId);
-                    if (c) c.name = newName.trim();
-                }
-                this.showClientParamsModal(serverId, clientId);
-            })
-            .catch(error => {
-                console.error('Error renaming client:', error);
-                alert('Error renaming client: ' + error.message);
-            });
+            },
+        });
+    }
+
+    renameClient(serverId, clientId, target) {
+        const client = (this.serverClients.get(serverId) || []).find(c => c.id === clientId);
+        window.Ui.startRename(target, {
+            value: client ? client.name : (target?.textContent || '').trim(),
+            label: 'New client name',
+            inputClass: 'text-sm font-medium',
+            onSave: async (name) => {
+                await this.postJson(`/api/servers/${serverId}/clients/${clientId}/rename`, { name });
+                if (client) client.name = name;
+                this.showTempMessage(`Renamed to ${name}`, 'success');
+                this.loadServers();
+            },
+        });
+    }
+
+    // POST (or another verb) JSON and return the parsed reply; throws with the
+    // server's error message on a non-2xx answer.
+    async postJson(url, body, method = 'POST') {
+        const response = await this.apiFetch(url, {
+            method,
+            body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+        return data;
+    }
+
+    // The in-app replacement for "confirm(warnings...)": resolves true to go ahead.
+    confirmWarnings(title, warnings, confirmLabel) {
+        const list = warnings.map((w) => `<li>${this.escapeHtml(w)}</li>`).join('');
+        return window.Ui.confirm({
+            title: this.escapeHtml(title),
+            body: `<ul class="list-disc pl-5 flex flex-col gap-0.5">${list}</ul>`,
+            confirmLabel,
+            danger: false,
+        });
     }
 
     toggleClientSuspend(serverId, clientId) {
@@ -1636,7 +1652,7 @@ class AmneziaApp {
             .then(() => this.loadServers())
             .catch(error => {
                 console.error('Error toggling client suspend:', error);
-                alert('Error toggling client suspend: ' + error.message);
+                this.showTempMessage('Error toggling client suspend: ' + error.message, 'error');
             });
     }
 
@@ -1646,7 +1662,7 @@ class AmneziaApp {
             .then(() => this.loadServers())
             .catch(error => {
                 console.error(`Error ${action}ing server:`, error);
-                alert(`Error ${action}ing server: ` + error.message);
+                this.showTempMessage(`Error ${action}ing server: ` + error.message, 'error');
                 this.loadServers();
             });
     }
@@ -1671,11 +1687,8 @@ class AmneziaApp {
         }
 
         const warnings = this.getClientParamWarningsJS(clientParams, mtu);
-        if (warnings.length > 0) {
-            const proceed = confirm(`Client parameter warnings:\n\n- ${warnings.join('\n- ')}\n\nCreate client anyway?`);
-            if (!proceed) {
-                return;
-            }
+        if (warnings.length > 0 && !await this.confirmWarnings('Client parameter warnings', warnings, 'Create anyway')) {
+            return;
         }
 
         try {
@@ -1744,7 +1757,7 @@ class AmneziaApp {
             }
         } catch (error) {
             console.error('Error downloading client config:', error);
-            alert('Error downloading client config: ' + error.message);
+            this.showTempMessage('Error downloading client config: ' + error.message, 'error');
         }
     }
 
@@ -1756,7 +1769,7 @@ class AmneziaApp {
             })
             .catch(error => {
                 console.error('Error fetching server info:', error);
-                alert('Error loading server configuration: ' + error.message);
+                this.showTempMessage('Error loading server configuration: ' + error.message, 'error');
             });
     }
 
@@ -1768,7 +1781,7 @@ class AmneziaApp {
             })
             .catch(error => {
                 console.error('Error fetching server config:', error);
-                alert('Error loading server configuration: ' + error.message);
+                this.showTempMessage('Error loading server configuration: ' + error.message, 'error');
             });
     }
 
@@ -1776,7 +1789,7 @@ class AmneziaApp {
         this.downloadBlob(`/api/servers/${serverId}/config/download`, `server-${serverId}.conf`)
             .catch((error) => {
                 console.error('Error downloading server config:', error);
-                alert('Error downloading server config: ' + error.message);
+                this.showTempMessage('Error downloading server config: ' + error.message, 'error');
             });
     }
 
@@ -1829,12 +1842,17 @@ class AmneziaApp {
         }
 
         const warnings = this.getTransportParamWarningsJS(protocol, params, mtu);
-        if (warnings.length > 0) {
-            const proceed = confirm(`Transport parameter warnings:\n\n- ${warnings.join('\n- ')}\n\nSave anyway?`);
-            if (!proceed) return;
+        if (warnings.length > 0 && !await this.confirmWarnings('Transport parameter warnings', warnings, 'Save anyway')) {
+            return;
         }
 
-        const ok = confirm('Update protocol and transport parameters and restart the server if it is running? Existing clients will inherit the updated transport profile.');
+        const ok = await window.Ui.confirm({
+            title: 'Save and restart?',
+            body: 'This updates the protocol and transport parameters and restarts the server if it is running. '
+                + 'Every client config changes, so each device has to re-import it.',
+            confirmLabel: 'Save and restart',
+            danger: false,
+        });
         if (!ok) return;
 
         try {
@@ -1881,11 +1899,8 @@ class AmneziaApp {
         }
 
         const warnings = this.getClientParamWarningsJS(clientParams, mtu);
-        if (warnings.length > 0) {
-            const proceed = confirm(`Client parameter warnings:\n\n- ${warnings.join('\n- ')}\n\nSave anyway?`);
-            if (!proceed) {
-                return;
-            }
+        if (warnings.length > 0 && !await this.confirmWarnings('Client parameter warnings', warnings, 'Save anyway')) {
+            return;
         }
 
         try {
@@ -2059,17 +2074,7 @@ class AmneziaApp {
     }
 
     showTempMessage(message, type) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `fixed top-4 right-4 px-4 py-2 rounded text-white text-sm z-50 ${
-            type === 'success' ? 'bg-green-500' : 'bg-red-500'
-        }`;
-        messageDiv.textContent = message;
-
-        document.body.appendChild(messageDiv);
-
-        setTimeout(() => {
-            messageDiv.remove();
-        }, 3000);
+        window.Ui.toast(message, ['error', 'info'].includes(type) ? type : 'success');
     }
 }
 
