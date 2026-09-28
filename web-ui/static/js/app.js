@@ -56,15 +56,6 @@ class AmneziaApp {
         element.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    countryCodeToFlagEmoji(countryCode) {
-        const code = String(countryCode || '').trim().toUpperCase();
-        if (!/^[A-Z]{2}$/.test(code)) return '';
-        const A = 0x1F1E6;
-        const first = A + (code.charCodeAt(0) - 65);
-        const second = A + (code.charCodeAt(1) - 65);
-        return String.fromCodePoint(first, second);
-    }
-
     init() {
         document.addEventListener('DOMContentLoaded', () => {
             console.log("AmneziaWG Web UI initializing...");
@@ -433,8 +424,9 @@ class AmneziaApp {
     updateThemeButton(isDark) {
         const btn = this.getElement('themeToggleBtn');
         if (!btn) return;
-        btn.textContent = isDark ? '☀️' : '🌙';
+        btn.innerHTML = window.Ui.icon(isDark ? 'sun' : 'moon');
         btn.title = isDark ? 'Switch to light theme' : 'Switch to dark theme';
+        btn.setAttribute('aria-label', btn.title);
     }
 
     openCreateServerModal() {
@@ -769,16 +761,21 @@ class AmneziaApp {
         this.rebuildSocket('initial');
     }
 
+    // The header pill: "Live" while the socket is up (traffic arrives every 7 s),
+    // "Reconnecting…" otherwise; the full message is its tooltip.
     updateStatus(message, isConnected = null) {
-        const statusElement = this.getElement('status');
-        if (statusElement) {
-            statusElement.textContent = message;
-        }
-
+        const frame = this.getElement('statusFrame');
+        const label = this.getElement('status');
         const dot = this.getElement('statusDot');
-        if (dot && typeof isConnected === 'boolean') {
-            dot.classList.toggle('bg-green-500', isConnected);
-            dot.classList.toggle('bg-red-500', !isConnected);
+        if (typeof isConnected !== 'boolean') return;
+        if (frame) {
+            frame.dataset.state = isConnected ? 'connected' : 'reconnecting';
+            frame.title = isConnected ? `${message}; traffic refreshes every 7 s` : message;
+        }
+        if (label) label.textContent = isConnected ? 'Live' : 'Reconnecting…';
+        if (dot) {
+            dot.classList.remove('bg-gray-400', 'bg-green-500', 'bg-amber-400');
+            dot.classList.add(isConnected ? 'bg-green-500' : 'bg-amber-400');
         }
     }
 
@@ -800,64 +797,60 @@ class AmneziaApp {
         this.currentPublicIp = nextIp;
 
         if (publicIpElement) {
-            const flag = this.countryCodeToFlagEmoji(this.currentPublicIpCountryCode);
-            publicIpElement.textContent = flag ? `${flag} ${nextIp}` : nextIp;
+            publicIpElement.textContent = nextIp;
         }
     }
 
-    refreshPublicIp() {
-        this.apiFetch('/api/system/refresh-ip')
-            .then(response => response.json())
-            .then(data => {
-                this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
-                this.loadServers();
-            })
-            .catch(error => {
-                console.error('Error refreshing IP:', error);
-            });
-    }
-
-    formatProbeTimestamp(epochSeconds) {
-        const ts = Number(epochSeconds);
-        if (!Number.isFinite(ts) || ts <= 0) return '';
+    // A new public IP is written into every client config's Endpoint, so say how
+    // many devices now hold a config pointing at the old address.
+    async refreshPublicIp() {
+        const button = this.getElement('refreshIpBtn');
+        const before = this.currentPublicIp;
+        if (button) button.disabled = true;
         try {
-            return new Date(ts * 1000).toLocaleString();
-        } catch (_) {
-            return '';
+            const response = await this.apiFetch('/api/system/refresh-ip');
+            const data = await response.json();
+            if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+            this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
+            await this.loadServers();
+            if (data.public_ip === before) {
+                this.showTempMessage(`Public IP is still ${data.public_ip}`, 'success');
+            } else {
+                const stale = this.lastServers.flatMap((s) => s.clients || []).filter((c) => c.config_outdated).length;
+                this.showTempMessage(stale
+                    ? `Public IP changed to ${data.public_ip}. ${stale} client config${stale === 1 ? '' : 's'} to re-import.`
+                    : `Public IP changed to ${data.public_ip}`, stale ? 'info' : 'success');
+            }
+        } catch (error) {
+            console.error('Error refreshing IP:', error);
+            this.showTempMessage('Could not detect the public IP: ' + error.message, 'error');
+        } finally {
+            if (button) button.disabled = false;
         }
     }
 
-    probeServerEgressIp(serverId, buttonElement = null) {
-        const serverCard = buttonElement ? buttonElement.closest('.server-card') : null;
-        if (buttonElement) {
-            buttonElement.disabled = true;
-            buttonElement.classList.add('opacity-60');
+    async probeServerEgressIp(serverId, buttonElement = null) {
+        const server = (this.lastServers || []).find((s) => s.id === serverId);
+        if (server && server.status !== 'running') {
+            this.showTempMessage(`${server.name} is stopped. Start it to check its egress IP.`, 'error');
+            return;
         }
-        if (serverCard) {
-            serverCard.classList.add('egress-probe-updating');
+        if (buttonElement) buttonElement.disabled = true;
+        try {
+            const probe = await this.postJson(`/api/servers/${serverId}/egress-ip`, {});
+            const name = server?.name || 'Server';
+            if (probe.external_ip) {
+                this.showTempMessage(`${name} reaches the internet as ${probe.external_ip}`, 'success');
+            } else {
+                this.showTempMessage(`${name}: no external access${probe.error ? ` (${probe.error})` : ''}`, 'error');
+            }
+        } catch (error) {
+            console.error('Error probing server egress IP:', error);
+            this.showTempMessage('Error probing egress IP: ' + error.message, 'error');
+        } finally {
+            if (buttonElement) buttonElement.disabled = false;
         }
-
-        this.apiFetch(`/api/servers/${serverId}/egress-ip`, { method: 'POST' })
-            .then(async (response) => {
-                const data = await response.json().catch(() => ({}));
-                if (!response.ok) {
-                    throw new Error(data?.error || `HTTP ${response.status}`);
-                }
-                this.loadServers();
-            })
-            .catch((error) => {
-                console.error('Error probing server egress IP:', error);
-                this.showTempMessage('Error probing egress IP: ' + error.message, 'error');
-            })
-            .finally(() => {
-                if (buttonElement) {
-                    buttonElement.disabled = false;
-                    buttonElement.classList.remove('opacity-60');
-                }
-                if (serverCard) {
-                    serverCard.classList.remove('egress-probe-updating');
-                }
-            });
+        this.loadServers();
     }
 
     generateRandomParams() {
@@ -1431,7 +1424,7 @@ class AmneziaApp {
     }
 
     loadServers() {
-        this.apiFetch('/api/servers')
+        return this.apiFetch('/api/servers')
             .then(response => {
                 if (!response.ok) {
                     return response.json().then(err => {
@@ -1472,12 +1465,14 @@ class AmneziaApp {
         const serversList = this.getElement('serversList');
         if (!serversList) return;
 
+        // Rows start with the last known traffic, so a reload does not blank them.
         serversList.innerHTML = window.ServerUi.renderServersHtml({
             servers,
             escapeHtml: (v) => this.escapeHtml(v),
-            formatProbeTimestamp: (ts) => this.formatProbeTimestamp(ts),
-            renderServerClients: (serverId, clients) => this.renderServerClients(serverId, clients),
+            renderServerClients: (serverId, clients) =>
+                this.renderServerClients(serverId, clients, this.lastTrafficByServer.get(serverId) || {}),
         });
+        this.renderStrip();
 
         // Load clients for each server
         servers.forEach(server => {
@@ -1486,14 +1481,55 @@ class AmneziaApp {
     }
 
     renderServerClients(serverId, clients, traffic = {}) {
+        const server = (this.lastServers || []).find((s) => s.id === serverId) || { id: serverId };
         return window.ServerUi.renderServerClientsHtml({
-            serverId,
+            server,
             clients,
             traffic,
             escapeHtml: (v) => this.escapeHtml(v),
             isClientActiveFromTraffic: (clientTraffic) => this.isClientActiveFromTraffic(clientTraffic),
-            countryCodeToFlagEmoji: (countryCode) => this.countryCodeToFlagEmoji(countryCode),
         });
+    }
+
+    // The status strip: servers running and clients online (handshake <= 5 min).
+    renderStrip() {
+        const servers = this.lastServers || [];
+        const running = servers.filter((s) => s.status === 'running').length;
+        let total = 0;
+        let online = 0;
+        servers.forEach((server) => {
+            const clients = this.serverClients.get(server.id) || server.clients || [];
+            const traffic = this.lastTrafficByServer.get(server.id) || {};
+            total += clients.length;
+            online += clients.filter((c) => window.ServerUi.isOnline(server, c, traffic[c.id],
+                (t) => this.isClientActiveFromTraffic(t))).length;
+        });
+        const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = String(value); };
+        set('stripServersRunning', running);
+        set('stripServersTotal', servers.length);
+        set('stripClientsOnline', online);
+        set('stripClientsTotal', total);
+    }
+
+    openServerMenu(serverId, anchor) {
+        const server = (this.lastServers || []).find((s) => s.id === serverId);
+        if (!server) return;
+        window.Ui.openMenu(anchor, [
+            { label: 'Logs', icon: 'logs', run: () => this.showServerLogs(serverId, server.interface) },
+            { label: 'Full config', icon: 'code', run: () => this.showRawServerConfig(serverId) },
+            { label: 'Rename', icon: 'edit', run: () => this.renameServer(serverId, document.querySelector(`[data-name="${serverId}"]`)) },
+            '-',
+            { label: 'Delete server', icon: 'trash', danger: true, run: () => this.deleteServer(serverId) },
+        ]);
+    }
+
+    openClientMenu(serverId, clientId, anchor) {
+        window.Ui.openMenu(anchor, [
+            { label: 'Rename', icon: 'edit', run: () => this.renameClient(serverId, clientId, document.querySelector(`[data-name="${clientId}"]`)) },
+            { label: 'Download .conf', icon: 'download', run: () => this.downloadClientConfig(serverId, clientId) },
+            '-',
+            { label: 'Delete client', icon: 'trash', danger: true, run: () => this.deleteClient(serverId, clientId) },
+        ]);
     }
 
     loadServerClients(serverId) {
@@ -1507,8 +1543,9 @@ class AmneziaApp {
             this.lastTrafficByServer.set(serverId, trafficObj);
             const clientsContainer = this.getElement(`clients-${serverId}`);
             if (clientsContainer) {
-                clientsContainer.innerHTML = this.renderServerClients(serverId, clients, trafficObj);
+                clientsContainer.innerHTML = this.renderServerClients(serverId, this.serverClients.get(serverId), trafficObj);
             }
+            this.renderStrip();
         }).catch(error => {
             console.error(`Error loading clients or traffic for server ${serverId}:`, error);
         });
@@ -1538,9 +1575,11 @@ class AmneziaApp {
         this.lastTrafficByServer.set(serverId, nextTraffic);
 
         const clientsContainer = this.getElement(`clients-${serverId}`);
-        if (clientsContainer) {
+        // Leave a row alone while its name is being edited in place.
+        if (clientsContainer && !clientsContainer.querySelector('input[aria-label="New client name"]')) {
             clientsContainer.innerHTML = this.renderServerClients(serverId, clients, decoratedTraffic);
         }
+        this.renderStrip();
     }
 
     showServerError(message) {
@@ -1647,24 +1686,31 @@ class AmneziaApp {
         });
     }
 
-    toggleClientSuspend(serverId, clientId) {
-        this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/suspend`, { method: 'POST' })
-            .then(() => this.loadServers())
-            .catch(error => {
-                console.error('Error toggling client suspend:', error);
-                this.showTempMessage('Error toggling client suspend: ' + error.message, 'error');
-            });
+    async toggleClientSuspend(serverId, clientId) {
+        try {
+            const data = await this.postJson(`/api/servers/${serverId}/clients/${clientId}/suspend`, {});
+            const name = data?.client?.name || 'Client';
+            this.showTempMessage(data?.suspended
+                ? `${name} suspended; its config cannot connect until reactivated`
+                : `${name} reactivated`, 'success');
+        } catch (error) {
+            console.error('Error toggling client suspend:', error);
+            this.showTempMessage('Error toggling client suspend: ' + error.message, 'error');
+        }
+        this.loadServers();
     }
 
-    toggleServer(serverId, shouldRun) {
+    async toggleServer(serverId, shouldRun) {
         const action = shouldRun ? 'start' : 'stop';
-        this.apiFetch(`/api/servers/${serverId}/${action}`, { method: 'POST' })
-            .then(() => this.loadServers())
-            .catch(error => {
-                console.error(`Error ${action}ing server:`, error);
-                this.showTempMessage(`Error ${action}ing server: ` + error.message, 'error');
-                this.loadServers();
-            });
+        const server = (this.lastServers || []).find((s) => s.id === serverId);
+        try {
+            await this.postJson(`/api/servers/${serverId}/${action}`, {});
+            this.showTempMessage(`${server?.name || 'Server'} ${shouldRun ? 'started' : 'stopped'}`, 'success');
+        } catch (error) {
+            console.error(`Error ${action}ing server:`, error);
+            this.showTempMessage(`Error ${action}ing server: ` + error.message, 'error');
+        }
+        this.loadServers();
     }
 
     async submitAddClient(serverId) {

@@ -36,9 +36,8 @@ COLOUR = re.compile(rf"(?P<kind>bg|text|border)-(?:white|black|(?:{PALETTE})-\d{
 # Look right on both backgrounds: solid buttons, toggle tracks, status dots, dividers,
 # white/mid-grey text, the log pane (dark in both themes), the modal backdrop.
 THEME_NEUTRAL = {
-    "bg-amber-300", "bg-blue-500", "bg-blue-600", "bg-gray-200", "bg-gray-300", "bg-gray-400", "bg-gray-500",
-    "bg-gray-600", "bg-green-500", "bg-purple-500", "bg-red-500", "bg-red-600", "text-emerald-200",
-    "text-gray-400", "text-white",
+    "bg-amber-400", "bg-blue-500", "bg-blue-600", "bg-gray-200", "bg-gray-400", "bg-gray-500", "bg-gray-600",
+    "bg-green-500", "bg-red-600", "text-emerald-200", "text-gray-400", "text-white",
 }  # fmt: skip
 # Given their dark look by a style.css rule instead: the two refresh buttons
 # (#refreshIpBtn, .egress-refresh-btn) and the h3/h4 element colour.

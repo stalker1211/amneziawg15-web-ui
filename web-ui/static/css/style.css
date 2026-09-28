@@ -19,36 +19,6 @@ body.dark {
 body.dark label { color: #e0e7ff; }
 body.dark h3, body.dark h4 { color: #bfdbfe; }
 
-/* Header refresh button (its text colour comes from dark:text-* in the markup) */
-body.dark #refreshIpBtn {
-    background-color: rgba(30, 58, 95, 0.9);
-    border-color: rgba(59, 130, 246, 0.4);
-}
-body.dark #refreshIpBtn:hover {
-    background-color: rgba(37, 75, 122, 0.95);
-}
-
-body.dark .egress-refresh-btn {
-    background-color: rgba(30, 58, 95, 0.9) !important;
-    color: #bfdbfe !important;
-    border-color: rgba(59, 130, 246, 0.45) !important;
-}
-body.dark .egress-refresh-btn:hover {
-    background-color: rgba(37, 75, 122, 0.95) !important;
-    color: #dbeafe !important;
-    border-color: rgba(147, 197, 253, 0.65) !important;
-}
-
-.egress-probe-updating .egress-probe-value,
-.egress-probe-updating .egress-probe-ts {
-    color: #9ca3af !important;
-}
-
-body.dark .egress-probe-updating .egress-probe-value,
-body.dark .egress-probe-updating .egress-probe-ts {
-    color: #94a3b8 !important;
-}
-
 body.dark input,
 body.dark textarea,
 body.dark select {
@@ -148,30 +118,12 @@ input:focus, button:focus {
     }
 }
 
-/* Link-activity LED for rx/tx arrows */
+/* The ↓/↑ arrows of a client row flash green when their total changes. */
 .traffic-arrow {
     display: inline-flex;
     align-items: center;
     line-height: 1;
     color: #9CA3AF; /* gray-400 */
-}
-
-.traffic-arrow-icon {
-    width: 16px;
-    height: 16px;
-    display: inline-block;
-    position: relative;
-    /* Make filled SVG feel bolder (cheap stroke effect) */
-    filter: drop-shadow(0 0 0 currentColor) drop-shadow(0 0 0 currentColor);
-}
-
-/* Per-direction vertical offsets (fonts render ⬇️/⬆️ differently) */
-.traffic-arrow-icon-rx {
-    top: 0.4em;
-}
-
-.traffic-arrow-icon-tx {
-    top: 0.2em;
 }
 
 /* Apply only to the arrow element when rx/tx changes */

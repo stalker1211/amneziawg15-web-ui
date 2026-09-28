@@ -49,8 +49,8 @@ async function waitFor(page, fn, timeoutMs = 15000, everyMs = 250) {
 
     // --- baseline -----------------------------------------------------------
     check('socket connects on load', await waitFor(page, () => !!(amneziaApp.socket && amneziaApp.socket.connected)));
-    check('status pill shows connected', await page.evaluate(() =>
-        /connected/i.test(document.getElementById('status')?.textContent || '')));
+    const pillState = () => page.evaluate(() => document.getElementById('statusFrame')?.dataset.state);
+    check('status pill shows connected', await pillState() === 'connected', await pillState());
     check('servers loaded over the socket-triggered resync', await page.evaluate(() =>
         Array.isArray(amneziaApp.lastServers) && amneziaApp.lastServers.length > 0));
 
@@ -63,15 +63,13 @@ async function waitFor(page, fn, timeoutMs = 15000, everyMs = 250) {
         amneziaApp.socket.io.engine.close();
     });
     check('disconnect is observed', await waitFor(page, () => !amneziaApp.socket.connected, 10000));
-    check('status pill reflects the drop', await page.evaluate(() =>
-        !/^connected/i.test((document.getElementById('status')?.textContent || '').trim())));
+    check('status pill reflects the drop', await pillState() === 'reconnecting', await pillState());
 
     // --- socket.io reconnects by itself, and the app resyncs ----------------
     check('reconnects automatically', await waitFor(page, () => !!amneziaApp.socket.connected, 20000));
     check('resync ran after reconnect', await waitFor(page, () => window.__resyncCount > 0, 10000),
         await page.evaluate(() => window.__resyncCount));
-    check('status pill back to connected', await page.evaluate(() =>
-        /connected/i.test(document.getElementById('status')?.textContent || '')));
+    check('status pill back to connected', await pillState() === 'connected', await pillState());
 
     // --- rebuildSocket replaces the instance and rebinds -------------------
     const rebuilt = await page.evaluate(async () => {
