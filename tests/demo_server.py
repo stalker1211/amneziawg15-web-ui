@@ -225,19 +225,21 @@ def seed(manager):
 
 
 def write_log(path, manager):
-    """A few daemon lines per interface for the Logs view."""
+    """A few daemon lines per interface, in the format scripts/amneziawg-go-logged.sh writes."""
     lines = []
     for server in manager.config["servers"]:
         iface = server["interface"]
         lines += [
-            f"DEBUG: 2026/09/26 20:41:07 {iface}: Interface state was Down, requested Up, now Up",
-            f"DEBUG: 2026/09/26 20:41:07 {iface}: UDP bind has been updated",
+            f"2026-09-26T20:41:06+00:00 [amneziawg-go-logged] starting: {iface}",
+            f"INFO: ({iface}) 2026/09/26 20:41:07 Starting amneziawg-go version 0.2.16",
+            f"DEBUG: ({iface}) 2026/09/26 20:41:07 Interface state was Down, requested Up, now Up",
+            f"DEBUG: ({iface}) 2026/09/26 20:41:07 UDP bind has been updated",
         ]
         for client in server["clients"][:2]:
-            key = client["client_public_key"]
+            peer = f"peer({client['client_public_key'][:4]}…{client['client_public_key'][-5:-1]})"
             lines += [
-                f"DEBUG: 2026/09/26 20:41:12 {iface}: peer({key[:4]}…{key[-5:-1]}) - Received handshake initiation",
-                f"DEBUG: 2026/09/26 20:41:12 {iface}: peer({key[:4]}…{key[-5:-1]}) - Sending handshake response",
+                f"DEBUG: ({iface}) 2026/09/26 20:41:12 {peer} - Received handshake initiation",
+                f"DEBUG: ({iface}) 2026/09/26 20:41:12 {peer} - Sending handshake response",
             ]
     Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
