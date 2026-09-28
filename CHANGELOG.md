@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## Version 2.2.1 (2026-09-28)
+
+Release tooling only; the image is the same as 2.2 apart from its build label.
+
+- **Publishing is a dry run by default.** `publish_dockerhub.sh` and `publish_github.sh`
+  build or push only with `--publish`; `--dry-run` is gone. Release:
+  `git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh --publish`.
+- **`publish_dockerhub.sh --publish` runs only on master** or on a clean release commit
+  (rebuilding an older release), so work on a branch never reaches `:latest`.
+- **`publish_github.sh` refuses any remote that is not on github.com**, so it cannot
+  overwrite the full history on another remote with the copy stripped of private docs.
+
 ## Version 2.2 (2026-09-26)
 
 A simplification and hardening release: less code, a much larger test suite written
