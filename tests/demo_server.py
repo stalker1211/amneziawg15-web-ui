@@ -135,8 +135,9 @@ class DemoManager(AmneziaManager):
             peer = self.peers.get(client["client_public_key"])
             lines.append(f"peer: {client['client_public_key']}")
             if peer:
-                if now - peer["handshake_at"] < 300:  # online: keep it chatty
-                    peer["handshake_at"] = now - (int(now) % 110 + 1)
+                if now - peer["handshake_at"] < 300:  # online: keep it chatty, each at its own pace
+                    spread = sum(map(ord, client["client_public_key"])) % 97
+                    peer["handshake_at"] = now - ((int(now) + spread) % 110 + 1)
                     peer["rx"] += (int(now) % 7 + 1) * 180 * KiB
                     peer["tx"] += (int(now) % 5 + 1) * 40 * KiB
                 lines += [
@@ -248,6 +249,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--port", type=int, default=8099)
     parser.add_argument("--empty", action="store_true", help="start with no servers")
+    parser.add_argument("--label", default="demo (example data)", help="build label under the heading")
     args = parser.parse_args()
 
     tmp = tempfile.mkdtemp(prefix="awg-demo-")
@@ -273,7 +275,7 @@ def main():
 
     @app.route("/")
     def index():
-        return render_template("index.html", cache_bust=int(time.time()), build_label="demo (example data)")
+        return render_template("index.html", cache_bust=int(time.time()), build_label=args.label)
 
     @app.route("/static/<path:filename>")
     def static_files(filename):
