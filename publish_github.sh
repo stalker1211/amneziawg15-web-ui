@@ -12,21 +12,24 @@ set -euo pipefail
 #
 # Only refs are pushed; no local branch or tag is created or changed.
 # Pushes go to the remote's fetch URL, so `remote.origin.pushurl` can be set to
-# a dummy value to make a plain `git push origin` fail.
+# a dummy value to make a plain `git push origin` fail. The script refuses any
+# URL that is not on github.com, so a clone whose origin is the NAS cannot
+# overwrite the full history there with the stripped copy.
 #
 # Usage:
-#   ./publish_github.sh             # push master + all tags
-#   ./publish_github.sh --dry-run   # show what would be pushed
-#   ./publish_github.sh --force     # replace history already on GitHub
+#   ./publish_github.sh                     # dry run: show what would be pushed
+#   ./publish_github.sh --publish           # push master + all tags
+#   ./publish_github.sh --publish --force   # replace history already on GitHub
 
 REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-master}"
 PRIVATE_FILES=(CLAUDE.md DEVELOPMENT.md GUI_REDESIGN_PLAN.md)
 
+PUBLISH=0
 PUSH_FLAGS=()
 for arg in "$@"; do
 	case "${arg}" in
-		--dry-run) PUSH_FLAGS+=(--dry-run) ;;
+		--publish) PUBLISH=1 ;;
 		--force) PUSH_FLAGS+=(--force) ;;
 		-h|--help) sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		*) echo "Unknown argument: ${arg}" >&2; exit 1 ;;
@@ -34,6 +37,12 @@ for arg in "$@"; do
 done
 
 cd "$(git rev-parse --show-toplevel)"
+URL="$(git remote get-url "${REMOTE}")"
+if [[ ! "${URL}" =~ (^|[@/])github\.com[:/] ]]; then
+	echo "Error: remote ${REMOTE} is ${URL}, not GitHub; set REMOTE=<github remote>" >&2
+	exit 1
+fi
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 mkdir "${WORK}/map"
@@ -99,10 +108,10 @@ while read -r name type target peeled; do
 	fi
 done < <(git for-each-ref refs/tags --format='%(refname:short) %(objecttype) %(objectname) %(*objectname)')
 
-URL="$(git remote get-url "${REMOTE}")"
-
 echo "Publishing to ${URL} without: ${PRIVATE_FILES[*]}"
 echo "  ${BRANCH}: $(git rev-parse --short "${BRANCH}") -> $(git rev-parse --short "${TIP}")"
 echo "  files dropped at tip: $(git diff --name-only "${TIP}" "${BRANCH}" | tr '\n' ' ')"
 
+[[ ${PUBLISH} -eq 1 ]] || PUSH_FLAGS+=(--dry-run)
 git push ${PUSH_FLAGS[@]+"${PUSH_FLAGS[@]}"} "${URL}" "${REFSPECS[@]}"
+[[ ${PUBLISH} -eq 1 ]] || echo "Dry run: nothing pushed. Add --publish to push."

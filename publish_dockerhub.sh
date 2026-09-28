@@ -11,12 +11,12 @@ set -euo pipefail
 # Each image carries a build label shown under the page heading, e.g.
 # "v2.2 build 20260926.1" or "v2.2-3-gabc1234 build 20260926.2".
 #
-# Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh
+# Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh --publish
 #
 # Usage:
-#   ./publish_dockerhub.sh             publish HEAD as described above
-#   ./publish_dockerhub.sh 2.3         same, but stop unless HEAD is release v2.3
-#   ./publish_dockerhub.sh --dry-run   print version, label and tags; build nothing
+#   ./publish_dockerhub.sh             dry run: print version, label and tags; build nothing
+#   ./publish_dockerhub.sh --publish   build and push HEAD as described above
+#   ./publish_dockerhub.sh --publish 2.3   same, but stop unless HEAD is release v2.3
 #
 # Env: IMAGE_REPO, DOCKERFILE, PLATFORMS; TAG=2.3 works like the argument.
 
@@ -28,11 +28,11 @@ IMAGE_REPO="${IMAGE_REPO:-stalker1211/amneziawg15-web-ui}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 
-DRY_RUN=0
+PUBLISH=0
 EXPECTED="${TAG:-}"
 for arg in "$@"; do
 	case "${arg}" in
-	--dry-run) DRY_RUN=1 ;;
+	--publish) PUBLISH=1 ;;
 	-h | --help)
 		sed -n '4,21p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
@@ -96,8 +96,8 @@ echo "Push:     ${IMAGES[*]}"
 if [[ -z "${RELEASE}" ]]; then
 	echo "          (not a clean release commit, so no version tag; tag vX.Y to publish one)"
 fi
-if [[ ${DRY_RUN} -eq 1 ]]; then
-	echo "Dry run: nothing built or pushed."
+if [[ ${PUBLISH} -eq 0 ]]; then
+	echo "Dry run: nothing built or pushed. Add --publish to build and push."
 	exit 0
 fi
 

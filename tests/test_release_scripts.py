@@ -1,7 +1,7 @@
 """Tests for the versioning rules in version.sh and publish_dockerhub.sh.
 
 Each test builds a throwaway git repository holding copies of the two scripts and
-runs `publish_dockerhub.sh --dry-run`, which prints the version, label and Docker
+runs `publish_dockerhub.sh` without `--publish` (a dry run), which prints the version, label and Docker
 tags without touching Docker. The rules pinned here: every publish updates :latest,
 except a rebuild of an older release (so :latest never goes backwards); an image also
 gets a version tag only when HEAD is exactly on a clean release tag vX.Y[.Z].
@@ -53,7 +53,7 @@ class PublishRulesTests(unittest.TestCase):
 
     def publish(self, *args):
         result = subprocess.run(
-            ["bash", "publish_dockerhub.sh", "--dry-run", *args],
+            ["bash", "publish_dockerhub.sh", *args],
             cwd=self.dir, env=self.env, capture_output=True, text=True, check=False,  # exit code is asserted
         )  # fmt: skip
         fields = dict(re.findall(r"^(Version|Label|Push):\s+(.*)$", result.stdout, re.MULTILINE))
