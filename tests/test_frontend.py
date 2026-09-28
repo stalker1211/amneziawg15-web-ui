@@ -31,21 +31,12 @@ PALETTE = (
 )
 COLOUR = re.compile(rf"(?P<kind>bg|text|border)-(?:white|black|(?:{PALETTE})-\d{{2,3}})(?:/\d+)?")
 
-# A new colour class must get a dark: partner or be added to one of these on purpose.
-#
-# Look right on both backgrounds: solid buttons, toggle tracks, status dots, dividers,
-# white/mid-grey text, the log pane (dark in both themes), the modal backdrop.
-THEME_NEUTRAL = {
-    "bg-amber-400", "bg-gray-200", "bg-gray-400", "bg-gray-500", "bg-gray-600", "bg-green-500",
-    "text-emerald-200", "text-gray-400", "text-white",
-}  # fmt: skip
-# Given their dark look by a style.css rule instead (the logs view's refresh button).
-DARK_VIA_STYLE_CSS = {"bg-white/80", "border-blue-200/70"}
-# Known gaps, kept as-is so the build change stayed pixel-identical: the error boxes'
-# dark-red text and light border on the dark red panel, and the QR card's light frame.
-# Fix these in the GUI redesign (DEVELOPMENT.md §10 #15).
-LIGHT_ONLY_TODAY = {"border-gray-100", "border-red-200", "text-red-700"}
-ALLOWED_UNPAIRED = THEME_NEUTRAL | DARK_VIA_STYLE_CSS | LIGHT_ONLY_TODAY
+# A new colour class must get a dark: partner or be added here on purpose. These look
+# right on both backgrounds: status dots (live, suspended, connecting), the Stopped
+# pill's grey, the traffic arrows' mid-grey, and the QR code's white frame (a QR
+# needs a light quiet zone to scan).
+THEME_NEUTRAL = {"bg-amber-400", "bg-gray-200", "bg-gray-400", "bg-green-500", "bg-white", "text-gray-400"}
+ALLOWED_UNPAIRED = THEME_NEUTRAL
 
 
 def class_units():

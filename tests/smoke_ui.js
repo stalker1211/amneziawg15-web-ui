@@ -145,12 +145,30 @@ function check(label, condition, detail) {
             await page.evaluate((s, c) => amneziaApp.showClientQRCode(s, c), id, clientId);
             await new Promise((r) => setTimeout(r, 1500));
             check(`${protocol} QR code rendered`, await page.evaluate(() => !!document.querySelector('#qrModal canvas, #qrModal img')));
-            await page.evaluate(() => amneziaApp.closeQRModal());
+            // Showing the QR hands the config out, which the server records.
+            check(`${protocol} showing the QR records the config as issued`, await page.evaluate(async (s, c) => {
+                const r = await amneziaApp.apiFetch(`/api/servers/${s}/clients`);
+                const client = (await r.json()).find((x) => x.id === c);
+                return !!client && client.config_issued_at !== null && client.config_outdated === false;
+            }, id, clientId));
+            await page.evaluate(() => window.Ui.closeDialog());
 
-            await page.evaluate((s) => amneziaApp.showServerLogs(s, 'wg-' + s), id);
+            await page.evaluate((s) => amneziaApp.showServerLogs(s), id);
             await new Promise((r) => setTimeout(r, 1200));
-            check(`${protocol} logs modal renders`, await page.evaluate(() => !!document.getElementById('serverLogContent')));
-            await page.evaluate(() => amneziaApp.closeModal());
+            check(`${protocol} logs view renders`, await page.evaluate(() => !!document.getElementById('serverLogContent')));
+            // The code box follows the theme (it used to stay dark on a light page).
+            check(`${protocol} log box matches the ${theme} theme`, await page.evaluate((t) => {
+                const [r, g, b] = getComputedStyle(document.getElementById('serverLogContent')).backgroundColor.match(/\d+/g).map(Number);
+                return (r + g + b > 384) === (t === 'light');
+            }, theme));
+            await page.evaluate(() => window.Ui.closeDialog());
+
+            await page.evaluate((s) => amneziaApp.showRawServerConfig(s), id);
+            await new Promise((r) => setTimeout(r, 800));
+            check(`${protocol} full config view shows the .conf`, await page.evaluate(() =>
+                /\[Interface\]/.test(document.getElementById('rawConfigText')?.textContent || '')));
+            await page.evaluate(() => window.Ui.closeDialog());
+            check(`${protocol} closing a view hides it`, await page.evaluate(() => document.getElementById('dialogRoot').hidden));
         }
 
         await page.evaluate(() => amneziaApp.openCreateServerModal());

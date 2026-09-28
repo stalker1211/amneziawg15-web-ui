@@ -1,103 +1,18 @@
-/* AmneziaWG Web UI Custom Styles */
+/* AmneziaWG Web UI - the little CSS that is not a Tailwind utility or one of the
+   components in tailwind.input.css. Loaded before tailwind.css, so utilities win
+   ties with anything here. */
 
-/* Pill buttons (modal/dialog actions) */
-.btn-pill {
-    border-radius: 9999px !important;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    transition: all 0.2s ease;
-}
-
-/* Dark theme. Colour utilities carry their own `dark:` classes in the markup
-   (Tailwind, see tailwind.config.js); what remains here is element-level defaults
-   and a few components. The element rules must stay below the `dark:` classes in
-   specificity (no !important) so a coloured label or heading keeps its colour. */
+/* Page defaults; the markup's bg-/text- classes say the same, this covers the
+   moment before they apply. */
 body.dark {
     background-color: #111827;
     color: #e5e7eb;
 }
 
-body.dark label { color: #e0e7ff; }
-body.dark h3, body.dark h4 { color: #bfdbfe; }
-
-body.dark input,
-body.dark textarea,
-body.dark select {
-    background-color: #111827;
-    color: #e5e7eb;
-    border-color: #334155;
-}
-
-body.dark input::placeholder,
-body.dark textarea::placeholder {
-    color: #64748b;
-}
-
-
-/* Loading animations */
-.loading {
-    animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
-
-/* Custom scrollbar */
-.custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 3px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #c1c1c1;
-    border-radius: 3px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: #a8a8a8;
-}
-
-/* Smooth transitions */
-.smooth-transition {
-    transition: all 0.3s ease-in-out;
-}
-
-/* Focus styles for better accessibility */
-input:focus, button:focus {
-    outline: 2px solid #3b82f6;
+/* A visible focus ring for keyboard users on anything without its own. */
+input:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+    outline: 2px solid #a855f7;
     outline-offset: 2px;
-}
-
-/* Print styles */
-@media print {
-    .no-print {
-        display: none !important;
-    }
-}
-
-/* Modal styles */
-.modal-backdrop {
-    background-color: rgba(0, 0, 0, 0.5);
-}
-
-.modal-container {
-    animation: modalFadeIn 0.3s ease-out;
-}
-
-@keyframes modalFadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(-20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
 }
 
 /* The ↓/↑ arrows of a client row flash green when their total changes. */
@@ -108,7 +23,6 @@ input:focus, button:focus {
     color: #9CA3AF; /* gray-400 */
 }
 
-/* Apply only to the arrow element when rx/tx changes */
 .traffic-flash {
     animation: trafficArrowFlash 900ms ease-out;
 }
@@ -126,28 +40,4 @@ input:focus, button:focus {
         color: #9CA3AF;
         text-shadow: none;
     }
-}
-
-/* Custom scrollbar for config preview */
-.config-preview {
-    scrollbar-width: thin;
-    scrollbar-color: #4B5563 #1F2937;
-}
-
-.config-preview::-webkit-scrollbar {
-    width: 8px;
-}
-
-.config-preview::-webkit-scrollbar-track {
-    background: #1F2937;
-    border-radius: 4px;
-}
-
-.config-preview::-webkit-scrollbar-thumb {
-    background: #4B5563;
-    border-radius: 4px;
-}
-
-.config-preview::-webkit-scrollbar-thumb:hover {
-    background: #6B7280;
 }

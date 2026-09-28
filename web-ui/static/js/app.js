@@ -14,7 +14,6 @@ class AmneziaApp {
         this.environment = {};
         this.currentPublicIp = '';
         this.currentPublicIpCountryCode = '';
-        this.logPoller = null;
         this.init();
     }
 
@@ -150,7 +149,7 @@ class AmneziaApp {
         return unescape(encodeURIComponent(String(text))).length;
     }
 
-    generateQrIntoContainer(qrContainer, text) {
+    generateQrIntoContainer(qrContainer, text, size = 300) {
         if (!qrContainer) return;
 
         const value = String(text ?? '');
@@ -158,7 +157,7 @@ class AmneziaApp {
 
         if (!value.trim()) {
             qrContainer.innerHTML = `
-                <div class="text-sm text-red-600 dark:text-[#fca5a5] bg-red-50 dark:bg-[#7f1d1d] border border-red-200 rounded-lg p-3">
+                <div class="rounded-lg border px-3 py-2 text-sm bg-red-50 border-red-200 text-red-800 dark:bg-[#3b1219] dark:border-[#7f1d1d] dark:text-[#fecaca]">
                     No configuration text to encode.
                 </div>
             `;
@@ -179,8 +178,8 @@ class AmneziaApp {
                 qrContainer.innerHTML = '';
                 new QRCode(qrContainer, {
                     text: value,
-                    width: 300,
-                    height: 300,
+                    width: size,
+                    height: size,
                     colorDark: "#000000",
                     colorLight: "#ffffff",
                     correctLevel: level,
@@ -197,11 +196,11 @@ class AmneziaApp {
             const bytes = this.getUtf8ByteLength(value);
             const safeMsg = this.escapeHtml(lastError?.message || String(lastError));
             qrContainer.innerHTML = `
-                <div class="text-sm text-red-700 bg-red-50 dark:bg-[#7f1d1d] border border-red-200 rounded-lg p-3">
+                <div class="rounded-lg border px-3 py-2 text-sm bg-red-50 border-red-200 text-red-800 dark:bg-[#3b1219] dark:border-[#7f1d1d] dark:text-[#fecaca]">
                     <div class="font-semibold mb-1">QR code could not be generated</div>
                     <div class="mb-2">Most commonly this happens when the config is too large for a QR code (payload: <span class=\"font-mono\">${bytes}</span> bytes).</div>
                     <div class="text-xs text-red-600 dark:text-[#fca5a5] font-mono break-all">${safeMsg}</div>
-                    <div class="mt-2">Use “Download Config File (.conf)” instead.</div>
+                    <div class="mt-2">Use Download .conf instead.</div>
                 </div>
             `;
         }
@@ -852,6 +851,14 @@ class AmneziaApp {
         });
     }
 
+    // GET JSON; throws with the server's error message on a non-2xx answer.
+    async getJson(url) {
+        const response = await this.apiFetch(url);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+        return data;
+    }
+
     // POST (or another verb) JSON and return the parsed reply; throws with the
     // server's error message on a non-2xx answer.
     async postJson(url, body, method = 'POST') {
@@ -889,208 +896,6 @@ class AmneziaApp {
             this.showTempMessage(`Error ${action}ing server: ` + error.message, 'error');
         }
         this.loadServers();
-    }
-
-    async downloadClientConfig(serverId, clientId) {
-        try {
-            const url = `/api/servers/${serverId}/clients/${clientId}/config`;
-            const resp = await this.apiFetch(url);
-            if (!resp.ok) {
-                let msg = `HTTP ${resp.status}`;
-                try {
-                    const err = await resp.json();
-                    msg = err?.error || msg;
-                } catch (_) {
-                    // ignore
-                }
-                throw new Error(msg);
-            }
-
-            const text = await resp.text();
-            const w = window.open('', '_blank');
-            if (w) {
-                w.document.title = `client-${clientId}.conf`;
-                w.document.body.innerHTML = `<pre style="white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; padding: 16px;">${this.escapeHtml(text)}</pre>`;
-            } else {
-                const blob = new Blob([text], { type: 'text/plain' });
-                const blobUrl = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = blobUrl;
-                a.download = `client-${clientId}.conf`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
-            }
-        } catch (error) {
-            console.error('Error downloading client config:', error);
-            this.showTempMessage('Error downloading client config: ' + error.message, 'error');
-        }
-    }
-
-    showRawServerConfig(serverId) {
-        this.apiFetch(`/api/servers/${serverId}/config`)
-            .then(response => response.json())
-            .then(config => {
-                this.displayRawConfigModal(config);
-            })
-            .catch(error => {
-                console.error('Error fetching server config:', error);
-                this.showTempMessage('Error loading server configuration: ' + error.message, 'error');
-            });
-    }
-
-    downloadServerConfig(serverId) {
-        this.downloadBlob(`/api/servers/${serverId}/config/download`, `server-${serverId}.conf`)
-            .catch((error) => {
-                console.error('Error downloading server config:', error);
-                this.showTempMessage('Error downloading server config: ' + error.message, 'error');
-            });
-    }
-
-    closeModal() {
-        const existingModal = document.getElementById('configModal') || document.getElementById('rawConfigModal');
-        if (existingModal) existingModal.remove();
-
-        const logsModal = document.getElementById('logsModal');
-        if (logsModal) logsModal.remove();
-
-        if (this.logPoller) {
-            clearInterval(this.logPoller);
-            this.logPoller = null;
-        }
-    }
-
-    closeQRModal() {
-        const existingModal = document.getElementById('qrModal');
-        if (existingModal) {
-            existingModal.remove();
-        }
-    }
-
-    async fetchAndGenerateQRCode(serverId, clientId) {
-        try {
-            this.qrServerId = serverId;
-            this.qrClientId = clientId;
-            
-            // Use the efficient endpoint that returns both versions
-            const response = await this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/config-both`);
-            if (!response.ok) {
-                throw new Error('Failed to fetch config');
-            }
-            
-            const data = await response.json();
-            this.currentCleanConfig = data.clean_config;
-            this.currentFullConfig = data.full_config;
-            this.currentClientName = data.client_name;
-            
-            // Display full config text
-            const configTextEl = document.getElementById('configText');
-            if (configTextEl) {
-                configTextEl.textContent = this.currentFullConfig;
-            }
-            
-            // Generate QR code from full config
-            const qrContainer = document.getElementById('qrcode');
-            if (qrContainer) {
-                this.generateQrIntoContainer(qrContainer, this.currentFullConfig);
-            }
-        } catch (error) {
-            console.error('Error fetching config for QR code:', error);
-            this.showTempMessage('Failed to fetch/generate QR code: ' + error.message, 'error');
-            const qrContainer = document.getElementById('qrcode');
-            if (qrContainer) {
-                const safeMsg = this.escapeHtml(error?.message || String(error));
-                qrContainer.innerHTML = `
-                    <div class="text-sm text-red-700 bg-red-50 dark:bg-[#7f1d1d] border border-red-200 rounded-lg p-3">
-                        <div class="font-semibold mb-1">Failed to load configuration for QR</div>
-                        <div class="text-xs text-red-600 dark:text-[#fca5a5] font-mono break-all">${safeMsg}</div>
-                    </div>
-                `;
-            }
-        }
-    }
-
-    updateConfigTypeLabel() {
-        const configTypeLabel = document.getElementById('configType');
-        if (configTypeLabel) {
-            configTypeLabel.textContent = this.currentConfigType === 'clean' ? 'Clean Config' : 'Full Config';
-        }
-    }
-
-    toggleConfigView() {
-        const configTextArea = document.getElementById('configText');
-        const qrContainer = document.getElementById('qrcode');
-        
-        if (this.currentConfigType === 'clean') {
-            // Switch to full config
-            configTextArea.value = this.currentFullConfig;
-            this.currentConfigType = 'full';
-        } else {
-            // Switch to clean config
-            configTextArea.value = this.currentCleanConfig;
-            this.currentConfigType = 'clean';
-        }
-        
-        this.updateConfigTypeLabel();
-
-        // Keep QR aligned with what the user sees.
-        if (qrContainer) {
-            const text = this.currentConfigType === 'clean' ? this.currentCleanConfig : this.currentFullConfig;
-            this.generateQrIntoContainer(qrContainer, text);
-        }
-    }
-
-    downloadQRCode() {
-        const qrContainer = document.getElementById('qrcode');
-        if (!qrContainer) return;
-        
-        const canvas = qrContainer.querySelector('canvas');
-        if (!canvas) return;
-        
-        // Create a temporary link to download the canvas as PNG
-        const link = document.createElement('a');
-        link.download = `${this.currentClientName.replace(/[^a-z0-9]/gi, '_')}_qr_code.png`;
-        link.href = canvas.toDataURL('image/png');
-        link.click();
-    }
-
-    copyConfigText() {
-        const configTextEl = document.getElementById('configText');
-        if (configTextEl) {
-            const text = configTextEl.textContent || '';
-            navigator.clipboard.writeText(text).then(() => {
-                this.showTempMessage('Configuration copied to clipboard!', 'success');
-            }).catch(() => {
-                // Fallback: use a temporary textarea
-                const tmp = document.createElement('textarea');
-                tmp.value = text;
-                document.body.appendChild(tmp);
-                tmp.select();
-                document.execCommand('copy');
-                tmp.remove();
-                this.showTempMessage('Configuration copied to clipboard!', 'success');
-            });
-        }
-    }
-
-    copyToClipboard(text) {
-        // Decode base64 text if it's the JSON data
-        try {
-            const decodedText = atob(text);
-            const jsonData = JSON.parse(decodedText);
-            text = jsonData.config_content || decodedText;
-        } catch (e) {
-            // If it's not base64 JSON, use the text as is
-        }
-
-        navigator.clipboard.writeText(text).then(() => {
-            // Show a temporary notification
-            this.showTempMessage('Configuration copied to clipboard!', 'success');
-        }).catch(err => {
-            console.error('Failed to copy: ', err);
-            this.showTempMessage('Failed to copy to clipboard', 'error');
-        });
     }
 
     async copyText(text, what = 'Text') {
