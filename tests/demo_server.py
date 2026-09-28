@@ -1,0 +1,285 @@
+"""Serve the real panel with invented example data: for trying the UI, the smoke
+tests and screenshots, with no container and no AmneziaWG.
+
+Everything is the production code (routes, guards, Socket.IO, the traffic loop and
+its `awg show` parser) except the system edges of the manager: keys, awg-quick, ip,
+iptables, GeoIP and the egress probe are answered here. Addresses come from the
+documentation ranges and keys are random, so nothing real can leak into a screenshot.
+
+    uv run --no-project --python 3.14 --with-requirements web-ui/requirements.txt \
+        tests/demo_server.py [--port 8099]
+
+Then open http://127.0.0.1:8099/ (no login). State lives in a temp dir and is gone
+on exit. The smoke tests run against it the same way they run against a container.
+"""
+
+import argparse
+import base64
+import hashlib
+import os
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "web-ui"))
+
+from core.guards import install_guards
+from core.helpers import to_bool
+from core.runtime import create_flask_app, create_socketio, register_socket_handlers
+from flask import render_template, send_from_directory
+from routes.servers import register_server_routes
+from routes.system import register_system_routes
+from services.amnezia_manager import AmneziaManager
+
+PUBLIC_IPS = ("203.0.113.24", "203.0.113.57")  # refresh-ip flips between these
+GEO = {
+    "203.0.113.24": ("Amsterdam", "NL"),
+    "203.0.113.57": ("Rotterdam", "NL"),
+    "198.51.100.40": ("Amsterdam", "NL"),
+    "203.0.113.88": ("Berlin", "DE"),
+    "203.0.113.201": ("Warsaw", "PL"),
+    "198.51.100.17": ("Amsterdam", "NL"),
+    "198.51.100.61": ("Frankfurt am Main", "DE"),
+}
+KiB, MiB, GiB = 1024, 1024**2, 1024**3
+
+
+def random_key():
+    return base64.b64encode(os.urandom(32)).decode()
+
+
+def fmt_bytes(n):
+    for unit, size in (("GiB", GiB), ("MiB", MiB), ("KiB", KiB)):
+        if n >= size:
+            return f"{n / size:.2f} {unit}"
+    return f"{int(n)} B"
+
+
+def fmt_ago(seconds):
+    parts, rest = [], int(seconds)
+    for name, size in (("day", 86400), ("hour", 3600), ("minute", 60), ("second", 1)):
+        count, rest = divmod(rest, size)
+        if count:
+            parts.append(f"{count} {name}{'' if count == 1 else 's'}")
+    return (", ".join(parts[:2]) or "0 seconds") + " ago"
+
+
+class DemoManager(AmneziaManager):
+    """The real manager with its system edges answered in memory."""
+
+    def __init__(self, **kwargs):
+        self.running = set()  # interfaces that are "up"
+        self.peers = {}  # client public key -> {endpoint, handshake_at, rx, tx}
+        self.egress = {}  # server_ip -> external IP
+        self._public_ip_calls = 0
+        super().__init__(**kwargs)
+
+    # --- keys -----------------------------------------------------------------
+    def generate_wireguard_keys(self):
+        private_key = random_key()
+        return {"private_key": private_key, "public_key": self.derive_public_key(private_key)}
+
+    def derive_public_key(self, private_key):
+        return base64.b64encode(hashlib.sha256(private_key.encode()).digest()).decode()
+
+    def generate_preshared_key(self):
+        return random_key()
+
+    def generate_header_protection_key(self):
+        return random_key()
+
+    # --- system ---------------------------------------------------------------
+    def ensure_directories(self):
+        os.makedirs(self.config_dir, exist_ok=True)
+        os.makedirs(self.wireguard_config_dir, exist_ok=True)
+
+    def run_command(self, args):
+        if args[:2] == ["/usr/bin/awg-quick", "up"]:
+            self.running.add(args[2])
+        elif args[:2] == ["/usr/bin/awg-quick", "down"]:
+            self.running.discard(args[2])
+        elif args[:2] == ["/usr/bin/awg", "show"]:
+            return self.awg_show(args[2])
+        return ""
+
+    def get_server_status(self, server_id):
+        server = self.get_server(server_id)
+        if not server:
+            return "not_found"
+        return "running" if server["interface"] in self.running else "stopped"
+
+    def setup_iptables(self, *args, **kwargs):
+        return True
+
+    def cleanup_iptables(self, *args, **kwargs):
+        return True
+
+    def reapply_iptables_for_server(self, server):
+        return True
+
+    def apply_live_config(self, *args, **kwargs):
+        return True
+
+    def awg_show(self, interface):
+        """`awg show` output for the peers of a running interface; traffic grows each call."""
+        server = next((s for s in self.config["servers"] if s["interface"] == interface), None)
+        if not server or interface not in self.running:
+            return None
+        lines = [f"interface: {interface}", f"  listening port: {server['port']}", ""]
+        now = time.time()
+        for client in server["clients"]:
+            if client.get("suspended"):
+                continue
+            peer = self.peers.get(client["client_public_key"])
+            lines.append(f"peer: {client['client_public_key']}")
+            if peer:
+                if now - peer["handshake_at"] < 300:  # online: keep it chatty
+                    peer["handshake_at"] = now - (int(now) % 110 + 1)
+                    peer["rx"] += (int(now) % 7 + 1) * 180 * KiB
+                    peer["tx"] += (int(now) % 5 + 1) * 40 * KiB
+                lines += [
+                    f"  endpoint: {peer['endpoint']}",
+                    f"  allowed ips: {client['client_ip']}/32",
+                    f"  latest handshake: {fmt_ago(now - peer['handshake_at'])}",
+                    f"  transfer: {fmt_bytes(peer['rx'])} received, {fmt_bytes(peer['tx'])} sent",
+                ]
+            else:
+                lines.append(f"  allowed ips: {client['client_ip']}/32")
+            lines.append("")
+        return "\n".join(lines)
+
+    # --- network lookups ------------------------------------------------------
+    def detect_public_ip(self):
+        ip = PUBLIC_IPS[max(0, self._public_ip_calls - 1) % 2]
+        self._public_ip_calls += 1
+        return ip
+
+    def lookup_geoip(self, ip):
+        return GEO.get(ip, (None, None))
+
+    def get_route_for_source_ip(self, source_ip):
+        return "demo"
+
+    def detect_public_ip_from_source(self, source_ip, service):
+        if source_ip not in self.egress:
+            raise RuntimeError("No external access")
+        return self.egress[source_ip], service
+
+
+def seed(manager):
+    """The mockup's example: two running servers, one stopped, one outdated client."""
+
+    def server(name, protocol, port, subnet, *, mtu=1420, dns="1.1.1.1, 9.9.9.9", transport, lan=True):
+        return manager.create_wireguard_server(
+            {"name": name, "protocol": protocol, "port": port, "subnet": subnet, "mtu": mtu, "dns": dns,
+             "transport_params": transport, "auto_start": False, "enable_nat": True, "block_lan_cidrs": lan}
+        )  # fmt: skip
+
+    home = server("Home NL", "AWG 2.0", 51820, "10.10.0.0/24",
+                  transport={"S1": 50, "S2": 60, "S3": 40, "S4": 20,
+                             "H1": "1000-1400", "H2": "2000-2400", "H3": "3000-3400", "H4": "4000-4400"})  # fmt: skip
+    travel = server("Travel 443", "AWG 3.1", 443, "10.20.0.0/24", mtu=1380, dns="1.1.1.1", lan=False,
+                    transport={"S1": 64, "S2": 88, "S3": 24, "S4": 16, "H1": "120000-130000",
+                               "H2": "230000-240000", "H3": "340000-350000", "H4": "450000-460000",
+                               "HeaderProtectionKey": random_key(), "RandomTrailers": True})  # fmt: skip
+    lab = server("Lab", "AWG 1.5", 51830, "10.30.0.0/24", dns="9.9.9.9",
+                 transport={"S1": 30, "S2": 45, "H1": "1182367", "H2": "2295734", "H3": "3348912", "H4": "4417281"})  # fmt: skip
+
+    params = {"Jc": 8, "Jmin": 40, "Jmax": 70}
+    now = time.time()
+    traffic = {  # name -> (endpoint, seconds since handshake, rx, tx)
+        "iPhone": ("198.51.100.40:53412", 12, 1.39 * GiB, 214.6 * MiB),
+        "MacBook": ("203.0.113.88:61022", 184, 6.59 * GiB, 802.1 * MiB),
+        "iPad": ("198.51.100.40:50112", 3 * 86400 + 7260, 412.3 * MiB, 38.9 * MiB),
+        "Pixel": ("203.0.113.201:40211", 47, 922.4 * MiB, 101.7 * MiB),
+    }
+    clients = {}
+    for srv, names in ((home, ("iPhone", "MacBook", "iPad", "Router")), (travel, ("Pixel", "Work laptop")),
+                       (lab, ("test-peer",))):  # fmt: skip
+        for name in names:
+            extra = {"ContentPaddingAddition": "8-24"} if name == "Pixel" else {}
+            client, _ = manager.add_wireguard_client(srv["id"], name, client_params={**params, **extra})
+            clients[name] = client
+            if name in traffic:
+                endpoint, ago, rx, tx = traffic[name]
+                manager.peers[client["client_public_key"]] = {
+                    "endpoint": endpoint,
+                    "handshake_at": now - ago,
+                    "rx": rx,
+                    "tx": tx,
+                }
+
+    # Every device got its config; the MacBook's Jc was edited afterwards.
+    for srv in (home, travel, lab):
+        for client in srv["clients"]:
+            manager.mark_config_issued(srv, client)
+    manager.update_client_params(home["id"], clients["MacBook"]["id"], {**clients["MacBook"]["client_params"], "Jc": 10})
+    manager.toggle_client_suspend(home["id"], clients["Router"]["id"])
+
+    manager.egress = {home["server_ip"]: "198.51.100.17", travel["server_ip"]: "198.51.100.61"}
+    for srv in (home, travel):
+        manager.start_server(srv["id"])
+        manager.probe_server_egress_ip(srv["id"])
+
+
+def write_log(path, manager):
+    """A few daemon lines per interface for the Logs view."""
+    lines = []
+    for server in manager.config["servers"]:
+        iface = server["interface"]
+        lines += [
+            f"DEBUG: 2026/09/26 20:41:07 {iface}: Interface state was Down, requested Up, now Up",
+            f"DEBUG: 2026/09/26 20:41:07 {iface}: UDP bind has been updated",
+        ]
+        for client in server["clients"][:2]:
+            key = client["client_public_key"]
+            lines += [
+                f"DEBUG: 2026/09/26 20:41:12 {iface}: peer({key[:4]}…{key[-5:-1]}) - Received handshake initiation",
+                f"DEBUG: 2026/09/26 20:41:12 {iface}: peer({key[:4]}…{key[-5:-1]}) - Sending handshake response",
+            ]
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--port", type=int, default=8099)
+    parser.add_argument("--empty", action="store_true", help="start with no servers")
+    args = parser.parse_args()
+
+    tmp = tempfile.mkdtemp(prefix="awg-demo-")
+    web_ui = REPO / "web-ui"
+    app = create_flask_app(str(web_ui / "templates"), str(web_ui / "static"))
+    require_token = install_guards(app, secret_key_path=os.path.join(tmp, ".flask_secret_key"), api_token="")
+    socketio = create_socketio(app, None)
+    defaults = {"default_mtu": 1420, "default_subnet": "10.10.0.0/24", "default_port": 51820}
+    manager = DemoManager(
+        socketio_instance=socketio, auto_start_servers=False, dns_servers=["1.1.1.1", "9.9.9.9"],
+        default_enable_nat=True, default_block_lan_cidrs=True, config_dir=tmp, enable_geoip=True, **defaults,
+    )  # fmt: skip
+    if not args.empty:
+        seed(manager)
+    log_file = os.path.join(tmp, "awg.log")
+    write_log(log_file, manager)
+
+    register_system_routes(app, require_token, manager, awg_log_file=log_file, nginx_port=str(args.port),
+                           auto_start_servers=False, default_dns="1.1.1.1, 9.9.9.9", **defaults)  # fmt: skip
+    register_server_routes(app, require_token, manager, to_bool=to_bool,
+                           default_enable_nat=True, default_block_lan_cidrs=True)  # fmt: skip
+    register_socket_handlers(socketio, manager, str(args.port))
+
+    @app.route("/")
+    def index():
+        return render_template("index.html", cache_bust=int(time.time()), build_label="demo (example data)")
+
+    @app.route("/static/<path:filename>")
+    def static_files(filename):
+        return send_from_directory(str(web_ui / "static"), filename)
+
+    print(f"Demo panel on http://127.0.0.1:{args.port}/ (state in {tmp})", flush=True)
+    socketio.run(app, host="127.0.0.1", port=args.port, allow_unsafe_werkzeug=True, log_output=False)
+
+
+if __name__ == "__main__":
+    main()
