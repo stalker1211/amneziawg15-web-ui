@@ -84,7 +84,9 @@ class OutdatedFlagTests(unittest.TestCase):
         self.assertEqual(self.outdated(), {"phone", "laptop"})
 
     def test_a_client_params_change_flags_only_that_client(self):
-        response = self.http.post(self._url(self.phone, "client-params"), json={"client_params": {"Jc": 9}})
+        # A new server's default Jc is random (4-12), so change it relative to the current one.
+        jc = self.manager.get_client(self.phone["id"])["client_params"]["Jc"]
+        response = self.http.post(self._url(self.phone, "client-params"), json={"client_params": {"Jc": jc + 1}})
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertTrue(response.get_json()["client"]["config_outdated"])
         self.assertEqual(self.outdated(), {"phone"})
