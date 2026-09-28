@@ -79,6 +79,74 @@ def register_server_routes(
         payload = {key: value for key, value in server.items() if key not in secret_keys}
         return {**payload, "clients": [serialize_client(client, server) for client in server.get("clients", [])]}
 
+    # --- dry-run validation -----------------------------------------------------
+
+    def collect(errors, check, *args):
+        """Run one validator; its ValueError becomes a message instead of a 400."""
+        try:
+            return check(*args)
+        except ValueError as exc:
+            errors.append(str(exc))
+            return None
+
+    @server_bp.route("/api/validate", methods=["POST"])
+    @require_token
+    def validate():
+        """Check a form as it is being filled in, without changing anything, so the
+        rules live only here. One body per form:
+          {"server": {...}}                                        new server
+          {"server_id", "protocol", "transport_params": {...}}     server settings
+          {"server_id", "client_params": {...}}                    add/edit client
+        Answers {"errors": [...], "warnings": [...]}; the settings form also gets
+        the counts its warning shows. Each validator stops at its first problem, so
+        there is one message per failing validator."""
+        data = json_body()
+        errors, warnings = [], []
+
+        if isinstance(data.get("server"), dict):
+            server_data = data["server"]
+            if not str(server_data.get("name") or "").strip():
+                errors.append("A server name is required")
+            basics, basic_errors = amnezia_manager.check_server_basics(server_data)
+            errors += basic_errors
+            if "port" in basics and "subnet" in basics:
+                collect(errors, amnezia_manager.assert_no_conflicts, basics["port"], basics["subnet"])
+            mtu = basics.get("mtu", amnezia_manager.default_mtu)
+            protocol = amnezia_manager.normalize_protocol(server_data.get("protocol"))
+            if isinstance(server_data.get("transport_params"), dict):
+                transport = collect(
+                    errors, amnezia_manager.validate_transport_params, protocol, server_data["transport_params"]
+                )
+                if transport:
+                    warnings += amnezia_manager.transport_param_warnings(protocol, transport, mtu)
+            if isinstance(server_data.get("client_defaults"), dict):
+                client_params = collect(errors, amnezia_manager.validate_client_params, server_data["client_defaults"])
+                if client_params:
+                    warnings += amnezia_manager.client_param_warnings(client_params, mtu)
+            return jsonify({"errors": errors, "warnings": warnings})
+
+        if "server_id" not in data:
+            abort(400, description="Expected 'server', or 'server_id' with transport_params or client_params")
+        server = server_or_404(data["server_id"])
+        mtu = server.get("mtu", 1420)
+
+        if isinstance(data.get("transport_params"), dict):
+            protocol = amnezia_manager.normalize_protocol(data.get("protocol", server.get("protocol")))
+            transport = collect(errors, amnezia_manager.validate_transport_params, protocol, data["transport_params"])
+            counts = {"configs_changed": 0, "outdated_now": 0, "outdated_after": 0}
+            if transport:
+                warnings += amnezia_manager.transport_param_warnings(protocol, transport, mtu)
+                counts = amnezia_manager.preview_transport_change(server, protocol, transport)
+            return jsonify({"errors": errors, "warnings": warnings, **counts})
+
+        if isinstance(data.get("client_params"), dict):
+            client_params = collect(errors, amnezia_manager.validate_client_params, data["client_params"])
+            if client_params:
+                warnings += amnezia_manager.client_param_warnings(client_params, mtu)
+            return jsonify({"errors": errors, "warnings": warnings})
+
+        abort(400, description="Expected transport_params or client_params with server_id")
+
     # --- servers ------------------------------------------------------------------
 
     @server_bp.route("/api/servers", methods=["GET"])

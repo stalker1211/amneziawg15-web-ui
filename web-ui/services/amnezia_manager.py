@@ -934,43 +934,11 @@ class AmneziaManager:
     def create_wireguard_server(self, server_data):
         """Create a new WireGuard server configuration with environment defaults"""
         server_name = self.sanitize_name(server_data.get("name"), "New Server")
-        port = server_data.get("port", self.default_port)
-        subnet = server_data.get("subnet", self.default_subnet)
-        mtu = server_data.get("mtu", self.default_mtu)
-
-        # Get DNS servers from request or use environment default
-        custom_dns = server_data.get("dns")
-        if custom_dns:
-            # Parse custom DNS from request
-            if isinstance(custom_dns, str):
-                dns_servers = [dns.strip() for dns in custom_dns.split(",") if dns.strip()]
-            elif isinstance(custom_dns, list):
-                dns_servers = custom_dns
-            else:
-                dns_servers = self.dns_servers
-        else:
-            dns_servers = self.dns_servers
-
-        # Validate MTU
-        if mtu < 1280 or mtu > 1440:
-            raise ValueError(f"MTU must be between 1280 and 1440, got {mtu}")
-
-        # Validate port and subnet before they reach config files or the iptables
-        # scripts. Both arrive straight from the API.
-        try:
-            port = int(port)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"Port must be an integer, got {port!r}") from exc
-        if not 1 <= port <= 65535:
-            raise ValueError(f"Port must be between 1 and 65535, got {port}")
-
-        subnet = self.validate_subnet(subnet)
+        basics, errors = self.check_server_basics(server_data)
+        if errors:
+            raise ValueError(errors[0])
+        port, subnet, mtu, dns_servers = basics["port"], basics["subnet"], basics["mtu"], basics["dns"]
         self.assert_no_conflicts(port, subnet)
-
-        # Validate DNS servers
-        for dns in dns_servers:
-            if not self.is_valid_ip(dns):
-                raise ValueError(f"Invalid DNS server IP: {dns}")
 
         protocol = self.normalize_protocol(server_data.get("protocol"))
         auto_start = server_data.get("auto_start", self.auto_start_servers_enabled)
@@ -1201,6 +1169,112 @@ AllowedIPs = {client["client_ip"]}/32
 
     def get_server(self, server_id):
         return next((s for s in self.config.get("servers", []) if s.get("id") == server_id), None)
+
+    @staticmethod
+    def validate_mtu(value):
+        try:
+            mtu = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"MTU must be an integer, got {value!r}") from exc
+        if not 1280 <= mtu <= 1440:
+            raise ValueError(f"MTU must be between 1280 and 1440, got {mtu}")
+        return mtu
+
+    @staticmethod
+    def validate_port(value):
+        try:
+            port = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Port must be an integer, got {value!r}") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError(f"Port must be between 1 and 65535, got {port}")
+        return port
+
+    def parse_dns_servers(self, value):
+        """A comma-separated string or a list; empty means the environment default."""
+        if isinstance(value, str):
+            servers = [dns.strip() for dns in value.split(",") if dns.strip()]
+        elif isinstance(value, list):
+            servers = value
+        else:
+            servers = []
+        servers = servers or self.dns_servers
+        for dns in servers:
+            if not self.is_valid_ip(dns):
+                raise ValueError(f"Invalid DNS server IP: {dns}")
+        return servers
+
+    def check_server_basics(self, server_data):
+        """MTU, port, subnet and DNS of a new server, each checked on its own.
+
+        Returns (normalized values, one message per invalid field). The port and
+        subnet reach config files and the iptables scripts straight from the API.
+        """
+        checks = (
+            ("mtu", self.validate_mtu, self.default_mtu),
+            ("port", self.validate_port, self.default_port),
+            ("subnet", self.validate_subnet, self.default_subnet),
+            ("dns", self.parse_dns_servers, None),
+        )
+        values, errors = {}, []
+        for key, check, default in checks:
+            try:
+                values[key] = check(server_data.get(key, default))
+            except ValueError as exc:
+                errors.append(str(exc))
+        return values, errors
+
+    def transport_param_warnings(self, protocol, transport, mtu):
+        """Practical guidance for validated transport params; none of it is a protocol limit."""
+        warnings = []
+
+        def outside_common_range(key):
+            value = transport.get(key)
+            if value is not None and not 15 <= value <= 150:
+                warnings.append(f"{key} ({value}) is outside the common 15-150 range.")
+
+        s1, s2, s4 = transport.get("S1"), transport.get("S2"), transport.get("S4")
+        outside_common_range("S1")
+        if s1 is not None and s1 > mtu - 148:
+            warnings.append(f"S1 ({s1}) is above the rule-of-thumb bound MTU - 148 ({mtu - 148}).")
+        outside_common_range("S2")
+        if s2 is not None and s2 > mtu - 92:
+            warnings.append(f"S2 ({s2}) is above the rule-of-thumb bound MTU - 92 ({mtu - 92}).")
+        if self.protocol_supports_s34(protocol):
+            outside_common_range("S3")
+            if s4 is not None and s4 > 32:
+                warnings.append(f"S4 ({s4}) is above a conservative 0-32 and may cause 'message too long' errors.")
+        return warnings
+
+    @staticmethod
+    def client_param_warnings(client_params, mtu):
+        """Practical guidance for validated client params."""
+        warnings = []
+        jc, jmax = client_params["Jc"], client_params["Jmax"]
+        if not 4 <= jc <= 12:
+            warnings.append(f"Jc ({jc}) is outside the recommended range 4-12.")
+        if jmax >= mtu:
+            warnings.append(f"Jmax ({jmax}) is at or above MTU ({mtu}) and may fragment junk packets.")
+        return warnings
+
+    def preview_transport_change(self, server, protocol, transport):
+        """What saving new transport params would do to the server's client configs.
+
+        configs_changed: clients whose config would differ from today's.
+        outdated_now / outdated_after: issued clients whose device no longer matches,
+        before and after the change (after < now means the change reverts something).
+        """
+        candidate = {**server, "protocol": protocol, "transport_params": transport}
+        counts = {"configs_changed": 0, "outdated_now": 0, "outdated_after": 0}
+        for client in server.get("clients") or []:
+            now = self.config_fingerprint(server, client)
+            after = self.config_fingerprint(candidate, client)
+            counts["configs_changed"] += now != after
+            issued = client.get("config_issued_fingerprint")
+            if issued:
+                counts["outdated_now"] += issued != now
+                counts["outdated_after"] += issued != after
+        return counts
 
     def assert_no_conflicts(self, port, subnet, ignore_server_id=None):
         """Reject a port already in use, or a subnet overlapping an existing server.
