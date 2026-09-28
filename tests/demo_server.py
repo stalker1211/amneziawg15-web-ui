@@ -152,7 +152,7 @@ class DemoManager(AmneziaManager):
 
     # --- network lookups ------------------------------------------------------
     def detect_public_ip(self):
-        ip = PUBLIC_IPS[max(0, self._public_ip_calls - 1) % 2]
+        ip = PUBLIC_IPS[self._public_ip_calls % 2]
         self._public_ip_calls += 1
         return ip
 
@@ -164,7 +164,7 @@ class DemoManager(AmneziaManager):
 
     def detect_public_ip_from_source(self, source_ip, service):
         if source_ip not in self.egress:
-            raise RuntimeError("No external access")
+            raise RuntimeError(f"no route to the internet from {source_ip}")
         return self.egress[source_ip], service
 
 
