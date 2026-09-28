@@ -33,24 +33,6 @@ body.dark textarea::placeholder {
 }
 
 
-/* Collapsible parameter help (keeps config dialogs short) */
-.param-help > summary {
-    list-style: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    opacity: 0.85;
-}
-.param-help > summary::-webkit-details-marker { display: none; }
-.param-help > summary::before {
-    content: '▸';
-    display: inline-block;
-    font-size: 0.9em;
-    transition: transform 0.15s ease;
-}
-.param-help[open] > summary::before { transform: rotate(90deg); }
-.param-help > summary:hover { opacity: 1; text-decoration: underline; }
-
 /* Loading animations */
 .loading {
     animation: pulse 2s infinite;

@@ -36,12 +36,11 @@ COLOUR = re.compile(rf"(?P<kind>bg|text|border)-(?:white|black|(?:{PALETTE})-\d{
 # Look right on both backgrounds: solid buttons, toggle tracks, status dots, dividers,
 # white/mid-grey text, the log pane (dark in both themes), the modal backdrop.
 THEME_NEUTRAL = {
-    "bg-amber-400", "bg-blue-500", "bg-blue-600", "bg-gray-200", "bg-gray-400", "bg-gray-500", "bg-gray-600",
-    "bg-green-500", "bg-red-600", "text-emerald-200", "text-gray-400", "text-white",
+    "bg-amber-400", "bg-gray-200", "bg-gray-400", "bg-gray-500", "bg-gray-600", "bg-green-500",
+    "text-emerald-200", "text-gray-400", "text-white",
 }  # fmt: skip
-# Given their dark look by a style.css rule instead: the two refresh buttons
-# (#refreshIpBtn, .egress-refresh-btn) and the h3/h4 element colour.
-DARK_VIA_STYLE_CSS = {"bg-white/70", "bg-white/80", "border-blue-200/70", "text-blue-700"}
+# Given their dark look by a style.css rule instead (the logs view's refresh button).
+DARK_VIA_STYLE_CSS = {"bg-white/80", "border-blue-200/70"}
 # Known gaps, kept as-is so the build change stayed pixel-identical: the error boxes'
 # dark-red text and light border on the dark red panel, and the QR card's light frame.
 # Fix these in the GUI redesign (DEVELOPMENT.md §10 #15).

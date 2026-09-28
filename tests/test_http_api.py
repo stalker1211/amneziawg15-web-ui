@@ -244,32 +244,35 @@ class ProtocolTableTests(unittest.TestCase):
 
     def test_no_hardcoded_protocol_literals_left_in_the_ui(self):
         """Capability checks must go through Protocols, not string comparison."""
-        for name in ("app.js", "modals.js"):
-            source = Path(os.path.join(STATIC_JS, name)).read_text(encoding="utf-8")
+        for path in sorted(Path(STATIC_JS).glob("*.js")):
+            name, source = path.name, path.read_text(encoding="utf-8")
+            if name == "protocols.js":
+                continue  # the table itself
             # Display strings such as "AWG 3.0 parameters" are fine; quoted
             # identifiers used for comparison are not.
             offenders = re.findall(r"=== '(AWG [0-9.]+)'|'(AWG [0-9.]+)' ===", source)
             self.assertEqual(offenders, [], f"{name} compares against a protocol literal")
 
-    def test_create_server_checks_the_selected_protocol(self):
-        source = Path(os.path.join(STATIC_JS, "app.js")).read_text(encoding="utf-8")
-        self.assertIn("window.Protocols.supportsAwg3(formData.protocol)", source)
+    def test_forms_gate_fields_on_the_selected_protocol(self):
+        # The forms send AWG 3.x/3.1 fields only for a protocol that has them, judged
+        # by the protocol picked in the form (an old bug read formData.window.Protocols).
+        source = Path(os.path.join(STATIC_JS, "forms.js")).read_text(encoding="utf-8")
+        self.assertIn("HeaderProtectionKey: P.supportsAwg3(protocol) ? value('HeaderProtectionKey') : ''", source)
+        self.assertIn("RandomTrailers: P.supportsAwg31(protocol) ?", source)
         self.assertNotIn("formData.window.Protocols", source)
 
     def test_header_range_ui_uses_the_header_range_capability(self):
-        for name in ("app.js", "modals.js"):
-            source = Path(os.path.join(STATIC_JS, name)).read_text(encoding="utf-8")
+        for path in sorted(Path(STATIC_JS).glob("*.js")):
             offenders = re.findall(
                 r"(?:allowRanges|supportsRanges)\s*=\s*window\.Protocols\.supportsS34",
-                source,
+                path.read_text(encoding="utf-8"),
             )
-            self.assertEqual(offenders, [], f"{name} gates header ranges on S3/S4 support")
+            self.assertEqual(offenders, [], f"{path.name} gates header ranges on S3/S4 support")
 
         app_source = Path(os.path.join(STATIC_JS, "app.js")).read_text(encoding="utf-8")
-        self.assertIn(
-            "window.Protocols.supportsHeaderRanges(protocol) && !headers.some",
-            app_source,
-        )
+        self.assertIn("const allowRanges = window.Protocols.supportsHeaderRanges(protocol);", app_source)
+        forms_source = Path(os.path.join(STATIC_JS, "forms.js")).read_text(encoding="utf-8")
+        self.assertIn("P.supportsHeaderRanges(protocol) ? `${start}-", forms_source)
 
 
 class SystemRoutesTests(unittest.TestCase):

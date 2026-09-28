@@ -10,9 +10,8 @@ class AmneziaApp {
         this.lastServers = [];
         this.serverClients = new Map();
         this.lastTrafficByServer = new Map();
-        this.serverTransportModalState = null;
-        this.clientParamsModalState = null;
-        this.serverNetworkingModalState = null;
+        this.drawerCtx = null;
+        this.environment = {};
         this.currentPublicIp = '';
         this.currentPublicIpCountryCode = '';
         this.logPoller = null;
@@ -86,30 +85,6 @@ class AmneziaApp {
             .replace(/'/g, '&#39;');
     }
 
-    collectServerTransportFormState(serverId, fallbackProtocol = window.Protocols.DEFAULT) {
-        const toOptionalInt = (raw) => {
-            const s = String(raw ?? '').trim();
-            if (!s) return null;
-            const n = parseInt(s, 10);
-            return Number.isFinite(n) ? n : null;
-        };
-
-        return {
-            protocol: document.getElementById(`serverProtocol-${serverId}`)?.value || fallbackProtocol,
-            S1: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S1`)?.value),
-            S2: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S2`)?.value),
-            S3: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S3`)?.value),
-            S4: toOptionalInt(document.getElementById(`serverTransportParam-${serverId}-S4`)?.value),
-            H1: (document.getElementById(`serverTransportParam-${serverId}-H1`)?.value || '').trim(),
-            H2: (document.getElementById(`serverTransportParam-${serverId}-H2`)?.value || '').trim(),
-            H3: (document.getElementById(`serverTransportParam-${serverId}-H3`)?.value || '').trim(),
-            H4: (document.getElementById(`serverTransportParam-${serverId}-H4`)?.value || '').trim(),
-            HeaderProtectionKey: (document.getElementById(`serverTransportParam-${serverId}-HeaderProtectionKey`)?.value || '').trim(),
-            RandomTrailers: !!document.getElementById(`serverTransportParam-${serverId}-RandomTrailers`)?.checked,
-            DisableCookies: !!document.getElementById(`serverTransportParam-${serverId}-DisableCookies`)?.checked,
-        };
-    }
-
     formatTransportParamsSummary(protocol, transportParams = {}) {
         const orderedKeys = (window.Protocols.supportsS34(protocol))
             ? ['S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4']
@@ -130,91 +105,6 @@ class AmneziaApp {
         }
 
         return parts.length > 0 ? parts.join(', ') : 'No transport parameters set';
-    }
-
-    updateServerConfigPrimaryAction(serverId) {
-        const button = document.getElementById(`serverConfigPrimaryAction-${serverId}`);
-        if (!button || !this.serverTransportModalState || String(this.serverTransportModalState.serverId) !== String(serverId)) {
-            return;
-        }
-
-        const currentState = this.collectServerTransportFormState(serverId, this.serverTransportModalState.initial.protocol);
-        const isDirty = JSON.stringify(currentState) !== JSON.stringify(this.serverTransportModalState.initial);
-
-        if (isDirty) {
-            button.textContent = 'Update & Restart Server';
-            button.className = 'btn-pill bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700';
-            button.onclick = () => this.saveServerTransportParams(serverId);
-        } else {
-            button.textContent = 'Close';
-            button.className = 'btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600';
-            button.onclick = () => this.closeModal();
-        }
-    }
-
-    setupServerTransportDirtyTracking(serverId, fallbackProtocol = window.Protocols.DEFAULT) {
-        const initial = this.collectServerTransportFormState(serverId, fallbackProtocol);
-        this.serverTransportModalState = { serverId: String(serverId), initial };
-
-        const fieldIds = [
-            `serverProtocol-${serverId}`,
-            `serverTransportParam-${serverId}-S1`,
-            `serverTransportParam-${serverId}-S2`,
-            `serverTransportParam-${serverId}-S3`,
-            `serverTransportParam-${serverId}-S4`,
-            `serverTransportParam-${serverId}-H1`,
-            `serverTransportParam-${serverId}-H2`,
-            `serverTransportParam-${serverId}-H3`,
-            `serverTransportParam-${serverId}-H4`,
-            `serverTransportParam-${serverId}-HeaderProtectionKey`,
-            `serverTransportParam-${serverId}-RandomTrailers`,
-            `serverTransportParam-${serverId}-DisableCookies`,
-        ];
-
-        fieldIds.forEach((id) => {
-            const element = document.getElementById(id);
-            if (!element) return;
-            element.addEventListener('input', () => this.updateServerConfigPrimaryAction(serverId));
-            element.addEventListener('change', () => this.updateServerConfigPrimaryAction(serverId));
-        });
-
-        this.updateServerConfigPrimaryAction(serverId);
-    }
-
-    updateClientConfigPrimaryAction(clientId) {
-        const button = document.getElementById(`clientConfigPrimaryAction-${clientId}`);
-        if (!button || !this.clientParamsModalState || String(this.clientParamsModalState.clientId) !== String(clientId)) {
-            return;
-        }
-
-        const currentState = this.collectClientParamsFormState(`clientParam-${clientId}`);
-        const isDirty = JSON.stringify(currentState) !== JSON.stringify(this.clientParamsModalState.initial);
-
-        if (isDirty) {
-            button.textContent = 'Update Client Config';
-            button.className = 'btn-pill bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700';
-            button.onclick = () => this.saveClientParams(this.clientParamsModalState.serverId, clientId);
-        } else {
-            button.textContent = 'Close';
-            button.className = 'btn-pill bg-gray-500 text-white px-4 py-2 rounded text-sm hover:bg-gray-600';
-            button.onclick = () => this.closeModal();
-        }
-    }
-
-    setupClientParamsDirtyTracking(serverId, clientId) {
-        const initial = this.collectClientParamsFormState(`clientParam-${clientId}`);
-        this.clientParamsModalState = { serverId: String(serverId), clientId: String(clientId), initial };
-
-        const trackedKeys = ['Jc', 'Jmin', 'Jmax'].concat(AmneziaApp.I_PARAM_KEYS)
-            .concat(AmneziaApp.AWG3_CLIENT_PARAM_KEYS);
-        trackedKeys.forEach((key) => {
-            const element = document.getElementById(`clientParam-${clientId}-${key}`);
-            if (!element) return;
-            element.addEventListener('input', () => this.updateClientConfigPrimaryAction(clientId));
-            element.addEventListener('change', () => this.updateClientConfigPrimaryAction(clientId));
-        });
-
-        this.updateClientConfigPrimaryAction(clientId);
     }
 
     async apiFetch(input, init = {}) {
@@ -318,74 +208,10 @@ class AmneziaApp {
     }
 
     setupEventListeners() {
-        // Create server modal dialog
-        const showCreateServerBtn = this.getElement('showCreateServerBtn');
-        if (showCreateServerBtn) {
-            showCreateServerBtn.addEventListener('click', () => {
-                this.openCreateServerModal();
-            });
-        }
-
-        // ESC closes create-server modal
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                this.closeCreateServerModal();
-            }
-        });
-
-        // Server form submission
-        const serverForm = this.getElement('serverForm');
-        if (serverForm) {
-            serverForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.createServer();
-            });
-        }
-
-        const themeToggleBtn = this.getElement('themeToggleBtn');
-        if (themeToggleBtn) {
-            themeToggleBtn.addEventListener('click', () => {
-                this.toggleTheme();
-            });
-        }
-
-        // Random parameters button
-        const randomParamsBtn = this.getElement('randomParamsBtn');
-        if (randomParamsBtn) {
-            randomParamsBtn.addEventListener('click', () => {
-                this.generateRandomParams();
-            });
-        }
-
-        // Refresh IP button
-        const refreshIpBtn = this.getElement('refreshIpBtn');
-        if (refreshIpBtn) {
-            refreshIpBtn.addEventListener('click', () => {
-                this.refreshPublicIp();
-            });
-        }
-
-        const protocolSelect = this.getElement('serverProtocol');
-        if (protocolSelect) {
-            // The create form's <select> is left empty in index.html and filled here,
-            // so protocols.js is the only place the list is defined.
-            protocolSelect.innerHTML = window.Protocols.optionsHtml(window.Protocols.DEFAULT);
-            protocolSelect.addEventListener('change', (e) => {
-                this.toggleProtocolFields(e.target.value, 'param');
-            });
-            this.toggleProtocolFields(protocolSelect.value, 'param');
-        }
-
-        const genHeaderKeyBtn = this.getElement('genHeaderProtectionKeyBtn');
-        if (genHeaderKeyBtn) {
-            genHeaderKeyBtn.addEventListener('click', () => {
-                const target = this.getElement('paramHeaderProtectionKey');
-                if (target) target.value = this.generateBase64Key();
-            });
-        }
-
-        // Form validation listeners
-        this.setupFormValidation();
+        this.getElement('showCreateServerBtn')?.addEventListener('click', () => this.openCreateServerModal());
+        this.getElement('themeToggleBtn')?.addEventListener('click', () => this.toggleTheme());
+        this.getElement('refreshIpBtn')?.addEventListener('click', () => this.refreshPublicIp());
+        this.setupDrawerForms();
     }
 
     // Light/dark toggle. The OS preference only picks the first theme; after a click
@@ -429,108 +255,15 @@ class AmneziaApp {
         btn.setAttribute('aria-label', btn.title);
     }
 
-    openCreateServerModal() {
-        const modal = this.getElement('createServerModal');
-        if (!modal) return;
-        modal.classList.remove('hidden');
-
-        // Auto-propose next free port starting from 51820
-        const usedPorts = new Set((this.lastServers || []).map(s => Number(s.port)));
-        let nextPort = 51820;
-        while (usedPorts.has(nextPort)) nextPort++;
-        const portEl = this.getElement('serverPort');
-        if (portEl) portEl.value = nextPort;
-
-        // Auto-propose next free subnet from 10.10.X.0/24
-        const usedThirdOctets = new Set(
-            (this.lastServers || [])
-                .map(s => s.subnet || '')
-                .map(sub => {
-                    const m = sub.match(/^10\.10\.(\d+)\./);
-                    return m ? Number(m[1]) : null;
-                })
-                .filter(v => v !== null)
-        );
-        let thirdOctet = 0;
-        while (usedThirdOctets.has(thirdOctet) && thirdOctet < 255) thirdOctet++;
-        const subnetEl = this.getElement('serverSubnet');
-        if (subnetEl) subnetEl.value = `10.10.${thirdOctet}.0/24`;
-
-        const nameElement = this.getElement('serverName');
-        if (nameElement) nameElement.focus();
-    }
-
-    closeCreateServerModal() {
-        const modal = this.getElement('createServerModal');
-        if (!modal) return;
-        modal.classList.add('hidden');
-    }
-
-    hideError(errorId) {
-        const errorElement = this.getElement(errorId);
-        if (errorElement) {
-            errorElement.classList.add('hidden');
-        }
-    }
-
     // Collapse long help text so dialogs stay short enough to show their fields
     // and action buttons without scrolling. Closed by default.
-    updateTransportDescription(protocol, prefix = 'param') {
-        let descriptionId = 'transportParameterDescription';
-        if (prefix !== 'param') {
-            const serverId = String(prefix).replace(/^serverTransportParam-/, '').replace(/-$/, '');
-            descriptionId = `serverTransportDescription-${serverId}`;
-        }
-
-        const description = document.getElementById(descriptionId);
+    updateTransportDescription(protocol, prefix = 't-') {
+        const description = document.getElementById(`${prefix}Description`);
         if (!description) return;
-        description.innerHTML = this.getTransportDescriptionHtml(protocol, prefix === 'param' ? 'create' : 'modal');
+        description.innerHTML = this.getTransportDescriptionHtml(protocol);
     }
 
-    collectServerNetworkingFormState(serverId) {
-        return {
-            enable_nat: !!document.getElementById(`serverEnableNat-${serverId}`)?.checked,
-            block_lan_cidrs: !!document.getElementById(`serverBlockLan-${serverId}`)?.checked,
-        };
-    }
-
-    updateServerNetworkingPrimaryAction(serverId) {
-        const button = document.getElementById(`serverNetworkingPrimaryAction-${serverId}`);
-        if (!button || !this.serverNetworkingModalState || String(this.serverNetworkingModalState.serverId) !== String(serverId)) {
-            return;
-        }
-
-        const currentState = this.collectServerNetworkingFormState(serverId);
-        const isDirty = JSON.stringify(currentState) !== JSON.stringify(this.serverNetworkingModalState.initial);
-
-        if (isDirty) {
-            button.textContent = 'Update Network Settings';
-            button.className = 'btn-pill bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700';
-            button.onclick = () => this.saveServerNetworking(serverId);
-        } else {
-            button.textContent = '';
-            button.className = 'hidden';
-            button.onclick = null;
-        }
-    }
-
-    setupServerNetworkingDirtyTracking(serverId) {
-        this.serverNetworkingModalState = {
-            serverId: String(serverId),
-            initial: this.collectServerNetworkingFormState(serverId),
-        };
-
-        [`serverEnableNat-${serverId}`, `serverBlockLan-${serverId}`].forEach((id) => {
-            const element = document.getElementById(id);
-            if (!element) return;
-            element.addEventListener('change', () => this.updateServerNetworkingPrimaryAction(serverId));
-            element.addEventListener('input', () => this.updateServerNetworkingPrimaryAction(serverId));
-        });
-
-        this.updateServerNetworkingPrimaryAction(serverId);
-    }
-
-    toggleProtocolFields(protocol, prefix = 'param') {
+    toggleProtocolFields(protocol, prefix = 't-') {
         const allowS34 = window.Protocols.supportsS34(protocol);
         const allowRanges = window.Protocols.supportsHeaderRanges(protocol);
         const allowAwg3 = window.Protocols.supportsAwg3(protocol);
@@ -853,227 +586,6 @@ class AmneziaApp {
         this.loadServers();
     }
 
-    generateRandomParams() {
-        const protocol = this.getElement('serverProtocol')?.value || window.Protocols.DEFAULT;
-        const s1Element = this.getElement('paramS1');
-        const s2Element = this.getElement('paramS2');
-        const s3Element = this.getElement('paramS3');
-        const s4Element = this.getElement('paramS4');
-        const h1Element = this.getElement('paramH1');
-        const h2Element = this.getElement('paramH2');
-        const h3Element = this.getElement('paramH3');
-        const h4Element = this.getElement('paramH4');
-        
-        if (s1Element) s1Element.value = Math.floor(Math.random() * 136) + 15;
-        if (s2Element) s2Element.value = Math.floor(Math.random() * 136) + 15;
-        if (window.Protocols.supportsS34(protocol)) {
-            if (s3Element) s3Element.value = Math.floor(Math.random() * 136) + 15;
-            // With header protection the daemon slices a 12-byte nonce out of the
-            // padding, so S4 cannot go below 12 on AWG 3.x.
-            const s4Low = window.Protocols.supportsAwg3(protocol) ? 12 : 0;
-            if (s4Element) s4Element.value = Math.floor(Math.random() * (33 - s4Low)) + s4Low;
-        } else {
-            if (s3Element) s3Element.value = '';
-            if (s4Element) s4Element.value = '';
-        }
-
-        if (window.Protocols.supportsAwg3(protocol)) {
-            const keyElement = this.getElement('paramHeaderProtectionKey');
-            if (keyElement && !keyElement.value.trim()) {
-                keyElement.value = this.generateBase64Key();
-            }
-        }
-        
-        // Generate unique H values
-        const hValues = new Set();
-        while (hValues.size < 4) {
-            hValues.add(Math.floor(Math.random() * 1000000) + 1000);
-        }
-        const hArray = Array.from(hValues);
-        
-        if (h1Element) h1Element.value = hArray[0];
-        if (h2Element) h2Element.value = hArray[1];
-        if (h3Element) h3Element.value = hArray[2];
-        if (h4Element) h4Element.value = hArray[3];
-    }
-
-    showFormStatus(message, type) {
-        const statusDiv = this.getElement('formStatus');
-        if (statusDiv) {
-            statusDiv.textContent = message;
-            statusDiv.className = `text-sm mt-2 ${type === 'success' ? 'text-green-600 dark:text-[#4ade80]' : 'text-red-600 dark:text-[#fca5a5]'}`;
-            statusDiv.classList.remove('hidden');
-            
-            setTimeout(() => {
-                statusDiv.classList.add('hidden');
-            }, 5000);
-        }
-    }
-
-    parseHeaderValueJS(value, protocol) {
-        const raw = String(value ?? '').trim();
-        if (!raw) {
-            return { error: 'Header value cannot be empty' };
-        }
-
-        const supportsRanges = window.Protocols.supportsHeaderRanges(protocol);
-
-        if (supportsRanges && /^\d+\s*-\s*\d+$/.test(raw)) {
-            const [startRaw, endRaw] = raw.split('-', 2).map((part) => part.trim());
-            const start = parseInt(startRaw, 10);
-            const end = parseInt(endRaw, 10);
-            if (start > end) {
-                return { error: `Invalid range ${raw}: start must be <= end` };
-            }
-            return { raw: `${start}-${end}`, start, end };
-        }
-
-        if (/^\d+$/.test(raw)) {
-            const number = parseInt(raw, 10);
-            return { raw: String(number), start: number, end: number };
-        }
-
-        return { error: supportsRanges ? `Header value '${raw}' must be an integer or range x-y` : `Header value '${raw}' must be a single integer` };
-    }
-
-    validateTransportParamsJS(protocol, params, mtu) {
-        let errors = [];
-        const hasS1 = Number.isFinite(params.S1);
-        const hasS2 = Number.isFinite(params.S2);
-        const hasS3 = Number.isFinite(params.S3);
-        const hasS4 = Number.isFinite(params.S4);
-
-        if (hasS1 && params.S1 < 0) {
-            errors.push(`S1 (${params.S1}) must be non-negative`);
-        }
-        if (hasS2 && params.S2 < 0) {
-            errors.push(`S2 (${params.S2}) must be non-negative`);
-        }
-        if (hasS3 && params.S3 < 0) {
-            errors.push(`S3 (${params.S3}) must be non-negative`);
-        }
-        if (hasS4 && params.S4 < 0) {
-            errors.push(`S4 (${params.S4}) must be non-negative`);
-        }
-        // S1 + 56 ≠ S2 (only when both present)
-        if (hasS1 && hasS2 && (params.S1 + 56 === params.S2)) {
-            errors.push(`S1 + 56 (${params.S1 + 56}) must not equal S2 (${params.S2})`);
-        }
-
-        if (!window.Protocols.supportsS34(protocol) && (hasS3 || hasS4)) {
-            errors.push('S3 and S4 are supported only by AWG 2.0 or later');
-        }
-
-        // AWG 3.x: header protection carves a 12-byte cipher nonce out of each
-        // S padding, so the daemon rejects any S value below that.
-        if (window.Protocols.supportsAwg3(protocol) && String(params.HeaderProtectionKey || '').trim()) {
-            if (!/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/.test(String(params.HeaderProtectionKey).trim())) {
-                errors.push('HeaderProtectionKey must be a base64-encoded 32-byte key');
-            }
-            [['S1', params.S1], ['S2', params.S2], ['S3', params.S3], ['S4', params.S4]].forEach(([key, value]) => {
-                if (!Number.isFinite(value) || value < 12) {
-                    errors.push(`${key} must be at least 12 when HeaderProtectionKey is set`);
-                }
-            });
-        }
-
-        const headers = ['H1', 'H2', 'H3', 'H4'].map((key) => ({ key, parsed: this.parseHeaderValueJS(params[key], protocol) }));
-        headers.forEach(({ key, parsed }) => {
-            if (parsed.error) {
-                errors.push(`${key}: ${parsed.error}`);
-            }
-        });
-
-        if (window.Protocols.supportsHeaderRanges(protocol) && !headers.some(({ parsed }) => parsed.error)) {
-            for (let i = 0; i < headers.length; i += 1) {
-                for (let j = i + 1; j < headers.length; j += 1) {
-                    const left = headers[i].parsed;
-                    const right = headers[j].parsed;
-                    if (left.start <= right.end && right.start <= left.end) {
-                        errors.push(`${headers[i].key} and ${headers[j].key} ranges must not intersect`);
-                    }
-                }
-            }
-        }
-
-        return errors;
-    }
-
-    getTransportParamWarningsJS(protocol, params, mtu) {
-        const warnings = [];
-        const hasS1 = Number.isFinite(params.S1);
-        const hasS2 = Number.isFinite(params.S2);
-        const hasS3 = Number.isFinite(params.S3);
-        const hasS4 = Number.isFinite(params.S4);
-
-        if (hasS1 && (params.S1 < 15 || params.S1 > 150)) {
-            warnings.push(`S1 (${params.S1}) is outside the common 15-150 range.`);
-        }
-        if (hasS1 && params.S1 > (mtu - 148)) {
-            warnings.push(`S1 (${params.S1}) is above the previous rule-of-thumb bound MTU - 148 (${mtu - 148}). This is practical guidance, not a protocol limit.`);
-        }
-        if (hasS2 && (params.S2 < 15 || params.S2 > 150)) {
-            warnings.push(`S2 (${params.S2}) is outside the common 15-150 range.`);
-        }
-        if (hasS2 && params.S2 > (mtu - 92)) {
-            warnings.push(`S2 (${params.S2}) is above the previous rule-of-thumb bound MTU - 92 (${mtu - 92}). This is practical guidance, not a protocol limit.`);
-        }
-        const supportsS34 = window.Protocols.supportsS34(protocol);
-        if (supportsS34 && hasS3 && (params.S3 < 15 || params.S3 > 150)) {
-            warnings.push(`S3 (${params.S3}) is outside the common 15-150 range.`);
-        }
-        if (supportsS34 && hasS4 && params.S4 > 32) {
-            warnings.push(`S4 (${params.S4}) is above a conservative safe range (0-32) and may cause 'message too long' errors.`);
-        }
-
-        return warnings;
-    }
-
-    validateClientParamsJS(params, mtu) {
-        let errors = [];
-        if (!(params.Jc > 0)) {
-            errors.push(`Jc (${params.Jc}) must be positive`);
-        }
-        if (!(params.Jmin > 0)) {
-            errors.push(`Jmin (${params.Jmin}) must be positive`);
-        }
-        if (!(params.Jmax > 0)) {
-            errors.push(`Jmax (${params.Jmax}) must be positive`);
-        }
-        if (!(params.Jmin <= params.Jmax)) {
-            errors.push(`Jmin (${params.Jmin}) must be less than or equal to Jmax (${params.Jmax})`);
-        }
-
-        // AWG 3.x range params: 'a' or 'a-b', empty means protocol default.
-        AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((key) => {
-            const raw = String(params[key] ?? '').trim();
-            if (!raw) return;
-            const match = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(raw);
-            if (!match) {
-                errors.push(`${key} ('${raw}') must be a number or a range like 22-30`);
-                return;
-            }
-            const low = parseInt(match[1], 10);
-            const high = match[2] === undefined ? low : parseInt(match[2], 10);
-            if (high < low) {
-                errors.push(`${key} range '${raw}' is inverted: start must be <= end`);
-            }
-        });
-
-        return errors;
-    }
-
-    getClientParamWarningsJS(params, mtu) {
-        const warnings = [];
-        if (!(params.Jc >= 4 && params.Jc <= 12)) {
-            warnings.push(`Jc (${params.Jc}) is outside the documented recommended range 4-12.`);
-        }
-        if (params.Jmax >= mtu) {
-            warnings.push(`Jmax (${params.Jmax}) is at or above MTU (${mtu}) and may fragment junk packets.`);
-        }
-        return warnings;
-    }
-
     // Custom signature packets I1-I5 (AWG 1.5+). Multi-line textarea fields.
     static get I_PARAM_KEYS() {
         return ['I1', 'I2', 'I3', 'I4', 'I5'];
@@ -1092,27 +604,6 @@ class AmneziaApp {
         ];
     }
 
-    collectClientParamsFormState(prefix) {
-        const state = {
-            Jc: parseInt(document.getElementById(`${prefix}-Jc`)?.value || '8', 10),
-            Jmin: parseInt(document.getElementById(`${prefix}-Jmin`)?.value || '8', 10),
-            Jmax: parseInt(document.getElementById(`${prefix}-Jmax`)?.value || '80', 10),
-            I1: document.getElementById(`${prefix}-I1`)?.value || '',
-            I2: document.getElementById(`${prefix}-I2`)?.value || '',
-            I3: document.getElementById(`${prefix}-I3`)?.value || '',
-            I4: document.getElementById(`${prefix}-I4`)?.value || '',
-            I5: document.getElementById(`${prefix}-I5`)?.value || '',
-        };
-
-        // Only present when the form was rendered for an AWG 3.x server.
-        AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((key) => {
-            const element = document.getElementById(`${prefix}-${key}`);
-            if (element) state[key] = (element.value || '').trim();
-        });
-
-        return state;
-    }
-
     // AWG 3.x client-side fields. Rendered only for AWG 3.x servers, matching how
     // S3/S4 are hidden for AWG 1.5.
     autosizeClientParamTextareas(prefix, maxHeightPx = 260) {
@@ -1120,291 +611,6 @@ class AmneziaApp {
             const el = document.getElementById(`${prefix}-${key}`);
             this.enableTextareaAutosize(el, maxHeightPx);
         });
-    }
-
-    populateNewClientParamsFromExisting(serverId, clientId) {
-        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
-        const defaults = server?.client_defaults || {};
-        const existingClient = (this.serverClients.get(serverId) || []).find((client) => String(client.id) === String(clientId));
-        const params = existingClient?.client_params || defaults;
-
-        const values = {
-            Jc: params.Jc ?? defaults.Jc ?? 8,
-            Jmin: params.Jmin ?? defaults.Jmin ?? 8,
-            Jmax: params.Jmax ?? defaults.Jmax ?? 80,
-            I1: params.I1 ?? defaults.I1 ?? '',
-            I2: params.I2 ?? defaults.I2 ?? '',
-            I3: params.I3 ?? defaults.I3 ?? '',
-            I4: params.I4 ?? defaults.I4 ?? '',
-            I5: params.I5 ?? defaults.I5 ?? '',
-        };
-
-        // Copy AWG 3.x params too, when the form has those fields.
-        AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((key) => {
-            values[key] = params[key] ?? defaults[key] ?? '';
-        });
-
-        Object.entries(values).forEach(([key, value]) => {
-            const el = document.getElementById(`newClientParam-${serverId}-${key}`);
-            if (el) {
-                el.value = value;
-                if (el.tagName === 'TEXTAREA') {
-                    this.autosizeTextarea(el, 200);
-                }
-            }
-        });
-    }
-
-    validateForm() {
-        let isValid = true;
-
-        // Reset errors
-        this.hideError('nameError');
-        this.hideError('portError');
-        this.hideError('subnetError');
-        this.hideError('mtuError');
-        this.hideError('dnsError');
-
-        // Validate name
-        const nameElement = this.getElement('serverName');
-        const name = nameElement ? nameElement.value.trim() : '';
-        if (!name) {
-            this.showError('nameError', 'Server name is required');
-            isValid = false;
-        }
-
-        // Validate port
-        const portElement = this.getElement('serverPort');
-        const port = portElement ? parseInt(portElement.value) : 0;
-        if (!port || port < 1 || port > 65535) {
-            this.showError('portError', 'Port must be between 1 and 65535');
-            isValid = false;
-        }
-
-        // Validate subnet
-        const subnetElement = this.getElement('serverSubnet');
-        const subnet = subnetElement ? subnetElement.value : '';
-        const subnetRegex = /^(\d{1,3}\.){3}\d{1,3}\/\d{1,2}$/;
-        if (!subnet || !subnetRegex.test(subnet)) {
-            this.showError('subnetError', 'Valid subnet is required (e.g., 10.0.0.0/24)');
-            isValid = false;
-        }
-
-        // Validate MTU
-        const mtuElement = this.getElement('serverMTU');
-        const mtu = mtuElement ? parseInt(mtuElement.value) : 0;
-        if (!mtu || mtu < 1280 || mtu > 1440) {
-            this.showError('mtuError', 'MTU must be between 1280 and 1440');
-            isValid = false;
-        }
-
-        // Validate DNS
-        const dnsElement = this.getElement('serverDNS');
-        const dns = dnsElement ? dnsElement.value.trim() : '';
-        const dnsServers = dns.split(',').map(s => s.trim()).filter(s => s);
-        const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-
-        if (!dns || dnsServers.length === 0) {
-            this.showError('dnsError', 'At least one DNS server is required');
-            isValid = false;
-        } else {
-            for (const dnsServer of dnsServers) {
-                if (!ipRegex.test(dnsServer)) {
-                    this.showError('dnsError', `Invalid DNS server IP: ${dnsServer}`);
-                    isValid = false;
-                    break;
-                }
-            }
-        }
-
-        return isValid;
-    }
-
-    // Add DNS input validation listener
-    setupFormValidation() {
-        const nameElement = this.getElement('serverName');
-        const portElement = this.getElement('serverPort');
-        const subnetElement = this.getElement('serverSubnet');
-        const mtuElement = this.getElement('serverMTU');
-        const dnsElement = this.getElement('serverDNS');
-
-        if (nameElement) {
-            nameElement.addEventListener('input', () => {
-                this.hideError('nameError');
-            });
-        }
-
-        if (portElement) {
-            portElement.addEventListener('input', () => {
-                this.hideError('portError');
-            });
-        }
-
-        if (subnetElement) {
-            subnetElement.addEventListener('input', () => {
-                this.hideError('subnetError');
-            });
-        }
-
-        if (mtuElement) {
-            mtuElement.addEventListener('input', () => {
-                this.hideError('mtuError');
-            });
-        }
-
-        if (dnsElement) {
-            dnsElement.addEventListener('input', () => {
-                this.hideError('dnsError');
-            });
-        }
-    }
-
-    showError(errorId, message) {
-        const errorElement = this.getElement(errorId);
-        if (errorElement) {
-            errorElement.textContent = message;
-            errorElement.classList.remove('hidden');
-        }
-    }
-
-    async createServer() {
-        console.log("Creating server...");
-
-        if (!this.validateForm()) {
-            console.log("Form validation failed");
-            this.showFormStatus('Please fix the form errors above', 'error');
-            return;
-        }
-
-        // Safely get form values with fallbacks
-        const nameElement = this.getElement('serverName');
-        const portElement = this.getElement('serverPort');
-        const subnetElement = this.getElement('serverSubnet');
-        const mtuElement = this.getElement('serverMTU');
-        const dnsElement = this.getElement('serverDNS');
-        const protocolElement = this.getElement('serverProtocol');
-        const autoStartElement = this.getElement('autoStart');
-        const enableNatElement = this.getElement('enableNat');
-        const blockLanElement = this.getElement('blockLanCidrs');
-
-        const formData = {
-            name: nameElement ? nameElement.value.trim() : 'New Server',
-            port: portElement ? parseInt(portElement.value) : 51820,
-            subnet: subnetElement ? subnetElement.value : '10.0.0.0/24',
-            mtu: mtuElement ? parseInt(mtuElement.value) : 1420,
-            dns: dnsElement ? dnsElement.value.trim() : '8.8.8.8,1.1.1.1',
-            protocol: protocolElement ? protocolElement.value : window.Protocols.DEFAULT,
-            auto_start: autoStartElement ? autoStartElement.checked : true,
-            enable_nat: enableNatElement ? enableNatElement.checked : true,
-            block_lan_cidrs: blockLanElement ? blockLanElement.checked : true
-        };
-
-        console.log("Form data:", formData);
-
-        const toOptionalInt = (raw) => {
-            const s = String(raw ?? '').trim();
-            if (!s) return null;
-            const n = parseInt(s, 10);
-            return Number.isFinite(n) ? n : null;
-        };
-
-        formData.transport_params = {
-            S1: toOptionalInt(this.getElement('paramS1')?.value),
-            S2: toOptionalInt(this.getElement('paramS2')?.value),
-            S3: toOptionalInt(this.getElement('paramS3')?.value),
-            S4: toOptionalInt(this.getElement('paramS4')?.value),
-            H1: (this.getElement('paramH1')?.value || '').trim(),
-            H2: (this.getElement('paramH2')?.value || '').trim(),
-            H3: (this.getElement('paramH3')?.value || '').trim(),
-            H4: (this.getElement('paramH4')?.value || '').trim(),
-        };
-
-        if (window.Protocols.supportsAwg3(formData.protocol)) {
-            formData.transport_params.HeaderProtectionKey =
-                (this.getElement('paramHeaderProtectionKey')?.value || '').trim();
-        }
-        if (window.Protocols.supportsAwg31(formData.protocol)) {
-            formData.transport_params.RandomTrailers = !!this.getElement('paramRandomTrailers')?.checked;
-            formData.transport_params.DisableCookies = !!this.getElement('paramDisableCookies')?.checked;
-        }
-
-        const transportErrors = this.validateTransportParamsJS(formData.protocol, formData.transport_params, formData.mtu);
-        if (transportErrors.length > 0) {
-            this.showError('obfuscationError', transportErrors.join(' '));
-            return;
-        } else {
-            this.hideError('obfuscationError');
-        }
-
-        const transportWarnings = this.getTransportParamWarningsJS(formData.protocol, formData.transport_params, formData.mtu);
-        if (transportWarnings.length > 0
-            && !await this.confirmWarnings('Transport parameter warnings', transportWarnings, 'Create anyway')) {
-            return;
-        }
-
-        // Warn if port/subnet already used by any existing server
-        const conflicts = this.getServerConflicts(formData.port, formData.subnet);
-        if (conflicts.length > 0) {
-            const details = conflicts.map(c => {
-                const parts = [];
-                if (c.portConflict) parts.push(`port ${c.port}`);
-                if (c.subnetConflict) parts.push(`subnet ${c.subnet}`);
-                return `${c.name} (${c.id}, ${c.status || 'unknown'}): ${parts.join(' & ')}`;
-            });
-            if (!await this.confirmWarnings('An existing server uses the same port or subnet', details, 'Create anyway')) {
-                return;
-            }
-        }
-
-        // Disable button and show loading
-        this.setCreateButtonState(true);
-
-        this.apiFetch('/api/servers', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(formData)
-        })
-        .then(response => {
-            console.log("Response received:", response.status);
-            if (!response.ok) {
-                return response.json().then(err => {
-                    throw new Error(err.error || `HTTP ${response.status}`);
-                });
-            }
-            return response.json();
-        })
-        .then(server => {
-            console.log("Server created successfully:", server);
-            this.showFormStatus(`Server "${server.name}" created successfully!`, 'success');
-
-            // Reset form
-            const serverForm = this.getElement('serverForm');
-            if (serverForm) serverForm.reset();
-
-            // Close the modal after success
-            this.closeCreateServerModal();
-
-            this.loadServers();
-        })
-        .catch(error => {
-            console.error('Error creating server:', error);
-            this.showFormStatus('Error creating server: ' + error.message, 'error');
-        })
-        .finally(() => {
-            // Re-enable button
-            this.setCreateButtonState(false);
-        });
-    }
-
-    setCreateButtonState(loading) {
-        const createButton = this.getElement('createButton');
-        if (createButton) {
-            createButton.disabled = loading;
-            createButton.textContent = loading ? 'Creating...' : 'Create Server';
-            createButton.classList.toggle('opacity-50', loading);
-        }
     }
 
     loadInitialData() {
@@ -1416,6 +622,7 @@ class AmneziaApp {
         this.apiFetch('/api/system/status')
             .then(response => response.json())
             .then(data => {
+                this.environment = data.environment || {};
                 this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
             })
             .catch(error => {
@@ -1441,24 +648,6 @@ class AmneziaApp {
                 console.error('Error loading servers:', error);
                 this.showServerError('Failed to load servers');
             });
-    }
-
-    getServerConflicts(port, subnet) {
-        const normPort = Number(port);
-        const normSubnet = String(subnet || '').trim();
-        const servers = Array.isArray(this.lastServers) ? this.lastServers : [];
-
-        return servers
-            .filter(s => Number(s.port) === normPort || String(s.subnet || '').trim() === normSubnet)
-            .map(s => ({
-                id: s.id,
-                name: s.name,
-                port: s.port,
-                subnet: s.subnet,
-                status: s.status,
-                portConflict: Number(s.port) === normPort,
-                subnetConflict: String(s.subnet || '').trim() === normSubnet,
-            }));
     }
 
     renderServers(servers) {
@@ -1675,17 +864,6 @@ class AmneziaApp {
         return data;
     }
 
-    // The in-app replacement for "confirm(warnings...)": resolves true to go ahead.
-    confirmWarnings(title, warnings, confirmLabel) {
-        const list = warnings.map((w) => `<li>${this.escapeHtml(w)}</li>`).join('');
-        return window.Ui.confirm({
-            title: this.escapeHtml(title),
-            body: `<ul class="list-disc pl-5 flex flex-col gap-0.5">${list}</ul>`,
-            confirmLabel,
-            danger: false,
-        });
-    }
-
     async toggleClientSuspend(serverId, clientId) {
         try {
             const data = await this.postJson(`/api/servers/${serverId}/clients/${clientId}/suspend`, {});
@@ -1711,63 +889,6 @@ class AmneziaApp {
             this.showTempMessage(`Error ${action}ing server: ` + error.message, 'error');
         }
         this.loadServers();
-    }
-
-    async submitAddClient(serverId) {
-        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
-        const mtu = Number(server?.mtu) || 1420;
-        const clientName = (document.getElementById(`newClientName-${serverId}`)?.value || '').trim();
-        const copyFromClientId = document.getElementById(`newClientCopyFrom-${serverId}`)?.value || '';
-        // Shared with the edit dialog; also picks up the AWG 3.x fields when present.
-        const clientParams = this.collectClientParamsFormState(`newClientParam-${serverId}`);
-
-        if (!clientName) {
-            this.showTempMessage('Client name is required', 'error');
-            return;
-        }
-
-        const errors = this.validateClientParamsJS(clientParams, mtu);
-        if (errors.length > 0) {
-            this.showTempMessage(errors.join(' '), 'error');
-            return;
-        }
-
-        const warnings = this.getClientParamWarningsJS(clientParams, mtu);
-        if (warnings.length > 0 && !await this.confirmWarnings('Client parameter warnings', warnings, 'Create anyway')) {
-            return;
-        }
-
-        try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/clients`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    name: clientName,
-                    client_params: clientParams,
-                    copy_from_client_id: copyFromClientId || null,
-                })
-            });
-
-            if (!response.ok) {
-                let msg = 'Failed to add client';
-                try {
-                    const err = await response.json();
-                    msg = err?.error || msg;
-                } catch (_) {
-                    // ignore
-                }
-                throw new Error(msg);
-            }
-
-            this.closeModal();
-            this.loadServers();
-            this.showTempMessage('Client created.', 'success');
-        } catch (error) {
-            console.error('Error adding client:', error);
-            this.showTempMessage('Error adding client: ' + error.message, 'error');
-        }
     }
 
     async downloadClientConfig(serverId, clientId) {
@@ -1807,18 +928,6 @@ class AmneziaApp {
         }
     }
 
-    showServerConfig(serverId) {
-        this.apiFetch(`/api/servers/${serverId}/info`)
-            .then(response => response.json())
-            .then(serverInfo => {
-                this.displayServerConfigModal(serverInfo);
-            })
-            .catch(error => {
-                console.error('Error fetching server info:', error);
-                this.showTempMessage('Error loading server configuration: ' + error.message, 'error');
-            });
-    }
-
     showRawServerConfig(serverId) {
         this.apiFetch(`/api/servers/${serverId}/config`)
             .then(response => response.json())
@@ -1839,139 +948,7 @@ class AmneziaApp {
             });
     }
 
-    async saveServerNetworking(serverId) {
-        const enableNatEl = document.getElementById(`serverEnableNat-${serverId}`);
-        const blockLanEl = document.getElementById(`serverBlockLan-${serverId}`);
-        const payload = {
-            enable_nat: enableNatEl ? enableNatEl.checked : true,
-            block_lan_cidrs: blockLanEl ? blockLanEl.checked : true
-        };
-
-        try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/networking`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Failed to update networking');
-            }
-
-            const data = await response.json();
-            const ipt = data?.iptables || 'skipped';
-            const msg = ipt === 'failed'
-                ? 'Networking updated, but iptables reapply failed.'
-                : (ipt === 'reapplied' ? 'Networking updated and iptables reapplied.' : 'Networking updated.');
-            this.showTempMessage(msg, ipt === 'failed' ? 'error' : 'success');
-            this.loadServers();
-        } catch (error) {
-            console.error('Error updating server networking:', error);
-            this.showTempMessage('Failed to update networking: ' + (error?.message || error), 'error');
-        }
-    }
-
-    async saveServerTransportParams(serverId) {
-        // Pull MTU from cached server list if possible (fallback to 1420)
-        const server = (this.lastServers || []).find((s) => String(s.id) === String(serverId));
-        const mtu = Number(server?.mtu) || 1420;
-        const protocol = document.getElementById(`serverProtocol-${serverId}`)?.value || server?.protocol || window.Protocols.DEFAULT;
-
-        // Same shape the dirty tracking compares against, so the two cannot drift.
-        const params = this.collectServerTransportFormState(serverId, protocol);
-
-        const errors = this.validateTransportParamsJS(protocol, params, mtu);
-        if (errors.length > 0) {
-            this.showTempMessage(errors.join(' '), 'error');
-            return;
-        }
-
-        const warnings = this.getTransportParamWarningsJS(protocol, params, mtu);
-        if (warnings.length > 0 && !await this.confirmWarnings('Transport parameter warnings', warnings, 'Save anyway')) {
-            return;
-        }
-
-        const ok = await window.Ui.confirm({
-            title: 'Save and restart?',
-            body: 'This updates the protocol and transport parameters and restarts the server if it is running. '
-                + 'Every client config changes, so each device has to re-import it.',
-            confirmLabel: 'Save and restart',
-            danger: false,
-        });
-        if (!ok) return;
-
-        try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/transport-params`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(params)
-            });
-
-            if (!response.ok) {
-                let msg = 'Failed to update server transport parameters';
-                try {
-                    const data = await response.json();
-                    msg = data?.error || msg;
-                } catch (_) {
-                    const text = await response.text();
-                    msg = text || msg;
-                }
-                throw new Error(msg);
-            }
-
-            const data = await response.json();
-            const restarted = !!data?.restarted;
-            this.showTempMessage(restarted ? 'Protocol and transport updated; server restarted.' : 'Protocol and transport updated.', 'success');
-            this.loadServers();
-            // Refresh the modal contents
-            this.closeModal();
-            this.showServerConfig(serverId);
-        } catch (error) {
-            console.error('Error updating server transport params:', error);
-            this.showTempMessage('Failed to update protocol/transport: ' + (error?.message || error), 'error');
-        }
-    }
-
-    async saveClientParams(serverId, clientId) {
-        const server = (this.lastServers || []).find((item) => String(item.id) === String(serverId));
-        const mtu = Number(server?.mtu) || 1420;
-        const clientParams = this.collectClientParamsFormState(`clientParam-${clientId}`);
-
-        const errors = this.validateClientParamsJS(clientParams, mtu);
-        if (errors.length > 0) {
-            this.showTempMessage(errors.join(' '), 'error');
-            return;
-        }
-
-        const warnings = this.getClientParamWarningsJS(clientParams, mtu);
-        if (warnings.length > 0 && !await this.confirmWarnings('Client parameter warnings', warnings, 'Save anyway')) {
-            return;
-        }
-
-        try {
-            const response = await this.apiFetch(`/api/servers/${serverId}/clients/${clientId}/client-params`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ client_params: clientParams })
-            });
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || 'Failed to update client params');
-            }
-            this.closeModal();
-            this.loadServers();
-            this.showTempMessage('Client parameters updated.', 'success');
-        } catch (error) {
-            console.error('Error updating client params:', error);
-            this.showTempMessage('Failed to update client params: ' + (error?.message || error), 'error');
-        }
-    }
-
     closeModal() {
-        this.serverTransportModalState = null;
-        this.clientParamsModalState = null;
-        this.serverNetworkingModalState = null;
         const existingModal = document.getElementById('configModal') || document.getElementById('rawConfigModal');
         if (existingModal) existingModal.remove();
 
@@ -1982,9 +959,6 @@ class AmneziaApp {
             clearInterval(this.logPoller);
             this.logPoller = null;
         }
-
-        // Also close the create-server modal (this one is part of the DOM)
-        this.closeCreateServerModal();
     }
 
     closeQRModal() {
@@ -2117,6 +1091,15 @@ class AmneziaApp {
             console.error('Failed to copy: ', err);
             this.showTempMessage('Failed to copy to clipboard', 'error');
         });
+    }
+
+    async copyText(text, what = 'Text') {
+        try {
+            await navigator.clipboard.writeText(String(text || ''));
+            this.showTempMessage(`${what} copied`, 'success');
+        } catch (_) {
+            this.showTempMessage('This browser blocked the clipboard; select the text and copy it instead.', 'error');
+        }
     }
 
     showTempMessage(message, type) {
