@@ -12,7 +12,8 @@ class AmneziaApp {
         this.lastServers = [];
         this.lastResyncAt = 0;
         this.drawerCtx = null;
-        this.environment = {};
+        // New-server defaults: rendered into the page, updated by the settings drawer.
+        this.environment = { ...(window.AppConfig.defaults || {}) };
         this.currentPublicIp = '';
         this.currentPublicIpCountryCode = '';
         this.init();
@@ -164,7 +165,41 @@ class AmneziaApp {
         }
     }
 
+    // Every button and switch in generated markup names its action in data-action,
+    // with data-server / data-client; one listener per event type runs it. There are
+    // no inline handlers, so nginx can send script-src 'self'. Buttons act on click,
+    // switches and selects on change.
+    setupActions() {
+        const ids = (el) => [el.dataset.server, el.dataset.client];
+        const actions = {
+            'toggle-server': (el) => this.toggleServer(el.dataset.server, el.checked),
+            'add-client': (el) => this.addClient(el.dataset.server),
+            'server-settings': (el) => this.showServerConfig(el.dataset.server),
+            'server-menu': (el) => this.openServerMenu(el.dataset.server, el),
+            'probe-egress': (el) => this.probeServerEgressIp(el.dataset.server, el),
+            'raw-config': (el) => this.showRawServerConfig(el.dataset.server),
+            'toggle-client': (el) => this.toggleClientSuspend(...ids(el)),
+            'client-qr': (el) => { window.Ui.closeDrawer(); this.showClientQRCode(...ids(el)); },
+            'client-edit': (el) => this.showClientParamsModal(...ids(el)),
+            'client-menu': (el) => this.openClientMenu(...ids(el), el),
+            'randomize': () => this.generateRandomParams(),
+            'generate-key': () => this.fillHeaderProtectionKey('t-HeaderProtectionKey'),
+            'copy-public-key': () => this.copyText(document.getElementById('s-publicKey')?.textContent, 'Public key'),
+            'show-checks': () => document.getElementById('checks')?.scrollIntoView({ block: 'nearest' }),
+        };
+        const run = (event) => {
+            const el = event.target.closest('[data-action]');
+            if (!el || !actions[el.dataset.action]) return;
+            const onChange = el.tagName === 'INPUT' || el.tagName === 'SELECT';
+            if ((event.type === 'change') !== onChange) return;
+            actions[el.dataset.action](el, event);
+        };
+        document.addEventListener('click', run);
+        document.addEventListener('change', run);
+    }
+
     setupEventListeners() {
+        this.setupActions();
         this.getElement('showCreateServerBtn')?.addEventListener('click', () => this.openCreateServerModal());
         this.getElement('themeToggleBtn')?.addEventListener('click', () => this.toggleTheme());
         this.getElement('refreshIpBtn')?.addEventListener('click', () => this.refreshPublicIp());
@@ -549,20 +584,13 @@ class AmneziaApp {
 
     // Custom signature packets I1-I5 (AWG 1.5+). Multi-line textarea fields.
     static get I_PARAM_KEYS() {
-        return ['I1', 'I2', 'I3', 'I4', 'I5'];
+        return window.AppConfig.params?.signature || [];
     }
 
     // AWG 3.x client-side params. Range-valued ('a' or 'a-b'); empty means the
     // daemon keeps its built-in WireGuard default.
     static get AWG3_CLIENT_PARAM_KEYS() {
-        return [
-            'ContentPaddingAddition',
-            'RekeyAfterTime',
-            'RekeyTimeout',
-            'RejectAfterTime',
-            'KeepaliveTimeout',
-            'MaxHandshakeAttempts',
-        ];
+        return window.AppConfig.params?.awg3Client || [];
     }
 
     // AWG 3.x client-side fields. Rendered only for AWG 3.x servers, matching how
@@ -583,7 +611,6 @@ class AmneziaApp {
         this.apiFetch('/api/system/status')
             .then(response => response.json())
             .then(data => {
-                this.environment = data.environment || {};
                 if (data.public_ip) {
                     this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
                 } else {

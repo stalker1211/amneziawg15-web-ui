@@ -15,7 +15,7 @@ from core.runtime import (
 )
 from flask import render_template, send_from_directory
 from routes.servers import register_server_routes
-from routes.system import register_system_routes
+from routes.system import page_config, register_system_routes
 from services.amnezia_manager import AmneziaManager
 
 configure_logging()
@@ -172,7 +172,9 @@ register_socket_handlers(socketio, amnezia_manager, NGINX_PORT)
 def index():
     """Render the main single-page web UI."""
     logger.debug("Serving index.html")
-    return render_template("index.html", cache_bust=cache_bust(), build_label=BUILD_LABEL)
+    return render_template(
+        "index.html", cache_bust=cache_bust(), build_label=BUILD_LABEL, app_config=page_config(amnezia_manager)
+    )
 
 
 def cache_bust():

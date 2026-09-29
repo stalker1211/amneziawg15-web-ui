@@ -79,7 +79,7 @@ web-ui/
               modals.js         the QR, logs and full-config views
               ui.js             toasts, dialogs, drawer, menus, inline rename
               server-ui.js      server card and client row rendering
-              protocols.js      the protocol table
+              protocols.js      reads the page config (protocol table, defaults)
               api.js            fetch plumbing
 ```
 

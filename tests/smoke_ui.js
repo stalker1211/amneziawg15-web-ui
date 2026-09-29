@@ -37,6 +37,9 @@ function check(label, condition, detail) {
     const pageErrors = [];
     page.on('pageerror', (e) => pageErrors.push(e.message));
     // The panel has no alert/confirm/prompt any more; one appearing is a failure.
+    // nginx sends script-src 'self'; a violation is reported on the console, not as an error.
+    const cspViolations = [];
+    page.on('console', (m) => { if (/Content Security Policy/i.test(m.text())) cspViolations.push(m.text()); });
     const nativeDialogs = [];
     page.on('dialog', (d) => { nativeDialogs.push(d.message()); d.dismiss(); });
     // Everything is served from the panel itself (no CDN): record every origin asked.
@@ -267,6 +270,7 @@ function check(label, condition, detail) {
     console.log('');
     check('no request left the panel\'s origin', foreignRequests.size === 0, [...foreignRequests]);
     check('no uncaught page errors', pageErrors.length === 0, pageErrors);
+    check('no Content-Security-Policy violation', cspViolations.length === 0, cspViolations);
     check('no alert/confirm/prompt appeared', nativeDialogs.length === 0, nativeDialogs);
     await browser.close();
 

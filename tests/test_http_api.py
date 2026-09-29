@@ -181,59 +181,41 @@ class SerializationTests(unittest.TestCase):
 
 
 class ProtocolTableTests(unittest.TestCase):
-    """The frontend mirrors the backend protocol table; catch drift between them."""
+    """The page gets the protocol table from the backend (page_config); the UI keeps no copy."""
 
     def setUp(self):
         self.app, self.manager = build_app()
         self.client = self.app.test_client()
 
-    def test_status_exposes_the_protocol_table(self):
-        protocols = self.client.get("/api/system/status").get_json()["protocols"]
-        self.assertEqual(protocols["default"], self.manager.DEFAULT_PROTOCOL)
-        self.assertEqual([p["id"] for p in protocols["supported"]], list(self.manager.SUPPORTED_PROTOCOLS))
-
     def test_every_supported_protocol_normalizes_to_itself(self):
         for protocol in self.manager.SUPPORTED_PROTOCOLS:
             self.assertEqual(self.manager.normalize_protocol(protocol), protocol)
 
-    def test_frontend_protocols_js_matches_the_backend(self):
-        """protocols.js is the UI's copy of the table; it must not drift."""
+    def test_the_page_config_is_the_backend_table(self):
+        from routes.system import page_config
+
+        config = page_config(self.manager)
+        m = self.manager
+        self.assertEqual(config["protocols"]["default"], m.DEFAULT_PROTOCOL)
+        self.assertEqual(
+            config["protocols"]["supported"],
+            [
+                {"id": p, "supportsS34": m.protocol_supports_s34(p), "supportsHeaderRanges": m.protocol_supports_header_ranges(p),
+                 "supportsAwg3": m.protocol_supports_awg3(p), "supportsAwg31": m.protocol_supports_awg31(p)}
+                for p in m.SUPPORTED_PROTOCOLS
+            ],
+        )  # fmt: skip
+        self.assertEqual(config["params"]["signature"], ["I1", "I2", "I3", "I4", "I5"])
+        self.assertEqual(config["params"]["awg3Client"], list(m.CLIENT_AWG3_PARAM_KEYS))
+        self.assertEqual(config["defaults"]["mtu"], m.default_mtu)
+        json.dumps(config)  # it is rendered as JSON
+
+    def test_the_ui_has_no_protocol_table_of_its_own(self):
         source = Path(os.path.join(STATIC_JS, "protocols.js")).read_text(encoding="utf-8")
-
-        ids = re.findall(r"id:\s*'([^']+)'", source)
-        self.assertEqual(
-            ids, list(self.manager.SUPPORTED_PROTOCOLS), "protocols.js protocol list differs from SUPPORTED_PROTOCOLS"
-        )
-
-        default = re.search(r"DEFAULT_PROTOCOL\s*=\s*'([^']+)'", source).group(1)
-        self.assertEqual(default, self.manager.DEFAULT_PROTOCOL)
-
-        # Each entry's capability flags must agree with the Python predicates.
-        entries = re.findall(
-            r"id:\s*'([^']+)',\s*"
-            r"supportsS34:\s*(true|false),[^}]*?"
-            r"supportsHeaderRanges:\s*(true|false),[^}]*?"
-            r"supportsAwg3:\s*(true|false),[^}]*?"
-            r"supportsAwg31:\s*(true|false)",
-            source,
-            re.DOTALL,
-        )
-        self.assertEqual(
-            len(entries), len(self.manager.SUPPORTED_PROTOCOLS), "could not parse every protocol entry from protocols.js"
-        )
-        for protocol, s34, ranges, awg3, awg31 in entries:
-            self.assertEqual(s34 == "true", self.manager.protocol_supports_s34(protocol), f"{protocol}: supportsS34 mismatch")
-            self.assertEqual(
-                ranges == "true",
-                self.manager.protocol_supports_header_ranges(protocol),
-                f"{protocol}: supportsHeaderRanges mismatch",
-            )
-            self.assertEqual(
-                awg3 == "true", self.manager.protocol_supports_awg3(protocol), f"{protocol}: supportsAwg3 mismatch"
-            )
-            self.assertEqual(
-                awg31 == "true", self.manager.protocol_supports_awg31(protocol), f"{protocol}: supportsAwg31 mismatch"
-            )
+        self.assertIn("document.getElementById('appConfig')", source)
+        self.assertNotRegex(source, r"id:\s*'AWG")
+        template = Path(os.path.join(WEB_UI_DIR, "templates", "index.html")).read_text(encoding="utf-8")
+        self.assertIn('<script type="application/json" id="appConfig">{{ app_config | tojson }}</script>', template)
 
     def test_no_hardcoded_protocol_literals_left_in_the_ui(self):
         """Capability checks must go through Protocols, not string comparison."""

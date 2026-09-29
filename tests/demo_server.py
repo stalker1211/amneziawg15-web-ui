@@ -30,7 +30,7 @@ from core.helpers import to_bool
 from core.runtime import create_flask_app, create_socketio, register_socket_handlers
 from flask import render_template, send_from_directory
 from routes.servers import register_server_routes
-from routes.system import register_system_routes
+from routes.system import page_config, register_system_routes
 from services.amnezia_manager import AmneziaManager
 
 PUBLIC_IPS = ("203.0.113.24", "203.0.113.57")  # refresh-ip flips between these
@@ -255,7 +255,9 @@ def main():
 
     @app.route("/")
     def index():
-        return render_template("index.html", cache_bust=int(time.time()), build_label=args.label)
+        return render_template(
+            "index.html", cache_bust=int(time.time()), build_label=args.label, app_config=page_config(manager)
+        )
 
     @app.route("/static/<path:filename>")
     def static_files(filename):

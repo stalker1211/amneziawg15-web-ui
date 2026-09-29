@@ -159,7 +159,7 @@ class ModalUi {
     }
 }
 
-// Install onto AmneziaApp so call sites and inline onclick= handlers work.
+// Install onto AmneziaApp, so `this` is the app in every method.
 Object.getOwnPropertyNames(ModalUi.prototype)
     .filter((name) => name !== 'constructor')
     .forEach((name) => {

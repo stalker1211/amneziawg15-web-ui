@@ -36,6 +36,43 @@ def tail_lines(path, count, block_size=64 * 1024):
     return lines[-count:] if count else []
 
 
+def page_config(amnezia_manager):
+    """What the page needs from the backend before its first request, rendered into
+    index.html as JSON (`#appConfig`): the protocol table, the parameter key lists and
+    the new-server defaults. The UI keeps no copy of any of it (static/js/protocols.js
+    only reads this), so there is nothing to drift.
+    """
+    m = amnezia_manager
+    return {
+        "protocols": {
+            "default": m.DEFAULT_PROTOCOL,
+            "supported": [
+                {
+                    "id": protocol,
+                    "supportsS34": m.protocol_supports_s34(protocol),
+                    "supportsHeaderRanges": m.protocol_supports_header_ranges(protocol),
+                    "supportsAwg3": m.protocol_supports_awg3(protocol),
+                    "supportsAwg31": m.protocol_supports_awg31(protocol),
+                }
+                for protocol in m.SUPPORTED_PROTOCOLS
+            ],
+        },
+        "params": {
+            "transport": list(m.TRANSPORT_PARAM_KEYS),
+            "signature": [key for key in m.CLIENT_ONLY_PARAM_KEYS if key.startswith("I")],
+            "awg3Client": list(m.CLIENT_AWG3_PARAM_KEYS),
+        },
+        "defaults": {
+            "mtu": m.default_mtu,
+            "subnet": m.default_subnet,
+            "port": m.default_port,
+            "dns": ", ".join(m.dns_servers),
+            "enable_nat": m.default_enable_nat,
+            "block_lan_cidrs": m.default_block_lan_cidrs,
+        },
+    }
+
+
 def register_system_routes(
     app,
     amnezia_manager,
@@ -64,21 +101,6 @@ def register_system_routes(
                 [s for s in amnezia_manager.config["servers"] if amnezia_manager.get_server_status(s["id"]) == "running"]
             ),
             "timestamp": time.time(),
-            # The backend's protocol table. static/js/protocols.js mirrors it for the
-            # UI; exposing it here means the mirror can be checked rather than assumed
-            # (tests/test_http_api.py compares the two).
-            "protocols": {
-                "default": amnezia_manager.DEFAULT_PROTOCOL,
-                "supported": [
-                    {
-                        "id": protocol,
-                        "supports_s34": amnezia_manager.protocol_supports_s34(protocol),
-                        "supports_header_ranges": amnezia_manager.protocol_supports_header_ranges(protocol),
-                        "supports_awg3": amnezia_manager.protocol_supports_awg3(protocol),
-                    }
-                    for protocol in amnezia_manager.SUPPORTED_PROTOCOLS
-                ],
-            },
             "environment": {
                 "nginx_port": nginx_port,
                 "auto_start_servers": auto_start_servers,

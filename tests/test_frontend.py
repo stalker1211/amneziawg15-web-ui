@@ -72,6 +72,30 @@ class SelfContainedTests(unittest.TestCase):
         self.assertLess(html.index("css/style.css"), html.index("css/tailwind.css"))
 
 
+class ContentSecurityPolicyTests(unittest.TestCase):
+    """nginx sends script-src 'self', so the page may hold no inline script of any kind."""
+
+    def test_no_inline_event_handlers(self):
+        for path in MARKUP:
+            found = re.findall(r"\son[a-z]+\s*=\s*[\"']", path.read_text(encoding="utf-8"))
+            self.assertEqual(found, [], f"{path.name}: use data-action (AmneziaApp.setupActions) instead")
+
+    def test_no_inline_script_or_javascript_urls(self):
+        html = INDEX.read_text(encoding="utf-8")
+        for tag in re.findall(r"<script\b[^>]*>", html):
+            self.assertTrue("src=" in tag or 'type="application/json"' in tag, tag)
+        for path in MARKUP:
+            self.assertNotIn("javascript:", path.read_text(encoding="utf-8"), path.name)
+
+    def test_every_action_in_the_markup_has_a_handler(self):
+        app = (WEB_UI / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        handled = set(re.findall(r"^\s+'([a-z-]+)': \(", app, re.MULTILINE))
+        used = {a for path in MARKUP for a in re.findall(r'data-action="([a-z-]+)"', path.read_text(encoding="utf-8"))}
+        self.assertTrue(used)
+        self.assertEqual(sorted(used - handled), [])
+        self.assertEqual(sorted(handled - used), [])
+
+
 class NativeDialogTests(unittest.TestCase):
     def test_no_alert_confirm_or_prompt(self):
         # They block the page and cannot follow the theme; ui.js has toasts, an in-app

@@ -1,7 +1,8 @@
 // AmneziaWG Web UI - server cards and client rows.
 //
 // Pure renderers: they take the API payloads and return HTML. Every value goes
-// through escapeHtml; handlers call the global `amneziaApp`. Ids are 6 hex chars
+// through escapeHtml; buttons and switches name their action in data-action (with
+// data-server / data-client), dispatched by AmneziaApp.setupActions. Ids are 6 hex chars
 // from the backend, escaped anyway.
 class ServerUi {
     static flag(countryCode) {
@@ -112,22 +113,22 @@ class ServerUi {
                         <h3 class="text-lg font-semibold text-purple-700 dark:text-[#c084fc] truncate" data-name="${id}">${safe(server.name)}</h3>
                         <label class="switch" title="${running ? 'Stop server' : 'Start server'}">
                             <input type="checkbox" ${running ? 'checked' : ''} aria-label="${safe(server.name)} running"
-                                onchange="amneziaApp.toggleServer('${id}', this.checked)">
+                                data-action="toggle-server" data-server="${id}">
                             <span class="track"></span>
                         </label>
                         ${status}
                     </div>
                     <div class="flex items-center gap-1">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="amneziaApp.addClient('${id}')">${icon('userPlus', 'w-3.5 h-3.5')}Client</button>
-                        <button type="button" class="icon-btn" onclick="amneziaApp.showServerConfig('${id}')" aria-label="Server settings" title="Server settings">${icon('gear')}</button>
-                        <button type="button" class="icon-btn" onclick="amneziaApp.openServerMenu('${id}', this)" aria-label="More actions for ${safe(server.name)}" aria-haspopup="menu" title="More">${icon('dots')}</button>
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="add-client" data-server="${id}">${icon('userPlus', 'w-3.5 h-3.5')}Client</button>
+                        <button type="button" class="icon-btn" data-action="server-settings" data-server="${id}" aria-label="Server settings" title="Server settings">${icon('gear')}</button>
+                        <button type="button" class="icon-btn" data-action="server-menu" data-server="${id}" aria-label="More actions for ${safe(server.name)}" aria-haspopup="menu" title="More">${icon('dots')}</button>
                     </div>
                 </div>
                 <div class="${running ? '' : 'opacity-60'} flex flex-col gap-1.5">
                     <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 dark:text-[#cbd5e1]">${facts}</p>
                     <p class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-gray-700 dark:text-[#cbd5e1]">
                         ${egress}
-                        <button type="button" class="icon-btn icon-btn-sm" onclick="amneziaApp.probeServerEgressIp('${id}', this)" aria-label="Check egress IP again" title="Check egress IP again">${icon('refresh', 'w-3.5 h-3.5')}</button>
+                        <button type="button" class="icon-btn icon-btn-sm" data-action="probe-egress" data-server="${id}" aria-label="Check egress IP again" title="Check egress IP again">${icon('refresh', 'w-3.5 h-3.5')}</button>
                     </p>
                 </div>
             </div>
@@ -198,7 +199,7 @@ class ServerUi {
         const issuedOn = ServerUi.stamp(client.config_issued_at);
         const reimportPill = client.config_outdated
             ? `<button type="button" class="pill flex-none bg-rose-100 text-rose-800 hover:bg-rose-200 dark:bg-[#4c0519] dark:text-[#fda4af] dark:hover:bg-[#6b0f2a]"
-                   onclick="amneziaApp.showClientQRCode('${sid}', '${cid}')"
+                   data-action="client-qr" data-server="${sid}" data-client="${cid}"
                    title="The config changed after it was handed out${issuedOn ? ` on ${safe(issuedOn)}` : ''}. Show the new one.">${icon('refresh', 'w-3 h-3')}Re-import</button>`
             : '';
 
@@ -220,12 +221,12 @@ class ServerUi {
             <div class="flex items-center gap-1 justify-end">
                 <label class="switch switch-sm switch-amber mr-1.5" title="${suspended ? 'Reactivate client' : 'Suspend client'}">
                     <input type="checkbox" ${suspended ? '' : 'checked'} aria-label="${safe(client.name)} active"
-                        onchange="amneziaApp.toggleClientSuspend('${sid}', '${cid}')">
+                        data-action="toggle-client" data-server="${sid}" data-client="${cid}">
                     <span class="track"></span>
                 </label>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="amneziaApp.showClientQRCode('${sid}', '${cid}')">${icon('qr', 'w-3.5 h-3.5')}QR</button>
-                <button type="button" class="btn btn-ghost btn-sm" onclick="amneziaApp.showClientParamsModal('${sid}', '${cid}')">${icon('edit', 'w-3.5 h-3.5')}Edit</button>
-                <button type="button" class="icon-btn icon-btn-sm" onclick="amneziaApp.openClientMenu('${sid}', '${cid}', this)" aria-label="More actions for ${safe(client.name)}" aria-haspopup="menu">${icon('dots')}</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="client-qr" data-server="${sid}" data-client="${cid}">${icon('qr', 'w-3.5 h-3.5')}QR</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="client-edit" data-server="${sid}" data-client="${cid}">${icon('edit', 'w-3.5 h-3.5')}Edit</button>
+                <button type="button" class="icon-btn icon-btn-sm" data-action="client-menu" data-server="${sid}" data-client="${cid}" aria-label="More actions for ${safe(client.name)}" aria-haspopup="menu">${icon('dots')}</button>
             </div>
         </li>`;
     }

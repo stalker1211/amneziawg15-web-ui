@@ -1,48 +1,12 @@
-// AmneziaWG Web UI - the protocol table.
+// AmneziaWG Web UI - the page's configuration from the backend, and the protocol helpers.
 //
-// SINGLE SOURCE OF TRUTH for the frontend. Adding a protocol generation should mean
-// editing PROTOCOLS below and nothing else: the <option> lists, the field gating and
-// every capability check read from here.
-//
-// This mirrors AmneziaManager in services/amnezia_manager.py, which is authoritative
-// (the server re-validates everything). Keep the two in step:
-//
-//   supportsS34         -> protocol_supports_s34()
-//   supportsHeaderRanges-> protocol_supports_header_ranges()
-//   supportsAwg3        -> protocol_supports_awg3()
-//   supportsAwg31       -> protocol_supports_awg31()
-const PROTOCOLS = [
-    {
-        id: 'AWG 1.5',
-        supportsS34: false,           // S3/S4 padding
-        supportsHeaderRanges: false,  // H1-H4 as "1200-1400"
-        supportsAwg3: false,          // header protection, content padding, timings
-        supportsAwg31: false,         // random trailers, disable cookies
-    },
-    {
-        id: 'AWG 2.0',
-        supportsS34: true,
-        supportsHeaderRanges: true,
-        supportsAwg3: false,
-        supportsAwg31: false,
-    },
-    {
-        id: 'AWG 3.0',
-        supportsS34: true,
-        supportsHeaderRanges: true,
-        supportsAwg3: true,
-        supportsAwg31: false,
-    },
-    {
-        id: 'AWG 3.1',
-        supportsS34: true,
-        supportsHeaderRanges: true,
-        supportsAwg3: true,
-        supportsAwg31: true,
-    },
-];
-
-const DEFAULT_PROTOCOL = 'AWG 1.5';
+// index.html carries #appConfig, rendered from the Python tuples by page_config()
+// (routes/system.py): the protocol table, the parameter key lists and the new-server
+// defaults. Nothing here is a copy, so adding a protocol generation is a backend-only
+// change: the <option> lists, the field gating and every capability check read it.
+const AppConfig = JSON.parse(document.getElementById('appConfig')?.textContent || '{}');
+const PROTOCOLS = AppConfig.protocols?.supported || [];
+const DEFAULT_PROTOCOL = AppConfig.protocols?.default || PROTOCOLS[0]?.id || '';
 
 const Protocols = {
     DEFAULT: DEFAULT_PROTOCOL,
@@ -80,7 +44,7 @@ const Protocols = {
     },
 
     // <option> markup for a <select>; used by both the create form and the server
-    // config modal so the two lists cannot drift apart.
+    // settings drawer so the two lists cannot drift apart.
     optionsHtml(selected) {
         const current = this.normalize(selected);
         return PROTOCOLS
@@ -89,4 +53,5 @@ const Protocols = {
     },
 };
 
+window.AppConfig = AppConfig;
 window.Protocols = Protocols;

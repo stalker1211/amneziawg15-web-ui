@@ -105,6 +105,9 @@
     <div id="toasts" aria-live="polite"
          class="toast-root fixed z-[60] right-4 left-4 sm:left-auto flex flex-col items-stretch sm:items-end gap-2 pointer-events-none"></div>
 
+    <!-- The backend's protocol table, key lists and new-server defaults (page_config in
+         routes/system.py). JSON, not script: CSP allows no inline script. -->
+    <script type="application/json" id="appConfig">{{ app_config | tojson }}</script>
     <script src="{{ url_for('static', filename='js/protocols.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/ui.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/api.js') }}?v={{ cache_bust }}"></script>

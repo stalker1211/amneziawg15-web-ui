@@ -163,6 +163,17 @@ class NginxAuthConfigTests(unittest.TestCase):
     def test_auth_is_never_switched_off(self):
         self.assertNotRegex(NGINX_CONF.read_text(encoding="utf-8"), r"auth_basic\s+off")
 
+    def test_security_headers_on_every_response(self):
+        conf = NGINX_CONF.read_text(encoding="utf-8")
+        csp = re.search(r'add_header Content-Security-Policy "([^"]+)" always;', conf).group(1)
+        for directive in ("script-src 'self'", "object-src 'none'", "frame-ancestors 'none'"):
+            self.assertIn(directive, csp)
+        self.assertIn('add_header X-Content-Type-Options "nosniff" always;', conf)
+        self.assertIn('add_header Referrer-Policy "no-referrer" always;', conf)
+        # nginx inherits add_header only into a location that sets none of its own.
+        for path, body in self.locations.items():
+            self.assertNotIn("add_header", body, path)
+
 
 if __name__ == "__main__":
     unittest.main()

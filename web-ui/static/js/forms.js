@@ -5,7 +5,8 @@
 // POST /api/validate (a dry run) and its errors and warnings are shown under the
 // fields. The primary button is enabled when nothing is invalid and, for an edit,
 // something changed. These are methods of AmneziaApp, installed onto its prototype
-// at the bottom of this file, like modals.js.
+// at the bottom of this file, like modals.js. Buttons name their action in
+// data-action (AmneziaApp.setupActions); there are no inline handlers (CSP).
 //
 // Field ids are fixed (one drawer at a time): f-* server basics, t-* transport
 // (the prefix toggleProtocolFields works with), s-* settings, c-* client.
@@ -47,7 +48,7 @@ class FormUi {
     drawerFooter(primaryLabel, left = '') {
         return `
             ${left}<span class="flex-1"></span>
-            <button type="button" id="drawerStatus" hidden onclick="document.getElementById('checks')?.scrollIntoView({ block: 'nearest' })"
+            <button type="button" id="drawerStatus" hidden data-action="show-checks"
                 class="px-1 text-xs font-medium text-red-600 hover:underline dark:text-[#fca5a5]"></button>
             <button type="button" class="btn btn-secondary" data-close="drawer">Cancel</button>
             <button type="submit" id="drawerPrimary" class="btn btn-primary">${primaryLabel}</button>`;
@@ -82,7 +83,7 @@ class FormUi {
         return `
             <div>
                 <label class="label" for="t-protocol">Protocol</label>
-                <select id="t-protocol" class="field" onchange="amneziaApp.toggleProtocolFields(this.value, 't-')">${window.Protocols.optionsHtml(protocol)}</select>
+                <select id="t-protocol" class="field">${window.Protocols.optionsHtml(protocol)}</select>
             </div>
             <div id="t-Description"></div>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">${num('S1')}${num('S2')}${num('S3')}${num('S4')}</div>
@@ -93,7 +94,7 @@ class FormUi {
                 <label class="label" for="t-HeaderProtectionKey">Header protection key <span class="font-normal text-gray-400 dark:text-[#64748b]">optional</span></label>
                 <div class="flex gap-2">
                     <input id="t-HeaderProtectionKey" class="field font-mono text-xs" value="${this.escapeHtml(t.HeaderProtectionKey || '')}" placeholder="empty: header protection off">
-                    <button type="button" class="btn btn-secondary" onclick="amneziaApp.fillHeaderProtectionKey('t-HeaderProtectionKey')">Generate</button>
+                    <button type="button" class="btn btn-secondary" data-action="generate-key">Generate</button>
                 </div>
                 <p class="hint">Encrypts packet headers. Needs S1-S4 each 12 or more; written into every client config.</p>
             </div>
@@ -200,7 +201,10 @@ class FormUi {
             // Typing marks the transport fields as the user's own; values filled in by
             // the generator fire no input event.
             if (e.type === 'input' && e.target.id.startsWith('t-')) ctx.transportEdited = true;
-            if (e.type === 'change' && e.target.id === 't-protocol') ctx.onProtocolChange?.();
+            if (e.type === 'change' && e.target.id === 't-protocol') {
+                this.toggleProtocolFields(e.target.value, 't-');
+                ctx.onProtocolChange?.();
+            }
             this.scheduleDrawerCheck();
         };
         body.addEventListener('input', onEdit);
@@ -294,14 +298,14 @@ class FormUi {
         const env = this.environment || {};
         const servers = this.lastServers || [];
         const usedPorts = new Set(servers.map((s) => Number(s.port)));
-        let port = Number(env.default_port) || 51820;
+        let port = Number(env.port) || 51820;
         while (usedPorts.has(port)) port += 1;
         const usedThird = new Set(servers.map((s) => (/^10\.10\.(\d+)\./.exec(s.subnet || '') || [])[1]).filter(Boolean).map(Number));
         let third = 0;
         while (usedThird.has(third) && third < 255) third += 1;
 
         const protocol = window.Protocols.DEFAULT;
-        const mtu = env.default_mtu || 1420;
+        const mtu = env.mtu || 1420;
         // Every server gets its own random parameters (it used to be one fixed set
         // unless Randomize was pressed).
         const generated = await this.fetchGenerated(protocol, mtu).catch(() => null);
@@ -328,16 +332,16 @@ class FormUi {
                         ${this.formField('f-port', 'Port (UDP)', port, { type: 'number', mono: true })}
                         ${this.formField('f-subnet', 'Subnet', `10.10.${third}.0/24`, { mono: true })}
                         ${this.formField('f-mtu', 'MTU', mtu, { type: 'number', mono: true, hint: '1280-1440; 1420 suits most links, 1280 the most restrictive ones.' })}
-                        ${this.formField('f-dns', 'DNS servers', env.default_dns || '1.1.1.1, 9.9.9.9', { mono: true, hint: 'Comma-separated, pushed to clients.' })}
+                        ${this.formField('f-dns', 'DNS servers', env.dns || '1.1.1.1, 9.9.9.9', { mono: true, hint: 'Comma-separated, pushed to clients.' })}
                     </div>`)}
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
                         ${this.formSwitch('f-autostart', 'Start after creating', 'Brings the interface up right away.', true)}
-                        ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', true)}
-                        ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server.', true)}
+                        ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', env.enable_nat !== false)}
+                        ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server.', env.block_lan_cidrs !== false)}
                     </div>`)}
                 ${this.formSection('Protocol and transport', this.transportFieldsHtml(protocol, transport),
-                    '<button type="button" class="btn btn-secondary btn-sm" onclick="amneziaApp.generateRandomParams()">Randomize</button>')}`,
+                    '<button type="button" class="btn btn-secondary btn-sm" data-action="randomize">Randomize</button>')}`,
             primaryLabel: 'Create server',
             ctx: {
                 mount: () => this.toggleProtocolFields(protocol, 't-'),
@@ -504,7 +508,7 @@ class FormUi {
                         <dt class="text-gray-500 dark:text-[#94a3b8]">Public key</dt>
                         <dd class="flex items-center gap-1 min-w-0"><span id="s-publicKey" class="font-mono text-xs truncate text-gray-800 dark:text-[#e5e7eb]">${safe(info.public_key)}</span>
                             <button type="button" class="icon-btn icon-btn-sm" aria-label="Copy public key"
-                                onclick="amneziaApp.copyText(document.getElementById('s-publicKey').textContent, 'Public key')">${window.Ui.icon('copy', 'w-3.5 h-3.5')}</button></dd>
+                                data-action="copy-public-key">${window.Ui.icon('copy', 'w-3.5 h-3.5')}</button></dd>
                     </dl>`)}
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
@@ -515,9 +519,9 @@ class FormUi {
                 ${this.formSection('Protocol and transport', `
                     <div id="impact">${this.formCallout(this.escapeHtml(defaultImpact))}</div>
                     ${this.transportFieldsHtml(info.protocol, info.transport_params || {})}`,
-                    '<button type="button" class="btn btn-secondary btn-sm" onclick="amneziaApp.generateRandomParams()">Randomize</button>')}`,
+                    '<button type="button" class="btn btn-secondary btn-sm" data-action="randomize">Randomize</button>')}`,
             primaryLabel: 'No changes',
-            left: `<button type="button" class="btn btn-ghost" onclick="amneziaApp.showRawServerConfig('${safe(info.id)}')">${window.Ui.icon('code')}Full config</button>`,
+            left: `<button type="button" class="btn btn-ghost" data-action="raw-config" data-server="${safe(info.id)}">${window.Ui.icon('code')}Full config</button>`,
             ctx,
         });
     }
@@ -620,7 +624,7 @@ class FormUi {
                 ${this.formSection('Client-side parameters', this.clientFieldsHtml(server, params))}
                 ${this.formCallout('Only this client changes. Re-import its QR code or .conf on the device afterwards.')}`,
             primaryLabel: 'No changes',
-            left: `<button type="button" class="btn btn-ghost" onclick="window.Ui.closeDrawer(); amneziaApp.showClientQRCode('${safe(serverId)}', '${safe(clientId)}')">${window.Ui.icon('qr')}QR code</button>`,
+            left: `<button type="button" class="btn btn-ghost" data-action="client-qr" data-server="${safe(serverId)}" data-client="${safe(clientId)}">${window.Ui.icon('qr')}QR code</button>`,
             ctx,
         });
         this.autosizeClientParamTextareas('c', 200);
@@ -637,7 +641,7 @@ class FormUi {
     }
 }
 
-// Install onto AmneziaApp so call sites and inline onclick= handlers work.
+// Install onto AmneziaApp, so `this` is the app in every method.
 Object.getOwnPropertyNames(FormUi.prototype)
     .filter((name) => name !== 'constructor')
     .forEach((name) => {
