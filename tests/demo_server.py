@@ -2,7 +2,7 @@
 tests and screenshots, with no container and no AmneziaWG.
 
 Everything is the production code (routes, guards, Socket.IO, the traffic loop and
-its `awg show` parser) except the system edges of the manager: keys, awg-quick, ip,
+its `awg show all dump` parser) except the system edges of the manager: keys, awg-quick, ip,
 iptables, GeoIP and the egress probe are answered here. Addresses come from the
 documentation ranges and keys are random, so nothing real can leak into a screenshot.
 
@@ -50,22 +50,6 @@ def random_key():
     return base64.b64encode(os.urandom(32)).decode()
 
 
-def fmt_bytes(n):
-    for unit, size in (("GiB", GiB), ("MiB", MiB), ("KiB", KiB)):
-        if n >= size:
-            return f"{n / size:.2f} {unit}"
-    return f"{int(n)} B"
-
-
-def fmt_ago(seconds):
-    parts, rest = [], int(seconds)
-    for name, size in (("day", 86400), ("hour", 3600), ("minute", 60), ("second", 1)):
-        count, rest = divmod(rest, size)
-        if count:
-            parts.append(f"{count} {name}{'' if count == 1 else 's'}")
-    return (", ".join(parts[:2]) or "0 seconds") + " ago"
-
-
 class DemoManager(AmneziaManager):
     """The real manager with its system edges answered in memory."""
 
@@ -95,20 +79,17 @@ class DemoManager(AmneziaManager):
         os.makedirs(self.config_dir, exist_ok=True)
         os.makedirs(self.wireguard_config_dir, exist_ok=True)
 
-    def run_command(self, args):
+    def run_command(self, args, env=None):
         if args[:2] == ["/usr/bin/awg-quick", "up"]:
             self.running.add(args[2])
         elif args[:2] == ["/usr/bin/awg-quick", "down"]:
             self.running.discard(args[2])
-        elif args[:2] == ["/usr/bin/awg", "show"]:
-            return self.awg_show(args[2])
+        elif args == ["/usr/bin/awg", "show", "all", "dump"]:
+            return self.awg_dump()
         return ""
 
-    def get_server_status(self, server_id):
-        server = self.get_server(server_id)
-        if not server:
-            return "not_found"
-        return "running" if server["interface"] in self.running else "stopped"
+    def interface_state(self, interface):
+        return "unknown" if interface in self.running else None
 
     def setup_iptables(self, *args, **kwargs):
         return True
@@ -122,33 +103,32 @@ class DemoManager(AmneziaManager):
     def apply_live_config(self, *args, **kwargs):
         return True
 
-    def awg_show(self, interface):
-        """`awg show` output for the peers of a running interface; traffic grows each call."""
-        server = next((s for s in self.config["servers"] if s["interface"] == interface), None)
-        if not server or interface not in self.running:
-            return None
-        lines = [f"interface: {interface}", f"  listening port: {server['port']}", ""]
-        now = time.time()
-        for client in server["clients"]:
-            if client.get("suspended"):
+    def awg_dump(self):
+        """`awg show all dump` for the running interfaces; traffic grows each call."""
+        lines, now = [], time.time()
+        for server in self.config["servers"]:
+            interface = server["interface"]
+            if interface not in self.running:
                 continue
-            peer = self.peers.get(client["client_public_key"])
-            lines.append(f"peer: {client['client_public_key']}")
-            if peer:
-                if now - peer["handshake_at"] < 300:  # online: keep it chatty, each at its own pace
+            lines.append(
+                "\t".join([interface, "(hidden)", server["server_public_key"], str(server["port"]), *["0"] * 25, "off"])
+            )
+            for client in server["clients"]:
+                if client.get("suspended"):
+                    continue
+                peer = self.peers.get(client["client_public_key"])
+                if peer and now - peer["handshake_at"] < 300:  # online: keep it chatty, each at its own pace
                     spread = sum(map(ord, client["client_public_key"])) % 97
                     peer["handshake_at"] = now - ((int(now) + spread) % 110 + 1)
                     peer["rx"] += (int(now) % 7 + 1) * 180 * KiB
                     peer["tx"] += (int(now) % 5 + 1) * 40 * KiB
-                lines += [
-                    f"  endpoint: {peer['endpoint']}",
-                    f"  allowed ips: {client['client_ip']}/32",
-                    f"  latest handshake: {fmt_ago(now - peer['handshake_at'])}",
-                    f"  transfer: {fmt_bytes(peer['rx'])} received, {fmt_bytes(peer['tx'])} sent",
-                ]
-            else:
-                lines.append(f"  allowed ips: {client['client_ip']}/32")
-            lines.append("")
+                endpoint, handshake, rx, tx = (
+                    (peer["endpoint"], int(peer["handshake_at"]), int(peer["rx"]), int(peer["tx"]))
+                    if peer
+                    else ("(none)", 0, 0, 0)
+                )
+                lines.append("\t".join([interface, client["client_public_key"], "(hidden)", endpoint,
+                                        f"{client['client_ip']}/32", str(handshake), str(rx), str(tx), "off"]))  # fmt: skip
         return "\n".join(lines)
 
     # --- network lookups ------------------------------------------------------

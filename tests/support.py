@@ -98,29 +98,37 @@ class FakeSubprocess:
 
 
 class SystemPaths:
-    """Patch `os.path.exists` for the two system paths the manager probes.
+    """Stand in for the two system probes the manager makes.
 
-    `interfaces` lists the names under /sys/class/net (i.e. interfaces that are up);
-    `scripts` says whether /app/scripts/*_iptables.sh exist. Every other path is real.
+    `interfaces` lists the interfaces that are up: their sysfs operstate reads
+    "unknown", as amneziawg-go's tun does (`states` overrides one, e.g. "down");
+    any other interface does not exist. `scripts` says whether
+    /app/scripts/*_iptables.sh exist. Every other path is real.
     """
 
     def __init__(self, interfaces=(), scripts=True):
         self.interfaces = set(interfaces)
+        self.states = {}
         self.scripts = scripts
         self._real_exists = os.path.exists
-        self._patcher = mock.patch("os.path.exists", self._exists)
+        self._patchers = [
+            mock.patch("os.path.exists", self._exists),
+            mock.patch("services.amnezia_manager.AmneziaManager.interface_state", staticmethod(self._state)),
+        ]
 
     def _exists(self, path):
         path = str(path)
-        if path.startswith("/sys/class/net/"):
-            return path.rsplit("/", 1)[-1] in self.interfaces
         if path.startswith("/app/scripts/"):
             return self.scripts
         return self._real_exists(path)
 
+    def _state(self, interface):
+        return self.states.get(interface, "unknown" if interface in self.interfaces else None)
+
     def start(self, test_case):
-        self._patcher.start()
-        test_case.addCleanup(self._patcher.stop)
+        for patcher in self._patchers:
+            patcher.start()
+            test_case.addCleanup(patcher.stop)
         return self
 
 

@@ -592,7 +592,8 @@ class FormUi {
         }
         const safe = (v) => this.escapeHtml(v ?? '');
         const traffic = (this.lastTrafficByServer.get(serverId) || {})[clientId] || {};
-        const seen = traffic.endpoint && traffic.latest_handshake ? `handshake ${safe(traffic.latest_handshake)}` : 'not connected';
+        const age = window.ServerUi.since(traffic.latest_handshake_seconds);
+        const seen = traffic.endpoint && age ? `handshake ${safe(age)}` : 'not connected';
         const params = { ...(server.client_defaults || {}), ...(client.client_params || {}) };
         const ctx = {
             snapshot: null,

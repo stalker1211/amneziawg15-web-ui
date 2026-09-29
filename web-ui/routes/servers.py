@@ -72,7 +72,7 @@ def register_server_routes(
             **payload,
             "server_name": server.get("name"),
             "protocol": server.get("protocol"),
-            "status": amnezia_manager.client_status(client.get("id")),
+            "status": amnezia_manager.client_status(client),
             "config_issued_at": client.get("config_issued_at"),
             "config_outdated": bool(server) and amnezia_manager.is_config_outdated(server, client),
         }

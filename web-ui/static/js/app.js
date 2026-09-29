@@ -17,22 +17,9 @@ class AmneziaApp {
         this.init();
     }
 
+    // Online = a handshake in the last 5 minutes, as the server computed it.
     isClientActiveFromTraffic(clientTraffic) {
-        if (!clientTraffic || typeof clientTraffic !== 'object') return false;
-        if (typeof clientTraffic.active === 'boolean') return clientTraffic.active;
-        const seconds = clientTraffic.latest_handshake_seconds;
-        if (typeof seconds === 'number' && Number.isFinite(seconds)) return seconds <= 300;
-        const hs = String(clientTraffic.latest_handshake || '').toLowerCase();
-        if (!hs || hs.includes('never')) return false;
-        // Very small fallback parser (covers the common 'N seconds/minutes ago' format).
-        let total = 0;
-        const unitSeconds = { second: 1, minute: 60, hour: 3600, day: 86400 };
-        const re = /(\d+)\s+(second|minute|hour|day)s?/g;
-        let m;
-        while ((m = re.exec(hs)) !== null) {
-            total += Number(m[1]) * (unitSeconds[m[2]] || 0);
-        }
-        return total > 0 && total <= 300;
+        return !!(clientTraffic && clientTraffic.active);
     }
 
     init() {
@@ -728,12 +715,10 @@ class AmneziaApp {
         const decoratedTraffic = {};
         for (const [clientId, info] of Object.entries(nextTraffic)) {
             const prev = prevTraffic[clientId] || {};
-            const received = info?.received;
-            const sent = info?.sent;
             decoratedTraffic[clientId] = {
                 ...(info || {}),
-                _rx_changed: typeof received !== 'undefined' && received !== prev.received,
-                _tx_changed: typeof sent !== 'undefined' && sent !== prev.sent,
+                _rx_changed: prev.received_bytes !== undefined && info?.received_bytes !== prev.received_bytes,
+                _tx_changed: prev.sent_bytes !== undefined && info?.sent_bytes !== prev.sent_bytes,
             };
         }
 

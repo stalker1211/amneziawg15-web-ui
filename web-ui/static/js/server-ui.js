@@ -31,9 +31,27 @@ class ServerUi {
         return `${d.getDate()} ${month}, ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
     }
 
-    // `awg show` says "1.39 MiB received"; the row's arrows already say which way.
-    static amount(value) {
-        return String(value || '0 B').replace(/\s+(received|sent)$/i, '');
+    // Byte counts as `awg show` prints them: "0 B", "1.39 MiB".
+    static bytes(value) {
+        let n = Math.max(0, Number(value) || 0);
+        const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+        let unit = 0;
+        while (n >= 1024 && unit < units.length - 1) {
+            n /= 1024;
+            unit += 1;
+        }
+        return unit === 0 ? `${n} B` : `${n.toFixed(2)} ${units[unit]}`;
+    }
+
+    // "57 s ago", "3 min 5 s ago", "2 h 10 min ago", "4 d ago": a handshake's age.
+    static since(seconds) {
+        const s = Number(seconds);
+        if (seconds === null || seconds === undefined || !Number.isFinite(s) || s < 0) return '';
+        const part = (big, bigUnit, small, smallUnit) => `${big} ${bigUnit}${small ? ` ${small} ${smallUnit}` : ''} ago`;
+        if (s < 60) return `${s} s ago`;
+        if (s < 3600) return part(Math.floor(s / 60), 'min', s % 60, 's');
+        if (s < 86400) return part(Math.floor(s / 3600), 'h', Math.floor((s % 3600) / 60), 'min');
+        return `${Math.floor(s / 86400)} d ago`;
     }
 
     static isOnline(server, client, clientTraffic, isActive) {
@@ -148,13 +166,14 @@ class ServerUi {
         const dotClass = suspended ? 'bg-amber-400'
             : on ? 'bg-green-500' : 'ring-1 ring-inset ring-gray-400 dark:ring-[#64748b]';
         const dotTitle = suspended ? 'Suspended' : on ? 'Online: handshake in the last 5 minutes' : 'Offline';
-        const endpoint = clientTraffic.endpoint && clientTraffic.endpoint !== '(none)' ? clientTraffic.endpoint : '';
+        const endpoint = clientTraffic.endpoint || '';
         const cc = String(clientTraffic.geo_country_code || '').toUpperCase();
         const where = [cc, clientTraffic.geo].filter(Boolean).join(' / ');
         const place = endpoint
             ? `${ServerUi.flag(cc)} <span class="font-mono">${safe(endpoint)}</span>${where ? ` <span class="text-gray-500 dark:text-[#94a3b8]">${safe(where)}</span>` : ''}`
             : '<span class="text-gray-400 dark:text-[#64748b]">Not connected</span>';
-        const handshake = endpoint && clientTraffic.latest_handshake ? `handshake ${safe(clientTraffic.latest_handshake)}` : '';
+        const age = ServerUi.since(clientTraffic.latest_handshake_seconds);
+        const handshake = endpoint && age ? `handshake ${safe(age)}` : '';
         const dim = suspended ? 'opacity-55' : '';
 
         const suspendedPill = suspended
@@ -180,8 +199,8 @@ class ServerUi {
                 ${handshake ? `<span class="text-gray-500 dark:text-[#94a3b8] ${dim}">${handshake}</span>` : ''}
             </div>
             <div class="flex flex-col whitespace-nowrap text-xs font-mono tabular-nums text-gray-600 dark:text-[#cbd5e1] md:text-right ${dim}">
-                <span title="Received"><span class="traffic-arrow ${rxFlash}">↓</span> ${safe(ServerUi.amount(clientTraffic.received))}</span>
-                <span title="Sent"><span class="traffic-arrow ${txFlash}">↑</span> ${safe(ServerUi.amount(clientTraffic.sent))}</span>
+                <span title="Received"><span class="traffic-arrow ${rxFlash}">↓</span> ${safe(ServerUi.bytes(clientTraffic.received_bytes))}</span>
+                <span title="Sent"><span class="traffic-arrow ${txFlash}">↑</span> ${safe(ServerUi.bytes(clientTraffic.sent_bytes))}</span>
             </div>
             <div class="flex items-center gap-1 justify-end">
                 <label class="switch switch-sm switch-amber mr-1.5" title="${suspended ? 'Reactivate client' : 'Suspend client'}">

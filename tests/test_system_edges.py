@@ -108,8 +108,10 @@ class StartStopTests(_Base):
         server = self._server(enable_nat=False, block_lan_cidrs=True)
         self.assertTrue(self.manager.start_server(server["id"]))
 
-        up, setup = self.fake.calls
+        up, setup, dump = self.fake.calls
         self.assertEqual(up["args"], ["/usr/bin/awg-quick", "up", server["interface"]])
+        # The status push after a start reads telemetry first, so the reload sees it.
+        self.assertEqual(dump["args"], ["/usr/bin/awg", "show", "all", "dump"])
         self.assertEqual(setup["args"], ["/app/scripts/setup_iptables.sh", server["interface"], server["subnet"]])
         self.assertEqual((setup["env"]["ENABLE_NAT"], setup["env"]["BLOCK_LAN_CIDRS"]), ("0", "1"))
 
@@ -131,7 +133,7 @@ class StartStopTests(_Base):
         server = self._server()
         self.manager.awg_log_level = "debug"
         self.assertTrue(self.manager.start_server(server["id"]))
-        up, setup = self.fake.calls
+        up, setup, _dump = self.fake.calls
         self.assertEqual(up["env"]["LOG_LEVEL"], "debug")
         self.assertEqual(up["env"]["WG_QUICK_USERSPACE_IMPLEMENTATION"], "/usr/local/bin/amneziawg-go-logged")
         self.assertEqual(setup["args"][0], "/app/scripts/setup_iptables.sh")
@@ -149,13 +151,15 @@ class StartStopTests(_Base):
         self.paths.scripts = False
         with self.assertLogs(MODULE, "WARNING"):
             self.assertTrue(self.manager.start_server(server["id"]))
-        self.assertEqual(self.fake.argvs(), [["/usr/bin/awg-quick", "up", server["interface"]]])
+        self.assertEqual(
+            self.fake.argvs(), [["/usr/bin/awg-quick", "up", server["interface"]], ["/usr/bin/awg", "show", "all", "dump"]]
+        )
 
     def test_stop_cleans_iptables_before_taking_the_interface_down(self):
         server = self._server(enable_nat=True, block_lan_cidrs=False)
         self.assertTrue(self.manager.stop_server(server["id"]))
 
-        cleanup, down = self.fake.calls
+        cleanup, down, _dump = self.fake.calls
         self.assertEqual(cleanup["args"], ["/app/scripts/cleanup_iptables.sh", server["interface"], server["subnet"]])
         self.assertEqual((cleanup["env"]["ENABLE_NAT"], cleanup["env"]["BLOCK_LAN_CIDRS"]), ("1", "0"))
         self.assertEqual(down["args"], ["/usr/bin/awg-quick", "down", server["interface"]])
@@ -237,15 +241,15 @@ class ServerStatusTests(_Base):
         self.assertEqual(self.manager.get_server_status(server["id"]), "stopped")
         self.assertEqual(self.fake.calls, [])
 
-    def test_present_interface_is_checked_with_ip_link(self):
+    def test_status_is_the_sysfs_operstate(self):
         server = self._server()
         self.paths.interfaces.add(server["interface"])
-        self.fake.respond(["ip", "link", "show"], f"5: {server['interface']}: <POINTOPOINT,UP> mtu 1420 state UNKNOWN")
         self.assertEqual(self.manager.get_server_status(server["id"]), "running")
-        self.assertEqual(self.fake.argvs(), [["ip", "link", "show", server["interface"]]])
-
-        self.fake.respond(["ip", "link", "show"], f"5: {server['interface']}: <POINTOPOINT> mtu 1420 state DOWN")
+        self.paths.states[server["interface"]] = "up"
+        self.assertEqual(self.manager.get_server_status(server["id"]), "running")
+        self.paths.states[server["interface"]] = "down"
         self.assertEqual(self.manager.get_server_status(server["id"]), "stopped")
+        self.assertEqual(self.fake.calls, [])
 
     def test_unknown_server(self):
         self.assertEqual(self.manager.get_server_status("nope"), "not_found")
@@ -276,25 +280,29 @@ class StopLoop(BaseException):
 
 
 class BackgroundTaskTests(_Base):
-    def test_traffic_loop_emits_only_for_running_servers(self):
+    def test_traffic_loop_reads_one_dump_and_emits_only_for_running_servers(self):
         from services.amnezia_manager import AmneziaManager
 
         up = self._server("up", "10.55.0.0/24", 51955)
         self._server("down", "10.56.0.0/24", 51956)
-        self.paths.interfaces.add(up["interface"])
-        self.fake.respond(["ip", "link", "show"], "state UNKNOWN")
+        client, _ = self.manager.add_wireguard_client(up["id"], "phone")
+        self.fake.calls.clear()
+        iface, key = up["interface"], client["client_public_key"]
+        dump = "\t".join([iface, "priv", "pub", "51955", *["0"] * 25, "off"]) + "\n"
+        dump += "\t".join([iface, key, "psk", "(none)", "10.55.0.2/32", "0", "0", "0", "off"]) + "\n"  # noqa: FLY002
+        self.fake.respond(["/usr/bin/awg", "show", "all", "dump"], dump)
 
         socketio = FakeSocketIO(run_tasks=True)
         socketio.sleep = mock.Mock(side_effect=StopLoop)
         self.manager.socketio = socketio
-        with (
-            mock.patch.object(self.manager, "get_traffic_for_server", return_value={"clients": {}}) as traffic,
-            self.assertRaises(StopLoop),
-        ):
+        with mock.patch.object(self.manager, "save_config") as save, self.assertRaises(StopLoop):
             AmneziaManager.start_traffic_monitoring(self.manager)
 
-        traffic.assert_called_once_with(up["id"])
-        self.assertEqual(socketio.emitted, [("traffic_update", {"server_id": up["id"], "traffic": {"clients": {}}})])
+        # One subprocess per tick, whatever the number of servers; never a config write.
+        self.assertEqual(self.fake.argvs(), [["/usr/bin/awg", "show", "all", "dump"]])
+        save.assert_not_called()
+        self.assertEqual([(event, data["server_id"]) for event, data in socketio.emitted], [("traffic_update", up["id"])])
+        self.assertEqual(socketio.emitted[0][1]["traffic"][client["id"]]["received_bytes"], 0)
         socketio.sleep.assert_called_once_with(7)
 
     def test_status_is_emitted_after_the_delay(self):

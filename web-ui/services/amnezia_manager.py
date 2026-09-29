@@ -83,6 +83,10 @@ class AmneziaManager:
     # HeaderProtectionKey is set (device/noise-types.go: HeaderCipherNonceSize).
     HEADER_CIPHER_NONCE_SIZE = 12
 
+    # A client is online (and "active") after a handshake this recent; with keepalive
+    # 25 a connected device handshakes about every 2 minutes.
+    ACTIVE_WITHIN_SECONDS = 5 * 60
+
     # GeoIP lookups are cached to avoid rate limits; bounded so the dict cannot grow
     # without limit as new client endpoints appear.
     GEOIP_CACHE_TTL_SECONDS = 24 * 3600
@@ -144,9 +148,9 @@ class AmneziaManager:
             self.save_config()
         self.public_ip = self.detect_public_ip() or self.last_known_public_ip()
 
-        # Whether each client had a handshake in the last 5 minutes, from the last
-        # telemetry read. Memory only: the monitor never writes the config.
-        self._client_active = {}
+        # The last `awg show all dump`, parsed (read_telemetry). Memory only: the
+        # monitor never writes the config.
+        self._telemetry = {"at": 0.0, "interfaces": {}}
 
         # Cache GeoIP lookups to avoid rate limits and latency
         # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
@@ -1819,24 +1823,25 @@ PersistentKeepalive = 25
             logger.error("Failed to stop server %s: %s", server_id, e)
         return False
 
+    @staticmethod
+    def interface_state(interface):
+        """The kernel's operstate for an interface, or None when it does not exist."""
+        try:
+            with open(f"/sys/class/net/{interface}/operstate", encoding="ascii") as f:
+                return f.read().strip()
+        except OSError:
+            return None
+
     def get_server_status(self, server_id):
-        """Check actual server status by checking interface"""
+        """'running' when the server's interface is up, from sysfs: no subprocess.
+
+        amneziawg-go's tun reports operstate "unknown" (it has no carrier) while it
+        runs; a stopped server has no interface at all.
+        """
         server = self.get_server(server_id)
         if not server:
             return "not_found"
-
-        # A stopped server has no interface at all, so ask sysfs before spawning
-        # anything. start_traffic_monitoring() calls this for every configured
-        # server every 7s; without this guard a stopped server ran `ip link show`
-        # against a missing interface each tick, and run_command logged that
-        # foreseeable non-zero exit at error level — roughly 12k lines a day,
-        # which buried every real failure in the log.
-        if not os.path.exists(f"/sys/class/net/{server['interface']}"):
-            return "stopped"
-
-        # run_command returns None when the interface does not exist.
-        result = self.run_command(["ip", "link", "show", server["interface"]])
-        return "running" if result and "state UNKNOWN" in result else "stopped"
+        return "running" if self.interface_state(server["interface"]) in ("up", "unknown") else "stopped"
 
     def emit_status_after_delay(self, server_id, status, delay_seconds=2):
         """Push a server_status update to clients once the interface has settled.
@@ -1847,30 +1852,24 @@ PersistentKeepalive = 25
 
         def emit_later():
             self.socketio.sleep(delay_seconds)
+            self.read_telemetry()  # so the reload it prompts sees the interface as it is now
             self.socketio.emit("server_status", {"server_id": server_id, "status": status})
 
         self.socketio.start_background_task(emit_later)
 
     def start_traffic_monitoring(self):
-        """Start background thread for real-time traffic monitoring"""
+        """Read telemetry every 7 s and push each running server's to the browsers."""
 
         # A Socket.IO background task, so it follows the server's async mode.
         def monitor_traffic():
             while True:
                 try:
-                    # Get all running servers and their traffic
+                    self.read_telemetry()
                     for server in self.config["servers"]:
-                        # Check actual status, not cached
-                        actual_status = self.get_server_status(server["id"])
-                        if actual_status == "running":
-                            traffic = self.get_traffic_for_server(server["id"])
-                            if traffic:
-                                self.socketio.emit(
-                                    "traffic_update",
-                                    {"server_id": server["id"], "traffic": traffic},
-                                )
-
-                    self.socketio.sleep(7)  # Update every 7 seconds
+                        traffic = self.get_traffic_for_server(server["id"])
+                        if traffic is not None:
+                            self.socketio.emit("traffic_update", {"server_id": server["id"], "traffic": traffic})
+                    self.socketio.sleep(7)
                 except Exception as e:
                     logger.error("Error in traffic monitoring: %s", e)
                     self.socketio.sleep(7)
@@ -1882,124 +1881,91 @@ PersistentKeepalive = 25
         servers = [s for s in self.config["servers"] if not server_id or s.get("id") == server_id]
         return [client for server in servers for client in server.get("clients", [])]
 
+    @staticmethod
+    def parse_dump(output):
+        """`awg show all dump` as {interface: {peer public key: {...}}}.
+
+        One tab-separated line per interface, then one per peer (amneziawg-tools
+        show.c dump_print). A peer line is: interface, public key, preshared key,
+        endpoint ("(none)" before the first packet), allowed ips, latest handshake
+        (Unix time, 0 = never), rx bytes, tx bytes, keepalive. The interface's own
+        line comes first and has ~30 columns (keys, S/H, I1-I5, ...); it is skipped.
+        """
+        interfaces, current = {}, None
+        for line in output.splitlines():
+            fields = line.split("\t")
+            name = fields[0]
+            if not name:
+                continue
+            if name != current:
+                current = name
+                interfaces[name] = {}
+                continue
+            if len(fields) != 9:
+                logger.debug("Skipping an unexpected dump line for %s (%d columns)", name, len(fields))
+                continue
+            _, public_key, _psk, endpoint, _allowed, handshake, rx, tx, _keepalive = fields
+            try:
+                interfaces[name][public_key] = {
+                    "endpoint": None if endpoint == "(none)" else endpoint,
+                    "handshake_at": int(handshake) or None,
+                    "rx": int(rx),
+                    "tx": int(tx),
+                }
+            except ValueError:
+                logger.debug("Skipping a malformed dump line for %s", name)
+        return interfaces
+
+    def read_telemetry(self):
+        """One `awg show all dump` for every interface, kept as the last snapshot.
+
+        It replaces an `ip link show` plus an `awg show` per running server, and the
+        parsing of "1.39 MiB received" and "1 minute, 2 seconds ago". Only running
+        interfaces appear in it.
+        """
+        output = self.run_command(["/usr/bin/awg", "show", "all", "dump"])
+        self._telemetry = {"at": time.time(), "interfaces": self.parse_dump(output or "")}
+        return self._telemetry
+
+    @staticmethod
+    def endpoint_ip(endpoint):
+        """The address of 'ip:port' or '[ipv6]:port', or None."""
+        match = re.fullmatch(r"\[([^\]]+)\]:\d+|([^:]+):\d+", endpoint or "")
+        return (match.group(1) or match.group(2)) if match else None
+
+    def _peer_telemetry(self, server, client):
+        """(the client's dump entry or {}, seconds since its last handshake or None)."""
+        peers = self._telemetry["interfaces"].get(server.get("interface")) or {}
+        info = peers.get(client.get("client_public_key")) or {}
+        handshake_at = info.get("handshake_at")
+        seconds = max(0, int(self._telemetry["at"] - handshake_at)) if handshake_at else None
+        return info, seconds
+
     def get_traffic_for_server(self, server_id):
+        """Per-client traffic of a running server from the last snapshot, or None when
+        the server is unknown or its interface is not running."""
         server = self.get_server(server_id)
-        if not server:
+        if not server or server["interface"] not in self._telemetry["interfaces"]:
             return None
 
-        interface = server["interface"]
-        output = self.run_command(["/usr/bin/awg", "show", interface])
-        if not output:
-            return None
-
-        # Parse output to get traffic+endpoint per peer public key
-        peer_data = {}
-
-        lines = output.splitlines()
-        current_peer = None
-        for line in lines:
-            line = line.strip()
-            if line.startswith("peer:"):
-                current_peer = line.split("peer:")[1].strip()
-                if current_peer:
-                    peer_data.setdefault(current_peer, {})
-            elif line.startswith("endpoint:") and current_peer:
-                # Example: endpoint: 203.0.113.10:51820
-                # Example IPv6: endpoint: [2001:db8::1]:51820
-                endpoint = line.split("endpoint:", 1)[1].strip()
-                peer_data.setdefault(current_peer, {})["endpoint"] = endpoint
-            elif line.startswith("latest handshake:") and current_peer:
-                # Example: latest handshake: 57 seconds ago
-                # Example: latest handshake: 1 minute, 2 seconds ago
-                handshake = line.split("latest handshake:", 1)[1].strip()
-                peer_data.setdefault(current_peer, {})["latest_handshake"] = handshake
-            elif line.startswith("transfer:") and current_peer:
-                # Example: transfer: 1.39 MiB received, 6.59 MiB sent
-                transfer_line = line[len("transfer:") :].strip()
-                # Parse received and sent
-                parts = transfer_line.split(",")
-                received = parts[0].strip() if len(parts) > 0 else ""
-                sent = parts[1].strip() if len(parts) > 1 else ""
-                peer_data.setdefault(current_peer, {})["received"] = received
-                peer_data.setdefault(current_peer, {})["sent"] = sent
-                current_peer = None
-
-        def extract_ip_from_endpoint(endpoint_value):
-            if not endpoint_value or endpoint_value == "(none)":
-                return None
-            # IPv6 endpoint format: [ip]:port
-            m = re.match(r"^\[([^\]]+)\]:(\d+)$", endpoint_value)
-            if m:
-                return m.group(1)
-            # IPv4 endpoint format: ip:port
-            m = re.match(r"^([^:]+):(\d+)$", endpoint_value)
-            if m:
-                return m.group(1)
-            return None
-
-        def parse_handshake_seconds(handshake_value):
-            """Parse 'latest handshake' strings from `awg show` into seconds.
-
-            Examples:
-              - '57 seconds ago' -> 57
-              - '1 minute, 2 seconds ago' -> 62
-              - 'Never' -> None
-            """
-            if not handshake_value or not isinstance(handshake_value, str):
-                return None
-            s = handshake_value.strip().lower()
-            if not s:
-                return None
-            if "never" in s:
-                return None
-            if "just now" in s:
-                return 0
-
-            total = 0
-            unit_seconds = {
-                "second": 1,
-                "minute": 60,
-                "hour": 3600,
-                "day": 86400,
-            }
-            for m in re.finditer(r"(\d+)\s+(second|minute|hour|day)s?", s):
-                try:
-                    n = int(m.group(1))
-                    unit = m.group(2)
-                    total += n * unit_seconds.get(unit, 0)
-                except Exception:
-                    continue
-            return total if total > 0 else None
-
-        def geoip_lookup(ip):
-            return self.lookup_geoip(ip)
-
-        # Map peer data to clients by matching public keys
-        clients_traffic = {}
+        traffic = {}
         for client in server.get("clients", []):
-            pubkey = client.get("client_public_key")
-            info = (peer_data.get(pubkey) if pubkey else None) or {}
-            endpoint = info.get("endpoint")
-            latest_handshake = info.get("latest_handshake")
-            latest_handshake_seconds = parse_handshake_seconds(latest_handshake)
-            active = latest_handshake_seconds is not None and latest_handshake_seconds <= 5 * 60
-            geo_label, geo_country_code = geoip_lookup(extract_ip_from_endpoint(endpoint))
-
-            self._client_active[client.get("id")] = active
-
-            clients_traffic[client.get("id")] = {
-                "received": info.get("received") or "0 B",
-                "sent": info.get("sent") or "0 B",
-                "endpoint": endpoint,
+            info, seconds = self._peer_telemetry(server, client)
+            geo_label, geo_country_code = self.lookup_geoip(self.endpoint_ip(info.get("endpoint")))
+            traffic[client.get("id")] = {
+                "received_bytes": info.get("rx", 0),
+                "sent_bytes": info.get("tx", 0),
+                "endpoint": info.get("endpoint"),
                 "geo": geo_label,
                 "geo_country_code": geo_country_code,
-                "latest_handshake": latest_handshake,
-                "latest_handshake_seconds": latest_handshake_seconds,
-                "active": active,
+                "latest_handshake_at": info.get("handshake_at"),
+                "latest_handshake_seconds": seconds,
+                "active": seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS,
             }
+        return traffic
 
-        return clients_traffic
-
-    def client_status(self, client_id):
-        """'active' after a handshake in the last 5 minutes (last telemetry read), else 'inactive'."""
-        return "active" if self._client_active.get(client_id) else "inactive"
+    def client_status(self, client):
+        """'active' after a handshake in the last 5 minutes (last snapshot), else 'inactive'."""
+        server = self.get_server(client.get("server_id")) or {}
+        _, seconds = self._peer_telemetry(server, client)
+        return "active" if seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS else "inactive"

@@ -82,9 +82,24 @@ def _val(v):
     return "-" if v is None else str(v)
 
 
-def _compact_transfer(v):
-    """Make traffic fields shorter."""
-    return _val(v).replace(" received", "").replace(" sent", "")
+def _bytes(n):
+    """A byte count as awg prints it: '0 B', '1.39 MiB'."""
+    value, units = float(n or 0), ("B", "KiB", "MiB", "GiB", "TiB")
+    unit = 0
+    while value >= 1024 and unit < len(units) - 1:
+        value /= 1024
+        unit += 1
+    return f"{int(value)} B" if unit == 0 else f"{value:.2f} {units[unit]}"
+
+
+def _since(seconds):
+    """A handshake's age: '57 s ago', '3 min ago', 'never'."""
+    if seconds is None:
+        return "never"
+    for size, unit in ((86400, "d"), (3600, "h"), (60, "min")):
+        if seconds >= size:
+            return f"{seconds // size} {unit} ago"
+    return f"{seconds} s ago"
 
 
 def _format_geo(geo, country_code):
@@ -115,10 +130,10 @@ def _print_client(client, traffic, color_enabled):
     geo_str = _colorize(f" ({geo})", _Ansi.GRAY, enabled=color_enabled) if geo != "-" else ""
     print(f"\t  ip = {client.get('client_ip', '-')}  endpoint = {endpoint}{geo_str}")
 
-    hs_val = _val(tinfo.get("latest_handshake"))
+    hs_val = _since(tinfo.get("latest_handshake_seconds")) if tinfo else "-"
     hs = _colorize(hs_val, _handshake_color(hs_val), enabled=color_enabled)
-    rx = _colorize(_compact_transfer(tinfo.get("received")), _Ansi.MAGENTA, enabled=color_enabled)
-    tx = _colorize(_compact_transfer(tinfo.get("sent")), _Ansi.MAGENTA, enabled=color_enabled)
+    rx = _colorize(_bytes(tinfo.get("received_bytes")), _Ansi.MAGENTA, enabled=color_enabled)
+    tx = _colorize(_bytes(tinfo.get("sent_bytes")), _Ansi.MAGENTA, enabled=color_enabled)
     print(f"\t  last handshake: {hs}  rx = {rx}  tx = {tx}")
 
 

@@ -618,7 +618,7 @@ class ServerRouteTests(_RealSystemApp):
         self.assertEqual(self.client.post(self._url("start"), json={}).get_json(), {"status": "started"})
         self.assertEqual(self.fake.argvs()[0], ["/usr/bin/awg-quick", "up", self.server["interface"]])
         self.assertEqual(self.client.post(self._url("stop"), json={}).get_json(), {"status": "stopped"})
-        self.assertEqual(self.fake.argvs()[-1], ["/usr/bin/awg-quick", "down", self.server["interface"]])
+        self.assertEqual(self.fake.argvs()[-2], ["/usr/bin/awg-quick", "down", self.server["interface"]])
 
     def test_failed_start_is_reported(self):
         self.fake.respond(["/usr/bin/awg-quick", "up"], 1)
@@ -629,7 +629,6 @@ class ServerRouteTests(_RealSystemApp):
 
     def test_delete_stops_a_running_server_first(self):
         self.paths.interfaces.add(self.server["interface"])
-        self.fake.respond(["ip", "link", "show"], "state UNKNOWN")
         self.assertEqual(self.client.delete(self._url(), json={}).status_code, 200)
         self.assertIn(["/usr/bin/awg-quick", "down", self.server["interface"]], self.fake.argvs())
         self.assertIsNone(self.manager.get_server(self.server["id"]))
@@ -645,7 +644,6 @@ class ServerRouteTests(_RealSystemApp):
         self.assertEqual((stored["enable_nat"], stored["block_lan_cidrs"]), (False, True))
 
         self.paths.interfaces.add(self.server["interface"])
-        self.fake.respond(["ip", "link", "show"], "state UNKNOWN")
         self.assertEqual(self.client.post(self._url("networking"), json={}).get_json()["iptables"], "reapplied")
         self.fake.respond(["/app/scripts/setup_iptables.sh"], 1)
         with self.assertLogs("services.amnezia_manager", "ERROR"):
