@@ -5,10 +5,10 @@ installs, so it is checked against a real v1.5.1-era file (tests/fixtures/), whi
 must render byte-for-byte the same .conf files as a server created today, and
 against a v2.1-era file, which stored every client twice.
 
-Since v2.2 each client lives only in its server's `clients` list. save_config()
-still writes the top-level `clients` map v2.1 reads, derived from those lists, so
-rolling the image back keeps every client; the mutation tests check that map after
-each change, because it is what a rollback would load.
+Since v2.2 each client lives only in its server's `clients` list, and since 2.4 that
+is also all the file holds: no top-level `clients` map, and nothing per client that
+is derived (server name, protocol, live status). The mutation tests check the saved
+file after each change.
 """
 
 import json
@@ -36,6 +36,16 @@ def restart(manager):
 
 def saved(manager):
     return json.loads(Path(manager.config_file).read_text(encoding="utf-8"))
+
+
+def as_v21(data):
+    """The same state in the v2.1 layout: every client also in a top-level map, with
+    its server's name, as 2.1 (and 2.2-2.3, for a rollback) wrote it."""
+    for server in data["servers"]:
+        for client in server["clients"]:
+            client["server_name"] = server["name"]
+    data["clients"] = {c["id"]: dict(c) for server in data["servers"] for c in server["clients"]}
+    return data
 
 
 class LegacyConfigMigrationTests(unittest.TestCase):
@@ -76,8 +86,8 @@ class LegacyConfigMigrationTests(unittest.TestCase):
         expected = {"Jc": 8, "Jmin": 40, "Jmax": 70}
         self.assertEqual({key: self.client["client_params"][key] for key in expected}, expected)
         self.manager.save_config()
-        rollback = saved(self.manager)["clients"]["cli151"]
-        self.assertEqual({key: rollback["client_params"][key] for key in expected}, expected)
+        on_disk = saved(self.manager)["servers"][0]["clients"][0]
+        self.assertEqual({key: on_disk["client_params"][key] for key in expected}, expected)
 
     def test_server_conf_matches_a_server_created_today(self):
         self.manager.write_server_conf(self.server)
@@ -128,7 +138,7 @@ class SaveConfigTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual(errors, [])
-        self.assertEqual(len(saved(manager)["clients"]), 1)
+        self.assertEqual(len(saved(manager)["servers"][0]["clients"]), 1)
         self.assertEqual(stat.S_IMODE(os.stat(manager.config_file).st_mode), 0o600)
         leftovers = [p for p in os.listdir(os.path.dirname(manager.config_file)) if p.endswith(".tmp")]
         self.assertEqual(leftovers, [])
@@ -146,7 +156,7 @@ class TwoStoreMigrationTests(unittest.TestCase):
         self.first = first
 
     def _load(self, edit):
-        data = saved(self.first)
+        data = as_v21(saved(self.first))
         edit(data)
         Path(self.first.config_file).write_text(json.dumps(data), encoding="utf-8")
         return restart(self.first)
@@ -185,7 +195,7 @@ class TwoStoreMigrationTests(unittest.TestCase):
 
 
 class ClientMutationTests(unittest.TestCase):
-    """Every mutation route updates the one store, and the rollback map follows it."""
+    """Every mutation route updates the one store, and the file holds nothing else."""
 
     def setUp(self):
         first = build_manager()
@@ -207,19 +217,15 @@ class ClientMutationTests(unittest.TestCase):
     def _url(self, *parts):
         return "/".join(("/api/servers", self.server["id"], *parts))
 
-    def assert_rollback_map_matches(self):
-        """The saved `clients` map is exactly what v2.1 expects: every client, once, with
-        its server's id and current name -- nothing stale, nothing missing."""
+    def assert_saved_state_matches(self):
+        """The file holds each client once, in its server's list, and nothing derived:
+        no top-level map, no server name, protocol or live status per client."""
         data = saved(self.manager)
-        expected = {
-            client["id"]: {**client, "server_id": server["id"], "server_name": server["name"]}
-            for server in data["servers"]
-            for client in server["clients"]
-        }
-        self.assertEqual(data["clients"], expected)
-        # 2.1 lists clients from the server lists, so they carry server_name on disk too.
+        self.assertNotIn("clients", data)
         for server in data["servers"]:
-            self.assertEqual({c["server_name"] for c in server["clients"]} or {server["name"]}, {server["name"]})
+            for client in server["clients"]:
+                self.assertEqual(client["server_id"], server["id"])
+                self.assertFalse({"server_name", "protocol", "status"} & set(client), client)
         self.assertEqual(
             {c["id"] for c in restart(self.manager).get_client_configs()},
             {c["id"] for c in self.manager.get_client_configs()},
@@ -238,26 +244,25 @@ class ClientMutationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.manager.get_client(self.phone["id"])["name"], "tablet")
         self.assertIn("# Client: tablet", self._conf())
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_rename_server_is_seen_by_every_client(self):
         response = self.http.post(self._url("rename"), json={"name": "cabin"})
         self.assertEqual(response.status_code, 200)
         listed = self.http.get(self._url("clients")).get_json()
         self.assertEqual({c["server_name"] for c in listed}, {"cabin"})
-        self.assertEqual({c["server_name"] for c in saved(self.manager)["clients"].values()}, {"cabin"})
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_suspend_and_reactivate(self):
         url = self._url("clients", self.phone["id"], "suspend")
         self.assertTrue(self.http.post(url, json={}).get_json()["suspended"])
         self.assertNotIn(self._peer(self.phone), self._conf())
         self.assertIn(self._peer(self.laptop), self._conf())
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
         self.assertFalse(self.http.post(url, json={}).get_json()["suspended"])
         self.assertIn(self._peer(self.phone), self._conf())
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_update_client_params(self):
         params = {"Jc": 5, "Jmin": 30, "Jmax": 60}
@@ -265,7 +270,7 @@ class ClientMutationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         stored = self.manager.get_client(self.phone["id"])["client_params"]
         self.assertEqual({key: stored[key] for key in params}, params)
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_update_transport_params(self):
         payload = {"protocol": "AWG 2.0", "S1": 70, "S2": 80, "S3": 30, "S4": 25,
@@ -273,7 +278,7 @@ class ClientMutationTests(unittest.TestCase):
         response = self.http.post(self._url("transport-params"), json=payload)
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertIn("S1 = 70", self._conf())
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_delete_client(self):
         response = self.http.delete(self._url("clients", self.phone["id"]), json={})
@@ -282,7 +287,7 @@ class ClientMutationTests(unittest.TestCase):
         self.assertIsNotNone(self.manager.get_client(self.laptop["id"]))
         self.assertNotIn(self._peer(self.phone), self._conf())
         self.assertIn(self._peer(self.laptop), self._conf())
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_delete_server_removes_only_its_clients(self):
         other = self._create_server(self.manager, "office", "10.41.0.0/24", 51941)
@@ -292,7 +297,7 @@ class ClientMutationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual({c["id"] for c in self.manager.get_client_configs()}, {desk["id"]})
         self.assertFalse(os.path.exists(self.server["config_path"]))
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
     def test_client_ids_are_scoped_to_their_server(self):
         other = self._create_server(self.manager, "office", "10.41.0.0/24", 51941)
@@ -305,7 +310,7 @@ class ClientMutationTests(unittest.TestCase):
 
         phone = self.manager.get_client(self.phone["id"])
         self.assertEqual((phone["name"], phone["suspended"]), ("phone", False))
-        self.assert_rollback_map_matches()
+        self.assert_saved_state_matches()
 
 
 if __name__ == "__main__":

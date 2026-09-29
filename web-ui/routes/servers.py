@@ -64,12 +64,15 @@ def register_server_routes(
     secret_keys = frozenset({"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"})
 
     def serialize_client(client, server=None):
-        # server_name is not stored per client; it always comes from the server.
+        # None of these is stored per client: the server's name and protocol, and the
+        # status from live telemetry.
         server = server or amnezia_manager.get_server(client.get("server_id")) or {}
         payload = {key: value for key, value in client.items() if key not in secret_keys}
         return {
             **payload,
             "server_name": server.get("name"),
+            "protocol": server.get("protocol"),
+            "status": amnezia_manager.client_status(client.get("id")),
             "config_issued_at": client.get("config_issued_at"),
             "config_outdated": bool(server) and amnezia_manager.is_config_outdated(server, client),
         }

@@ -8,6 +8,7 @@ which must be ignored.
 """
 
 import unittest
+from unittest import mock
 
 from tests.support import build_manager
 
@@ -125,8 +126,14 @@ class ShowOutputParsingTests(unittest.TestCase):
         """The sample has a second peer that is not a known client."""
         self.assertNotIn("b3RoZXJQVUJMSUNrZXkwMDAwMDAwMDAwMDAwMDAwMDAA=", self.traffic)
 
-    def test_client_status_is_derived(self):
-        self.assertEqual(self.manager.get_client(self.client["id"])["status"], "active")
+    def test_client_status_is_derived_and_never_stored(self):
+        self.assertEqual(self.manager.client_status(self.client["id"]), "active")
+        self.assertNotIn("status", self.manager.get_client(self.client["id"]))
+        self.assertEqual(self.manager.client_status("unknown"), "inactive")
+        # The monitor reads telemetry every 7 s; it must never write the config.
+        with mock.patch.object(self.manager, "save_config") as save:
+            self.manager.get_traffic_for_server(self.server["id"])
+        save.assert_not_called()
 
 
 class MissingDataTests(unittest.TestCase):

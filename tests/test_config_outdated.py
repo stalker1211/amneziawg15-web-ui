@@ -159,7 +159,7 @@ class FingerprintBackfillTests(unittest.TestCase):
         # As written by 2.2: the old client has neither field. The new one keeps its
         # explicit None -- created on this version but never handed out.
         data = json.loads(Path(self.config_file).read_text(encoding="utf-8"))
-        for client in (*data["servers"][0]["clients"], data["clients"][self.old["id"]]):
+        for client in data["servers"][0]["clients"]:
             if client["id"] == self.old["id"]:
                 client.pop("config_issued_fingerprint")
                 client.pop("config_issued_at")

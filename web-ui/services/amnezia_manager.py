@@ -144,9 +144,9 @@ class AmneziaManager:
             self.save_config()
         self.public_ip = self.detect_public_ip() or self.last_known_public_ip()
 
-        # Track derived client status updates (active/inactive) and persist with throttling.
-        self._client_status_dirty = False
-        self._last_client_status_persist_ts = 0.0
+        # Whether each client had a handshake in the last 5 minutes, from the last
+        # telemetry read. Memory only: the monitor never writes the config.
+        self._client_active = {}
 
         # Cache GeoIP lookups to avoid rate limits and latency
         # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
@@ -854,7 +854,11 @@ class AmneziaManager:
                     client_params = client.get("obfuscation_params") or legacy_params
                 client["client_params"] = self.extract_client_params(client_params)
                 client["server_id"] = server.get("id")
-                client.pop("server_name", None)  # derived from the server when serialized
+                # Derived when serialized: the name and protocol from the server, the
+                # status from live telemetry. Until 2.4 the traffic monitor saved
+                # status (up to once a minute) and protocol was a stale copy.
+                for derived in ("server_name", "status", "protocol"):
+                    client.pop(derived, None)
 
             # Pre-1.6 kept everything in one `obfuscation_params` dict; it has been
             # lifted into transport_params / client_params above and is not kept.
@@ -873,24 +877,16 @@ class AmneziaManager:
     def save_config(self):
         """Persist config atomically: a crash mid-write must not lose server keys.
 
-        On disk it keeps the v2.1 layout -- each client also carries `server_name`,
-        and a top-level `clients` map repeats them -- all derived here from the server
-        lists, so rolling the image back to 2.1 shows exactly the same state. Both are
-        dropped on load; remove this once 2.1 is no longer a rollback target.
-
-        One writer at a time (request threads and the traffic monitor both save), and
-        each write gets its own temp file, created 0600 so the keys in it are never
-        readable by others, then atomically renamed over the config.
+        One writer at a time (request threads and request-driven saves can overlap),
+        and each write gets its own temp file, created 0600 so the keys in it are never
+        readable by others, then atomically renamed over the config. Until 2.4 it also
+        wrote the v2.1 layout (a top-level `clients` map, `server_name` per client) so
+        the 2.1 image could be rolled back to; loading such a file still works.
         """
         directory = os.path.dirname(self.config_file) or "."
         os.makedirs(directory, exist_ok=True)
         with self._save_lock:
-            servers = [
-                {**server, "clients": [{**client, "server_name": server["name"]} for client in server.get("clients", [])]}
-                for server in self.config["servers"]
-            ]
-            legacy_client_map = {client["id"]: client for server in servers for client in server["clients"]}
-            payload = json.dumps({**self.config, "servers": servers, "clients": legacy_client_map}, indent=2)
+            payload = json.dumps(self.config, indent=2)
             fd, tmp_path = tempfile.mkstemp(prefix=".web_config-", suffix=".tmp", dir=directory)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1481,13 +1477,11 @@ AllowedIPs = {client["client_ip"]}/32
             "id": client_id,
             "name": client_name,
             "server_id": server_id,
-            "status": "inactive",
             "created_at": time.time(),
             "client_private_key": client_keys["private_key"],
             "client_public_key": client_keys["public_key"],
             "preshared_key": preshared_key,
             "client_ip": client_ip,
-            "protocol": server.get("protocol", self.DEFAULT_PROTOCOL),
             "suspended": False,
             "client_params": dict(base_client_params),
             # Not handed out yet; set by mark_config_issued. None, not absent, so
@@ -1991,12 +1985,7 @@ PersistentKeepalive = 25
             active = latest_handshake_seconds is not None and latest_handshake_seconds <= 5 * 60
             geo_label, geo_country_code = geoip_lookup(extract_ip_from_endpoint(endpoint))
 
-            # Persist derived status into the client record, so /api/* clients reflect
-            # live activity without the UI needing traffic.
-            desired_status = "active" if active else "inactive"
-            if client.get("status") != desired_status:
-                client["status"] = desired_status
-                self._client_status_dirty = True
+            self._client_active[client.get("id")] = active
 
             clients_traffic[client.get("id")] = {
                 "received": info.get("received") or "0 B",
@@ -2009,14 +1998,8 @@ PersistentKeepalive = 25
                 "active": active,
             }
 
-        # Throttle config writes: persist derived status at most once per minute.
-        if self._client_status_dirty:
-            now = time.time()
-            if (now - self._last_client_status_persist_ts) >= 60:
-                try:
-                    self.save_config()
-                    self._client_status_dirty = False
-                    self._last_client_status_persist_ts = now
-                except Exception as e:
-                    logger.error("Failed to persist client status updates: %s", e)
         return clients_traffic
+
+    def client_status(self, client_id):
+        """'active' after a handshake in the last 5 minutes (last telemetry read), else 'inactive'."""
+        return "active" if self._client_active.get(client_id) else "inactive"
