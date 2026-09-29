@@ -175,11 +175,24 @@ function check(label, condition, detail) {
         await new Promise((r) => setTimeout(r, 600));
         check('create form offers all four protocols', await page.evaluate(() =>
             [...document.getElementById('t-protocol').options].map((o) => o.value).join(',') === 'AWG 1.5,AWG 2.0,AWG 3.0,AWG 3.1'));
-        check('AWG 3.0 random params respect the S >= 12 floor', await page.evaluate(() => {
-            document.getElementById('t-protocol').value = 'AWG 3.0';
-            amneziaApp.toggleProtocolFields('AWG 3.0', 't-');
-            amneziaApp.generateRandomParams();
-            return ['S1', 'S2', 'S3', 'S4'].every((k) => Number(document.getElementById('t-' + k).value) >= 12);
+        check('create form opens with generated parameters, not a fixed set', await page.evaluate(() => {
+            const v = (k) => document.getElementById('t-' + k).value;
+            return /^\d+$/.test(v('S1')) && v('S1') !== '50' && Number(v('H1')) > 4000 && Number(v('H4')) > Number(v('H1'));
+        }));
+        check('AWG 3.0 random params respect the S >= 12 floor and bring a key', await page.evaluate(async () => {
+            const select = document.getElementById('t-protocol');
+            select.value = 'AWG 3.0';
+            select.dispatchEvent(new Event('change', { bubbles: true })); // regenerates: nothing was typed
+            await new Promise((r) => setTimeout(r, 500));
+            return ['S1', 'S2', 'S3', 'S4'].every((k) => Number(document.getElementById('t-' + k).value) >= 12)
+                && /^[A-Za-z0-9+/]{43}=$/.test(document.getElementById('t-HeaderProtectionKey').value)
+                && /^\d+-\d+$/.test(document.getElementById('t-H1').value);
+        }));
+        check('Randomize keeps a header protection key that is already there', await page.evaluate(async () => {
+            const key = document.getElementById('t-HeaderProtectionKey').value;
+            const h1 = document.getElementById('t-H1').value;
+            await amneziaApp.generateRandomParams();
+            return document.getElementById('t-HeaderProtectionKey').value === key && document.getElementById('t-H1').value !== h1;
         }));
         check('AWG 3.1 options become visible', await page.evaluate(() => {
             document.getElementById('t-protocol').value = 'AWG 3.1';

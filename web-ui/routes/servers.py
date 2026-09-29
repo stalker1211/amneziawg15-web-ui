@@ -145,6 +145,22 @@ def register_server_routes(
 
         abort(400, description="Expected transport_params or client_params with server_id")
 
+    @server_bp.route("/api/generate", methods=["POST"])
+    def generate():
+        """Random parameters for a form, the one generator the UI uses: {protocol, mtu}
+        -> {protocol, transport_params, client_defaults}. A dry run like /api/validate;
+        nothing is saved. Everything drawn passes the validators without a warning."""
+        data = json_body()
+        protocol = amnezia_manager.normalize_protocol(data.get("protocol"))
+        mtu = amnezia_manager.validate_mtu(data.get("mtu", amnezia_manager.default_mtu))
+        return jsonify(
+            {
+                "protocol": protocol,
+                "transport_params": amnezia_manager.generate_transport_params(protocol, mtu),
+                "client_defaults": amnezia_manager.generate_client_defaults(protocol),
+            }
+        )
+
     # --- servers ------------------------------------------------------------------
 
     @server_bp.route("/api/servers", methods=["GET"])

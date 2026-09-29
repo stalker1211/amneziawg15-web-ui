@@ -35,25 +35,6 @@ class AmneziaApp {
         return total > 0 && total <= 300;
     }
 
-    // Generate a base64-encoded 32-byte key, matching `awg genkey` output format.
-    // Used for the AWG 3.x HeaderProtectionKey, which is a plain symmetric key.
-    generateBase64Key() {
-        const bytes = new Uint8Array(32);
-        crypto.getRandomValues(bytes);
-        let binary = '';
-        bytes.forEach((b) => { binary += String.fromCharCode(b); });
-        return btoa(binary);
-    }
-
-    // Fill a HeaderProtectionKey input with a freshly generated key. Used by the
-    // Generate buttons in both the create form and the server config modal.
-    fillHeaderProtectionKey(elementId) {
-        const element = document.getElementById(elementId);
-        if (!element) return;
-        element.value = this.generateBase64Key();
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-
     init() {
         document.addEventListener('DOMContentLoaded', () => {
             console.log("AmneziaWG Web UI initializing...");

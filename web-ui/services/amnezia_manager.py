@@ -5,19 +5,21 @@ import hashlib
 import ipaddress
 import json
 import os
-import random
 import re
 import subprocess
 import tempfile
 import threading
 import time
 import uuid
+from typing import ClassVar
 from urllib.parse import urlparse
 
 import requests
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 from requests.adapters import HTTPAdapter
+
+from services import generator
 
 logger = get_logger(__name__)
 
@@ -57,6 +59,24 @@ class AmneziaManager:
     TRANSPORT_PARAM_KEYS = ("S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4")
     TRANSPORT_AWG3_PARAM_KEYS = ("HeaderProtectionKey",)
     TRANSPORT_AWG31_PARAM_KEYS = ("RandomTrailers", "DisableCookies")
+
+    # CPS tags amneziawg-go builds I1-I5 from (device/obf.go obfBuilders). `<c>` is
+    # only in the kernel module; the daemon refuses it as an unknown tag.
+    CPS_TAGS = ("b", "t", "r", "rc", "rd", "d", "ds", "dz")
+
+    # WireGuard's timer constants (device/constants.go), which the AWG 3.x timing
+    # params replace; used to check a partly set group against its defaults.
+    WG_DEFAULT_TIMINGS: ClassVar[dict[str, int]] = {
+        "RekeyAfterTime": 120,
+        "RekeyTimeout": 5,
+        "RejectAfterTime": 180,
+        "KeepaliveTimeout": 10,
+        "MaxHandshakeAttempts": 18,
+    }
+
+    # S1-S4, Jc, Jmin, Jmax are uint16 on the wire; H1-H4 are uint32.
+    UINT16_MAX = 0xFFFF
+    UINT32_MAX = 0xFFFFFFFF
 
     # amneziawg-go uses the first 12 bytes of each packet's S-padding as the header
     # protection cipher nonce, so every S value must be at least this large once a
@@ -597,10 +617,14 @@ class AmneziaManager:
             start, end = int(start_raw), int(end_raw)
             if start > end:
                 raise ValueError(f"Invalid header range '{raw}': start must be <= end")
+            if end > self.UINT32_MAX:
+                raise ValueError(f"Header value '{raw}' exceeds {self.UINT32_MAX} (a uint32)")
             return {"raw": f"{start}-{end}", "start": start, "end": end}
 
         if re.fullmatch(r"\d+", raw):
             number = int(raw)
+            if number > self.UINT32_MAX:
+                raise ValueError(f"Header value '{raw}' exceeds {self.UINT32_MAX} (a uint32)")
             return {"raw": str(number), "start": number, "end": number}
 
         if self.protocol_supports_header_ranges(protocol):
@@ -637,18 +661,21 @@ class AmneziaManager:
         for key in ("S1", "S2", "S3", "S4"):
             if transport[key] is not None and transport[key] < 0:
                 raise ValueError(f"{key} must be non-negative, got {transport[key]}")
+            if transport[key] is not None and transport[key] > self.UINT16_MAX:
+                raise ValueError(f"{key} must be at most {self.UINT16_MAX}, got {transport[key]}")
         if transport["S1"] is not None and transport["S2"] is not None and transport["S1"] + 56 == transport["S2"]:
             raise ValueError("S1 + 56 must not equal S2")
 
-        if protocol == "AWG 1.5":
+        if not self.protocol_supports_s34(protocol):
             transport.pop("S3", None)
             transport.pop("S4", None)
-        else:
-            parsed_headers = [self.parse_header_value(transport[key], protocol) for key in ("H1", "H2", "H3", "H4")]
-            for index, current in enumerate(parsed_headers):
-                for other in parsed_headers[index + 1 :]:
-                    if current["start"] <= other["end"] and other["start"] <= current["end"]:
-                        raise ValueError(f"H1-H4 ranges must not intersect for {protocol}")
+
+        # Every protocol: on AWG 1.5 two equal single values are the same overlap.
+        parsed_headers = [self.parse_header_value(transport[key], protocol) for key in ("H1", "H2", "H3", "H4")]
+        for index, current in enumerate(parsed_headers):
+            for other in parsed_headers[index + 1 :]:
+                if current["start"] <= other["end"] and other["start"] <= current["end"]:
+                    raise ValueError(f"H1-H4 ranges must not intersect for {protocol}")
 
         if self.protocol_supports_awg3(protocol):
             header_protection_key = sanitize_config_value(params.get("HeaderProtectionKey") or "")
@@ -685,14 +712,23 @@ class AmneziaManager:
         except Exception as exc:
             raise ValueError("Jc, Jmin and Jmax must be integers") from exc
 
-        if jc <= 0:
-            raise ValueError(f"Jc must be positive, got {jc}")
+        # Jc 0 sends no junk; the daemon accepts it.
+        if jc < 0:
+            raise ValueError(f"Jc must not be negative, got {jc}")
         if jmin <= 0:
             raise ValueError(f"Jmin must be positive, got {jmin}")
         if jmax <= 0:
             raise ValueError(f"Jmax must be positive, got {jmax}")
+        for key, value in (("Jc", jc), ("Jmin", jmin), ("Jmax", jmax)):
+            if value > self.UINT16_MAX:
+                raise ValueError(f"{key} must be at most {self.UINT16_MAX}, got {value}")
+        # The daemon draws min + rand(max - min) in uint32: max < min wraps to ~4 GB.
         if jmin > jmax:
             raise ValueError(f"Jmin must be less than or equal to Jmax, got Jmin={jmin}, Jmax={jmax}")
+
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            if merged.get(key):
+                self.parse_signature_packet(key, merged[key])
 
         merged["Jc"] = jc
         merged["Jmin"] = jmin
@@ -708,6 +744,51 @@ class AmneziaManager:
                 merged.pop(key, None)
 
         return merged
+
+    def parse_signature_packet(self, key, value):
+        """Check an I1-I5 value the way amneziawg-go builds it (device/obf.go newObfChain).
+
+        Returns (bytes the packet carries, warnings). Raises ValueError for what the
+        daemon refuses -- a missing '>', an empty or unknown tag (`<c>` included), a
+        bad argument -- and for a negative size, which it accepts and then panics on.
+        """
+        size, warnings, position, stray = 0, [], 0, False
+        while True:
+            start = value.find("<", position)
+            if value[position : len(value) if start == -1 else start].strip():
+                stray = True
+            if start == -1:
+                break
+            end = value.find(">", start)
+            if end == -1:
+                raise ValueError(f"{key}: a tag is missing its closing '>'")
+            position = end + 1
+            parts = value[start + 1 : end].split()
+            if not parts:
+                raise ValueError(f"{key}: empty tag <>")
+            tag, arg = parts[0], parts[1] if len(parts) > 1 else ""
+            if tag not in self.CPS_TAGS:
+                known = " ".join(f"<{t}>" for t in self.CPS_TAGS)
+                raise ValueError(f"{key}: unknown tag <{tag}> (amneziawg-go knows {known}; <c> is kernel-module only)")
+            if tag == "b":
+                digits = arg.removeprefix("0x")
+                if not digits or len(digits) % 2 or not re.fullmatch(r"[0-9A-Fa-f]+", digits):
+                    raise ValueError(f"{key}: <b> needs an even number of hex digits, e.g. <b 0xc0ffee>")
+                size += len(digits) // 2
+            elif tag == "t":
+                size += 4  # a Unix timestamp
+            elif tag in ("r", "rc", "rd", "dz"):
+                if not re.fullmatch(r"[+-]?\d+", arg):
+                    raise ValueError(f"{key}: <{tag}> needs a byte count, e.g. <{tag} 16>")
+                if int(arg) < 0:
+                    raise ValueError(f"{key}: <{tag}> must not be negative, got {arg}")
+                size += int(arg)
+            else:
+                # send.go builds I-packets with no payload, so these write nothing.
+                warnings.append(f"{key}: <{tag}> adds nothing here: signature packets carry no payload.")
+        if stray:
+            warnings.append(f"{key}: text outside <...> tags is ignored by the daemon.")
+        return size, warnings
 
     def build_effective_client_params(self, server, client_params=None):
         transport_params = self.extract_transport_params(server.get("transport_params") or {}, server.get("protocol"))
@@ -882,39 +963,19 @@ class AmneziaManager:
         return base64.b64encode(os.urandom(32)).decode("utf-8")
 
     def generate_transport_params(self, protocol, mtu=1420):
-        S1 = random.randint(15, min(150, mtu - 148))
-        s2_candidates = [s for s in range(15, min(150, mtu - 92) + 1) if s != S1 + 56]
-        S2 = random.choice(s2_candidates)
-        params: dict[str, int | str] = {
-            "S1": S1,
-            "S2": S2,
-            "H1": random.randint(10000, 100000),
-            "H2": random.randint(100000, 200000),
-            "H3": random.randint(200000, 300000),
-            "H4": random.randint(300000, 400000),
-        }
-        if self.protocol_supports_s34(protocol):
-            params["S3"] = random.randint(15, 150)
-            # S4 pads every transport packet, so it stays small; with header
-            # protection the 12-byte nonce is carved out of it, hence the floor.
-            s4_low = self.HEADER_CIPHER_NONCE_SIZE if self.protocol_supports_awg3(protocol) else 0
-            params["S4"] = random.randint(s4_low, 32)
-        if self.protocol_supports_awg3(protocol):
-            params["HeaderProtectionKey"] = self.generate_header_protection_key()
-        return params
-
-    def generate_client_defaults(self, mtu=1420):
-        jmin = random.randint(4, mtu - 2)
-        jmax = random.randint(jmin + 1, mtu)
-        defaults = self.default_client_defaults()
-        defaults.update(
-            {
-                "Jc": random.randint(4, 12),
-                "Jmin": jmin,
-                "Jmax": jmax,
-            }
+        """Random server-side parameters that pass validation with no warning (services/generator.py)."""
+        awg3 = self.protocol_supports_awg3(protocol)
+        return generator.transport_params(
+            with_s34=self.protocol_supports_s34(protocol),
+            header_ranges=self.protocol_supports_header_ranges(protocol),
+            awg3=awg3,
+            mtu=mtu,
+            header_protection_key=self.generate_header_protection_key() if awg3 else None,
         )
-        return defaults
+
+    def generate_client_defaults(self, protocol=None):
+        """Random client-side defaults: a small junk train and, on AWG 3.x, padding and timers."""
+        return generator.client_defaults(awg3=self.protocol_supports_awg3(protocol))
 
     def create_wireguard_server(self, server_data):
         """Create a new WireGuard server configuration with environment defaults"""
@@ -950,7 +1011,7 @@ class AmneziaManager:
 
         raw_client_defaults = server_data.get("client_defaults")
         if not isinstance(raw_client_defaults, dict):
-            raw_client_defaults = self.generate_client_defaults(mtu)
+            raw_client_defaults = self.generate_client_defaults(protocol)
         client_defaults = self.validate_client_params(raw_client_defaults)
 
         server_ip = self.get_server_ip(subnet)
@@ -1225,19 +1286,77 @@ AllowedIPs = {client["client_ip"]}/32
             warnings.append(f"S2 ({s2}) is above the rule-of-thumb bound MTU - 92 ({mtu - 92}).")
         if self.protocol_supports_s34(protocol):
             outside_common_range("S3")
+            s3 = transport.get("S3")
+            # Equal padded lengths never break the tunnel (the H ranges still tell the
+            # types apart), but two message types of one length are a fingerprint.
+            if s3 is not None and s1 is not None and s3 == s1 + 84:
+                warnings.append(f"S3 ({s3}) = S1 + 84: cookie replies come out as long as handshake initiations.")
+            if s3 is not None and s2 is not None and s3 == s2 + 28:
+                warnings.append(f"S3 ({s3}) = S2 + 28: cookie replies come out as long as handshake responses.")
             if s4 is not None and s4 > 32:
                 warnings.append(f"S4 ({s4}) is above a conservative 0-32 and may cause 'message too long' errors.")
+
+        # 1-4 are WireGuard's own message types. With header protection the docs
+        # recommend exactly that (the cipher hides the type); without, it is plain WireGuard.
+        if not transport.get("HeaderProtectionKey"):
+            standard = [key for key in ("H1", "H2", "H3", "H4") if int(str(transport.get(key, "0")).split("-")[0]) <= 4]
+            if standard:
+                warnings.append(f"{', '.join(standard)} in 1-4: WireGuard's own message types, which DPI recognises.")
         return warnings
 
-    @staticmethod
-    def client_param_warnings(client_params, mtu):
+    def client_param_warnings(self, client_params, mtu):
         """Practical guidance for validated client params."""
         warnings = []
         jc, jmax = client_params["Jc"], client_params["Jmax"]
-        if not 4 <= jc <= 12:
+        if jc == 0:
+            warnings.append("Jc is 0: no junk packets are sent before the handshake.")
+        elif not 4 <= jc <= 12:
             warnings.append(f"Jc ({jc}) is outside the recommended range 4-12.")
         if jmax >= mtu:
             warnings.append(f"Jmax ({jmax}) is at or above MTU ({mtu}) and may fragment junk packets.")
+
+        for key in ("I1", "I2", "I3", "I4", "I5"):
+            if not client_params.get(key):
+                continue
+            size, packet_warnings = self.parse_signature_packet(key, client_params[key])
+            warnings += packet_warnings
+            if size > mtu:
+                warnings.append(f"{key} is {size} bytes, above MTU ({mtu}): it may be fragmented.")
+
+        warnings += self.timing_warnings(client_params)
+        return warnings
+
+    def timing_warnings(self, client_params):
+        """The two AWG 3.x timer rules (timers.go), checked when any of them is set.
+
+        keyRefreshTimeoutReceiving = RejectAfterTime - KeepaliveTimeout.lo -
+        RekeyTimeout.lo, clamped at 0, and at 0 every received packet counts as due
+        for a rekey (receive.go). And a session rekeys before it is rejected only if
+        RekeyAfterTime ends before RejectAfterTime starts.
+        """
+        involved = ("RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout")
+        if not any(client_params.get(key) for key in involved):
+            return []
+
+        def bounds(key):
+            raw = client_params.get(key) or str(self.WG_DEFAULT_TIMINGS[key])
+            low, _, high = raw.partition("-")
+            return int(low), int(high or low)
+
+        reject_lo = bounds("RejectAfterTime")[0]
+        keepalive_lo, rekey_timeout_lo = bounds("KeepaliveTimeout")[0], bounds("RekeyTimeout")[0]
+        rekey_after_hi = bounds("RekeyAfterTime")[1]
+        warnings = []
+        if reject_lo <= keepalive_lo + rekey_timeout_lo:
+            warnings.append(
+                f"RejectAfterTime starts at {reject_lo}, not above KeepaliveTimeout + RekeyTimeout "
+                f"({keepalive_lo} + {rekey_timeout_lo}): every received packet would trigger a rekey."
+            )
+        if rekey_after_hi >= reject_lo:
+            warnings.append(
+                f"RekeyAfterTime reaches {rekey_after_hi}, not below RejectAfterTime's start ({reject_lo}): "
+                "the session can be rejected before it rekeys."
+            )
         return warnings
 
     def preview_transport_change(self, server, protocol, transport):

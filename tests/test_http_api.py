@@ -264,8 +264,13 @@ class ProtocolTableTests(unittest.TestCase):
 
         app_source = Path(os.path.join(STATIC_JS, "app.js")).read_text(encoding="utf-8")
         self.assertIn("const allowRanges = window.Protocols.supportsHeaderRanges(protocol);", app_source)
-        forms_source = Path(os.path.join(STATIC_JS, "forms.js")).read_text(encoding="utf-8")
-        self.assertIn("P.supportsHeaderRanges(protocol) ? `${start}-", forms_source)
+
+    def test_the_frontend_draws_no_parameters_of_its_own(self):
+        # One generator, on the server (POST /api/generate); the JS one disagreed with it.
+        for path in sorted(Path(STATIC_JS).glob("*.js")):
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("Math.random", source, path.name)
+            self.assertNotIn("getRandomValues", source, path.name)
 
 
 class SystemRoutesTests(unittest.TestCase):

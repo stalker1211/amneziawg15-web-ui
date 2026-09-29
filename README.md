@@ -166,6 +166,7 @@ Basic Auth credentials.
 | POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.x timings |
 | POST | `/api/servers/<id>/clients/<cid>/rename` \| `/suspend` | rename, or toggle access |
 | POST | `/api/servers/<id>/clients/<cid>/issued` | record that the current config was handed to the device (clears `config_outdated`) |
+| POST | `/api/generate` | random parameters for a protocol: `{"protocol", "mtu"}` → `{"transport_params", "client_defaults"}`; saves nothing |
 | POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params"}` or `{"server_id", "client_params"}` → `{"errors", "warnings"}` |
 | GET | `/api/clients` | all clients across all servers |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
@@ -288,7 +289,7 @@ Two kinds, and the distinction matters:
 
 | Parameter | Side | Protocol | Notes |
 | --- | --- | --- | --- |
-| `Jc` | client | 1.5+ | Junk packets sent before each handshake (4–12 typical) |
+| `Jc` | client | 1.5+ | Junk packets sent before each handshake (4–12 typical; 0 sends none) |
 | `Jmin` / `Jmax` | client | 1.5+ | Junk packet size range; `Jmin` ≤ `Jmax`, keep `Jmax` < MTU or packets fragment |
 | `I1`–`I5` | client | 1.5+ | Custom signature packets (tag syntax above). Empty values are omitted |
 | `S1` | server | 1.5+ | Padding of the handshake initiation message. `S1 + 56 ≠ S2` |
@@ -304,8 +305,17 @@ Two kinds, and the distinction matters:
 
 Junk packets and signature packets camouflage the *handshake* only; S/H values and
 header protection affect the tunnel itself. The UI shows only the fields the selected
-protocol supports, validates the constraints above before saving, and can generate a
-random valid set for you.
+protocol supports and validates the constraints above as you type: I1–I5 tags as
+the daemon parses them, uint16/uint32 bounds, and warnings for equal message sizes,
+H values in WireGuard's own 1–4 (without header protection) and AWG 3.x timers that
+fight each other.
+
+Every new server gets its own random parameters, drawn by the server
+(`/api/generate`, ported from [AmneziaWG Architect](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT)):
+four disjoint H ranges under 2³¹−1, S sizes that never make two message types the
+same length, a small junk train (Jc 4–12, Jmax ≤ 160), and on AWG 3.x a header
+protection key, content padding and timers that keep WireGuard's timer rules.
+**Randomize** draws a fresh set.
 
 ## 🔍 Logs, backup and debugging
 

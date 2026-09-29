@@ -193,9 +193,14 @@ class FormUi {
         const body = document.getElementById('drawerBody');
         if (!body) return;
         const onEdit = (e) => {
-            if (!this.drawerCtx) return;
+            const ctx = this.drawerCtx;
+            if (!ctx) return;
             if (e.target.tagName === 'TEXTAREA') this.autosizeTextarea(e.target, 200);
             if (e.target.id === 'c-copyFrom') this.fillClientFromCopy(e.target.value);
+            // Typing marks the transport fields as the user's own; values filled in by
+            // the generator fire no input event.
+            if (e.type === 'input' && e.target.id.startsWith('t-')) ctx.transportEdited = true;
+            if (e.type === 'change' && e.target.id === 't-protocol') ctx.onProtocolChange?.();
             this.scheduleDrawerCheck();
         };
         body.addEventListener('input', onEdit);
@@ -285,7 +290,7 @@ class FormUi {
     }
 
     // --- new server -----------------------------------------------------------------
-    openCreateServerModal() {
+    async openCreateServerModal() {
         const env = this.environment || {};
         const servers = this.lastServers || [];
         const usedPorts = new Set(servers.map((s) => Number(s.port)));
@@ -296,7 +301,11 @@ class FormUi {
         while (usedThird.has(third) && third < 255) third += 1;
 
         const protocol = window.Protocols.DEFAULT;
-        const transport = { S1: 50, S2: 60, H1: '1000', H2: '2000', H3: '3000', H4: '4000' };
+        const mtu = env.default_mtu || 1420;
+        // Every server gets its own random parameters (it used to be one fixed set
+        // unless Randomize was pressed).
+        const generated = await this.fetchGenerated(protocol, mtu).catch(() => null);
+        const transport = generated?.transport_params || {};
         const basics = () => ({
             name: (document.getElementById('f-name')?.value || '').trim(),
             port: this.numberOrText('f-port'),
@@ -318,7 +327,7 @@ class FormUi {
                         ${this.formField('f-name', 'Name', '', { cls: 'sm:col-span-2', placeholder: 'e.g. Home NL' })}
                         ${this.formField('f-port', 'Port (UDP)', port, { type: 'number', mono: true })}
                         ${this.formField('f-subnet', 'Subnet', `10.10.${third}.0/24`, { mono: true })}
-                        ${this.formField('f-mtu', 'MTU', env.default_mtu || 1420, { type: 'number', mono: true, hint: '1280-1440; 1420 suits most links, 1280 the most restrictive ones.' })}
+                        ${this.formField('f-mtu', 'MTU', mtu, { type: 'number', mono: true, hint: '1280-1440; 1420 suits most links, 1280 the most restrictive ones.' })}
                         ${this.formField('f-dns', 'DNS servers', env.default_dns || '1.1.1.1, 9.9.9.9', { mono: true, hint: 'Comma-separated, pushed to clients.' })}
                     </div>`)}
                 ${this.formSection('Networking', `
@@ -332,6 +341,8 @@ class FormUi {
             primaryLabel: 'Create server',
             ctx: {
                 mount: () => this.toggleProtocolFields(protocol, 't-'),
+                // A new protocol gets a fresh set, unless the fields were typed in.
+                onProtocolChange: () => { if (!this.drawerCtx?.transportEdited) this.generateRandomParams(); },
                 collect: () => ({ ...basics(), ...this.collectTransportForm() }),
                 validateBody: () => ({
                     server: { ...basics(), protocol: this.collectTransportForm().protocol, transport_params: transportParams() },
@@ -359,31 +370,53 @@ class FormUi {
         return /^\d+$/.test(raw) ? Number(raw) : raw;
     }
 
-    // Fills the transport fields with random values that pass validation.
-    generateRandomParams() {
-        const protocol = document.getElementById('t-protocol')?.value || window.Protocols.DEFAULT;
-        const P = window.Protocols;
-        const r = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
-        const set = (k, v) => { const el = document.getElementById(`t-${k}`); if (el) el.value = v; };
-        const s1 = r(15, 150);
-        let s2 = r(15, 150);
-        while (s1 + 56 === s2) s2 = r(15, 150);
-        set('S1', s1);
-        set('S2', s2);
-        if (P.supportsS34(protocol)) {
-            set('S3', r(15, 150));
-            // With header protection the daemon slices a 12-byte nonce out of each
-            // padding, so S4 cannot go below 12 on AWG 3.x.
-            set('S4', r(P.supportsAwg3(protocol) ? 12 : 0, 32));
-        }
-        // Four non-overlapping headers, one per billion.
-        [1, 2, 3, 4].forEach((i) => {
-            const start = r((i - 1) * 1e9 + 5, (i - 1) * 1e9 + 9e8);
-            set(`H${i}`, P.supportsHeaderRanges(protocol) ? `${start}-${start + r(1000, 50000)}` : String(start));
+    // Random parameters from the server (POST /api/generate), the one generator:
+    // every value it draws passes the validators without a warning.
+    async fetchGenerated(protocol, mtu) {
+        const n = Number(mtu);
+        return this.postJson('/api/generate', { protocol, ...(n >= 1280 && n <= 1440 ? { mtu: n } : {}) });
+    }
+
+    fillTransportFields(params, { keepKey = false } = {}) {
+        ['S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4'].forEach((k) => {
+            const el = document.getElementById(`t-${k}`);
+            if (el && !el.disabled) el.value = params[k] ?? '';
         });
         const key = document.getElementById('t-HeaderProtectionKey');
-        if (P.supportsAwg3(protocol) && key && !key.value.trim()) key.value = this.generateBase64Key();
-        this.scheduleDrawerCheck();
+        if (key && !key.disabled && params.HeaderProtectionKey && !(keepKey && key.value.trim())) {
+            key.value = params.HeaderProtectionKey;
+        }
+    }
+
+    // Randomize: a fresh set for the selected protocol. A header protection key that
+    // is already there stays (Generate replaces it).
+    async generateRandomParams() {
+        const ctx = this.drawerCtx;
+        const protocol = document.getElementById('t-protocol')?.value || window.Protocols.DEFAULT;
+        const mtu = document.getElementById('f-mtu')?.value || ctx?.mtu;
+        try {
+            const data = await this.fetchGenerated(protocol, mtu);
+            if (ctx !== this.drawerCtx) return;
+            this.fillTransportFields(data.transport_params, { keepKey: true });
+            if (ctx) ctx.transportEdited = false;
+            this.scheduleDrawerCheck();
+        } catch (error) {
+            this.showTempMessage(`Could not generate parameters: ${error.message}`, 'error');
+        }
+    }
+
+    // Generate: a new 32-byte header protection key, from the server like the rest.
+    async fillHeaderProtectionKey(elementId) {
+        const element = document.getElementById(elementId);
+        const protocol = document.getElementById('t-protocol')?.value;
+        if (!element || !window.Protocols.supportsAwg3(protocol)) return;
+        try {
+            const data = await this.fetchGenerated(protocol);
+            element.value = data.transport_params.HeaderProtectionKey || '';
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        } catch (error) {
+            this.showTempMessage(`Could not generate a key: ${error.message}`, 'error');
+        }
     }
 
     // --- server settings --------------------------------------------------------------
@@ -405,6 +438,7 @@ class FormUi {
         const ctx = {
             snapshot: null,
             saveLabel: 'Save changes',
+            mtu: info.mtu,
             mount: () => this.toggleProtocolFields(info.protocol, 't-'),
             collect,
             validateBody: () => {

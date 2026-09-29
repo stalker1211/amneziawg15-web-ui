@@ -178,7 +178,10 @@ class ClientParamsTests(ValidateTestCase):
         self.assertEqual(self.client({"Jc": 8, "Jmin": 8, "Jmax": 80}), {"errors": [], "warnings": []})
 
     def test_errors(self):
-        self.assertEqual(self.client({"Jc": 0})["errors"], ["Jc must be positive, got 0"])
+        self.assertEqual(self.client({"Jc": -1})["errors"], ["Jc must not be negative, got -1"])
+        self.assertEqual(
+            self.client({"Jc": 0}), {"errors": [], "warnings": ["Jc is 0: no junk packets are sent before the handshake."]}
+        )
         self.assertEqual(self.client({"Jc": 8, "RekeyTimeout": "9-3"})["errors"],
                          ["RekeyTimeout range '9-3' is inverted: start must be <= end"])  # fmt: skip
 

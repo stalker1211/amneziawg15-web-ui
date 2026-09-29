@@ -217,10 +217,35 @@ class ClientParamTests(unittest.TestCase):
         self.assertEqual(result["Jc"], 8)
         self.assertEqual(result["I1"], "")
 
-    def test_jc_jmin_jmax_must_be_positive(self):
-        for key in ("Jc", "Jmin", "Jmax"):
+    def test_jmin_jmax_must_be_positive_and_jc_not_negative(self):
+        for key, value in (("Jc", -1), ("Jmin", 0), ("Jmax", 0)):
             with self.assertRaises(ValueError, msg=key):
-                self.m.validate_client_params({"Jc": 8, "Jmin": 40, "Jmax": 70, key: 0})
+                self.m.validate_client_params({"Jc": 8, "Jmin": 40, "Jmax": 70, key: value})
+        # Jc 0 sends no junk; the daemon accepts it, and the form only warns.
+        self.assertEqual(self.m.validate_client_params({"Jc": 0, "Jmin": 40, "Jmax": 70})["Jc"], 0)
+
+    def test_uint16_bounds(self):
+        for key in ("Jc", "Jmin", "Jmax"):
+            with self.assertRaisesRegex(ValueError, f"{key} must be at most 65535"):
+                self.m.validate_client_params({"Jc": 8, "Jmin": 40, "Jmax": 70000, key: 70000})
+        for key in ("S1", "S2", "S3", "S4"):
+            params = {**VALID_TRANSPORT, key: 65536}
+            with self.assertRaisesRegex(ValueError, f"{key} must be at most 65535"):
+                self.m.validate_transport_params("AWG 2.0", params)
+        self.assertEqual(self.m.validate_transport_params("AWG 2.0", {**VALID_TRANSPORT, "S3": 65535})["S3"], 65535)
+
+    def test_header_values_are_uint32(self):
+        for value in ("4294967296", "5-4294967296"):
+            with self.assertRaisesRegex(ValueError, "exceeds 4294967295"):
+                self.m.validate_transport_params("AWG 2.0", {**VALID_TRANSPORT, "H4": value})
+        self.assertEqual(
+            self.m.validate_transport_params("AWG 2.0", {**VALID_TRANSPORT, "H4": "4294967295"})["H4"], "4294967295"
+        )
+
+    def test_duplicate_headers_are_refused_on_awg_15_too(self):
+        # Skipped until 2.4 by a `protocol == "AWG 1.5"` literal.
+        with self.assertRaisesRegex(ValueError, "must not intersect"):
+            self.m.validate_transport_params("AWG 1.5", {"S1": 50, "S2": 60, "H1": 7, "H2": 7, "H3": 9, "H4": 10})
 
     def test_jmin_must_not_exceed_jmax(self):
         with self.assertRaises(ValueError):
@@ -250,6 +275,90 @@ class ClientParamTests(unittest.TestCase):
             }
         )
         self.assertNotIn("\n", result["I1"])
+
+
+class SignaturePacketTests(unittest.TestCase):
+    """I1-I5 as amneziawg-go's newObfChain parses them (device/obf.go)."""
+
+    def setUp(self):
+        self.m = build_manager()
+
+    def packet(self, value):
+        return self.m.parse_signature_packet("I1", value)
+
+    def test_sizes_of_each_tag(self):
+        self.assertEqual(self.packet("<b 0xc0ffee><t><r 10><rc 3><rd 2><dz 4>"), (3 + 4 + 10 + 3 + 2 + 4, []))
+        self.assertEqual(self.packet("<b C0FFEE>")[0], 3)  # the 0x is optional, case is not
+        self.assertEqual(self.packet("  <t>  <r +5>  "), (9, []))
+
+    def test_what_the_daemon_refuses_is_an_error(self):
+        for value, message in (
+            ("<c>", "unknown tag <c>"),
+            ("<x 5>", "unknown tag <x>"),
+            ("<b 0xabc>", "even number of hex digits"),
+            ("<b 0xzz>", "even number of hex digits"),
+            ("<b>", "even number of hex digits"),
+            ("<r>", "needs a byte count"),
+            ("<r five>", "needs a byte count"),
+            ("<r -5>", "must not be negative"),
+            ("<r 5", "missing its closing"),
+            ("<>", "empty tag"),
+        ):
+            with self.assertRaisesRegex(ValueError, message, msg=value):
+                self.packet(value)
+
+    def test_what_the_daemon_ignores_is_a_warning(self):
+        self.assertEqual(self.packet("hello<r 5>")[1], ["I1: text outside <...> tags is ignored by the daemon."])
+        self.assertEqual(self.packet("<d><ds><r 2>")[1],
+                         ["I1: <d> adds nothing here: signature packets carry no payload.",
+                          "I1: <ds> adds nothing here: signature packets carry no payload."])  # fmt: skip
+
+    def test_client_params_reject_a_bad_packet_and_warn_on_a_big_one(self):
+        with self.assertRaisesRegex(ValueError, "I3: unknown tag <c>"):
+            self.m.validate_client_params({"I3": "<c><r 5>"})
+        params = self.m.validate_client_params({"I1": "<r 1400>"})
+        self.assertIn("I1 is 1400 bytes, above MTU (1280): it may be fragmented.", self.m.client_param_warnings(params, 1280))
+
+
+class ParamWarningTests(unittest.TestCase):
+    def setUp(self):
+        self.m = build_manager()
+
+    def transport_warnings(self, protocol="AWG 2.0", **changes):
+        validated = self.m.validate_transport_params(protocol, {**VALID_TRANSPORT, **changes})
+        return self.m.transport_param_warnings(protocol, validated, 1420)
+
+    def test_s3_collisions_are_a_fingerprint(self):
+        self.assertEqual(self.transport_warnings(S1=20, S2=50, S3=104),
+                         ["S3 (104) = S1 + 84: cookie replies come out as long as handshake initiations."])  # fmt: skip
+        self.assertEqual(self.transport_warnings(S1=20, S2=50, S3=78),
+                         ["S3 (78) = S2 + 28: cookie replies come out as long as handshake responses."])  # fmt: skip
+        self.assertEqual(self.transport_warnings(protocol="AWG 1.5", S1=20, S2=50, S3=78), [])
+
+    def test_headers_1_to_4_warn_unless_header_protection_hides_them(self):
+        standard = {"H1": "1", "H2": "2", "H3": "3", "H4": "4"}
+        self.assertEqual(self.transport_warnings(**standard),
+                         ["H1, H2, H3, H4 in 1-4: WireGuard's own message types, which DPI recognises."])  # fmt: skip
+        # A range that can draw 3 sometimes sends WireGuard's own cookie type.
+        self.assertEqual(len(self.transport_warnings(H2="3-900")), 1)
+        self.assertEqual(self.transport_warnings(H2="5-900"), [])
+        protected = {**standard, "S1": 50, "S2": 60, "S3": 40, "S4": 20, "HeaderProtectionKey": HEADER_PROTECTION_KEY}
+        self.assertEqual(self.transport_warnings(protocol="AWG 3.0", **protected), [])
+
+    def test_timer_rules(self):
+        def warnings(**timings):
+            return self.m.timing_warnings(self.m.validate_client_params(timings))
+
+        self.assertEqual(warnings(), [])
+        self.assertEqual(warnings(RekeyAfterTime="100-130", RejectAfterTime="170-190"), [])
+        self.assertEqual(warnings(RejectAfterTime="14-20"), [
+            ("RejectAfterTime starts at 14, not above KeepaliveTimeout + RekeyTimeout (10 + 5): "
+             "every received packet would trigger a rekey."),
+            ("RekeyAfterTime reaches 120, not below RejectAfterTime's start (14): "
+             "the session can be rejected before it rekeys."),
+        ])  # fmt: skip
+        self.assertEqual(len(warnings(RekeyAfterTime="150-200")), 1)
+        self.assertEqual(warnings(MaxHandshakeAttempts="1-3"), [])
 
 
 class SubnetAndKeyTests(unittest.TestCase):
