@@ -316,10 +316,21 @@ class HelperTests(unittest.TestCase):
     def test_is_valid_ip(self):
         from core.helpers import is_valid_ip
 
-        for ip in ("0.0.0.0", "10.0.0.1", "255.255.255.255", "01.2.3.4"):
+        for ip in ("0.0.0.0", "10.0.0.1", "255.255.255.255"):
             self.assertTrue(is_valid_ip(ip), ip)
-        for ip in ("1.2.3", "1.2.3.4.5", "256.1.1.1", "-1.2.3.4", "a.b.c.d", "", None, "::1", "1.2.3.4/24"):
+        # int() let "+1" and "1_0" through; a leading zero reads as octal to inet_aton.
+        bad = ("1.2.3", "1.2.3.4.5", "256.1.1.1", "-1.2.3.4", "a.b.c.d", "", None, "::1", "1.2.3.4/24",
+               "+1.2.3.4", "1_0.0.0.1", "01.2.3.4", " 1.2.3.4")  # fmt: skip
+        for ip in bad:
             self.assertFalse(is_valid_ip(ip), ip)
+
+    def test_daemon_log_level(self):
+        from core.helpers import parse_daemon_log_level
+
+        cases = {None: "off", "": "off", " off ": "off", "0": "off", "silent": "off", "ERROR": "error",
+                 "debug": "debug", "verbose": "debug", "loud": None}  # fmt: skip
+        for raw, expected in cases.items():
+            self.assertEqual(parse_daemon_log_level(raw), expected, raw)
 
 
 if __name__ == "__main__":

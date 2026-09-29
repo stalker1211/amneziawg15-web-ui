@@ -45,7 +45,7 @@ There are two independent log streams, each with its own variable.
 
 **VPN daemon (`amneziawg-go`)** — produced by the daemon itself, off by default. The container wraps it safely:
 
-- `AWG_LOG_LEVEL`: `debug|verbose|error|silent` to enable logs (empty/`off` disables). Sets the daemon's own `LOG_LEVEL` internally.
+- `AWG_LOG_LEVEL`: `error` or `debug` to enable logs (`verbose` means `debug`; empty/`off`/`silent` disables). It reaches the daemon only, never the web UI's own `LOG_LEVEL`.
 - `AWG_LOG_FILE`: log file path (default: `/var/log/amnezia/amneziawg-go.log`).
 
 Once enabled, use **⋯ → Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
@@ -170,7 +170,7 @@ Basic Auth credentials.
 | GET | `/api/clients` | all clients across all servers |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
-| GET | `/api/system/refresh-ip` | re-detect the public IP |
+| POST | `/api/system/refresh-ip` | re-detect the public IP (`502`, nothing changed, when detection fails) |
 | GET | `/api/system/iptables-test` | diagnostic (`?server_id=`) |
 | GET | `/status` | container uptime, plain text (localhost only) |
 

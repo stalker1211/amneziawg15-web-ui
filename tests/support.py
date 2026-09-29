@@ -189,7 +189,7 @@ def build_manager(**overrides):
         def start_traffic_monitoring(self):
             return None
 
-        def run_command(self, args):
+        def run_command(self, args, env=None):
             self.commands.append(list(args))
             joined = " ".join(args)
             if "genkey" in joined:

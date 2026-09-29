@@ -339,6 +339,34 @@ class AwgLogTests(unittest.TestCase):
         self.assertIn("*** (wg-bbb222) *** Interface closed", lines)
         self.assertEqual(sum("not required" in ln for ln in lines), 1)
 
+    def test_tail_reads_only_the_end_and_matches_a_full_read(self):
+        from routes.system import tail_lines
+
+        path = Path(self.log_path)
+        text = "".join(f"line {n} {'x' * (n % 97)}\n" for n in range(20000))
+        for body in (text, text.rstrip("\n"), "", "only one line", "a\n\nb\n"):
+            path.write_text(body, encoding="utf-8")
+            whole = body.split("\n")
+            if whole and whole[-1] == "":
+                whole.pop()
+            for count in (1, 50, 400, 25000):
+                # A small block forces many backwards reads, including a line split across them.
+                self.assertEqual(tail_lines(self.log_path, count, block_size=4096), whole[-count:], (len(body), count))
+
+        # 400 lines of a ~1.3 MB file cost one 64 KB block, not the whole file.
+        path.write_text(text, encoding="utf-8")
+        real_open, read_sizes = open, []
+
+        def counting_open(*args, **kwargs):
+            handle = real_open(*args, **kwargs)
+            real_read = handle.read
+            handle.read = lambda n=-1: read_sizes.append(len(data := real_read(n))) or data
+            return handle
+
+        with mock.patch("builtins.open", counting_open):
+            self.assertEqual(len(tail_lines(self.log_path, 400)), 400)
+        self.assertEqual(sum(read_sizes), 64 * 1024)
+
     def test_line_count_is_clamped(self):
         Path(self.log_path).write_text("".join(f"line {n}\n" for n in range(6000)), encoding="utf-8")
         for requested, expected in (("1", 50), ("60", 60), ("abc", 400), ("999999", 5000)):
@@ -726,11 +754,23 @@ class SystemRouteExtraTests(_RealSystemApp):
     def test_refresh_ip_updates_every_server(self):
         with mock.patch.object(self.manager, "detect_public_ip", return_value="198.51.100.20"), \
              mock.patch.object(self.manager, "lookup_geoip", return_value=("Somewhere", "NL")):  # fmt: skip
-            payload = self.client.get("/api/system/refresh-ip").get_json()
+            payload = self.client.post("/api/system/refresh-ip", json={}).get_json()
         self.assertEqual(payload, {"public_ip": "198.51.100.20", "public_ip_geo_country_code": "NL"})
         self.assertEqual(self.manager.public_ip, "198.51.100.20")
         stored = json.loads(Path(self.manager.config_file).read_text(encoding="utf-8"))
         self.assertEqual({s["public_ip"] for s in stored["servers"]}, {"198.51.100.20"})
+
+    def test_refresh_ip_that_fails_answers_502_and_writes_nothing(self):
+        before = Path(self.manager.config_file).read_bytes()
+        with mock.patch.object(self.manager, "detect_public_ip", return_value=None):
+            response = self.client.post("/api/system/refresh-ip", json={})
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("nothing was changed", response.get_json()["error"])
+        self.assertEqual(Path(self.manager.config_file).read_bytes(), before)
+        self.assertEqual(self.manager.public_ip, "203.0.113.9")
+
+    def test_refresh_ip_is_not_a_get(self):
+        self.assertEqual(self.client.get("/api/system/refresh-ip").status_code, 405)
 
     def test_iptables_check_reports_found_missing_and_error(self):
         iface, subnet = self.server["interface"], self.server["subnet"]

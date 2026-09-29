@@ -47,6 +47,13 @@ class ClientIpAllocationTests(unittest.TestCase):
         server = self._server("10.8.0.0/24")
         self.assertNotEqual(self.manager.get_client_ip(server), server["server_ip"])
 
+    def test_server_address_is_the_subnets_first_host(self):
+        # It used to be a.b.c.1 for any prefix, which lies outside 10.8.0.64/26.
+        server = self._server("10.12.0.64/26")
+        self.assertEqual(server["server_ip"], "10.12.0.65")
+        self.assertEqual(self.manager.get_client_ip(server), "10.12.0.66")
+        self.assertIn("Address = 10.12.0.65/26", self.manager._build_server_config_content(server))
+
     def test_non_slash_24_subnets(self):
         """The old implementation hardcoded a /24 third-octet prefix."""
         for subnet, expected in (

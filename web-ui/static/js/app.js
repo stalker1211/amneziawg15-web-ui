@@ -532,9 +532,8 @@ class AmneziaApp {
         const before = this.currentPublicIp;
         if (button) button.disabled = true;
         try {
-            const response = await this.apiFetch('/api/system/refresh-ip');
-            const data = await response.json();
-            if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+            // A 502 means detection failed and nothing was changed.
+            const data = await this.postJson('/api/system/refresh-ip', {});
             this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
             await this.loadServers();
             if (data.public_ip === before) {
@@ -547,7 +546,7 @@ class AmneziaApp {
             }
         } catch (error) {
             console.error('Error refreshing IP:', error);
-            this.showTempMessage('Could not detect the public IP: ' + error.message, 'error');
+            this.showTempMessage(error.message, 'error');
         } finally {
             if (button) button.disabled = false;
         }
@@ -614,7 +613,12 @@ class AmneziaApp {
             .then(response => response.json())
             .then(data => {
                 this.environment = data.environment || {};
-                this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
+                if (data.public_ip) {
+                    this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
+                } else {
+                    const el = this.getElement('publicIp');
+                    if (el) el.textContent = 'Not detected';
+                }
             })
             .catch(error => {
                 console.error('Error loading public IP:', error);

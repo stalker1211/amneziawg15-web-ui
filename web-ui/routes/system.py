@@ -4,7 +4,6 @@ import os
 import re
 import subprocess
 import time
-from collections import deque
 
 from core.logging_setup import get_logger
 from flask import Blueprint, jsonify, request
@@ -13,6 +12,28 @@ from flask import Blueprint, jsonify, request
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
 
 logger = get_logger(__name__)
+
+
+def tail_lines(path, count, block_size=64 * 1024):
+    """The last `count` lines of a text file, read backwards from its end.
+
+    The Logs view asks every 10 s, and at debug level the daemon log only grows;
+    reading it whole each time cost more with every day the container ran.
+    """
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        position = f.tell()
+        data = b""
+        # count + 1 newlines guarantee `count` whole lines (the first may be partial).
+        while position > 0 and data.count(b"\n") <= count:
+            step = min(block_size, position)
+            position -= step
+            f.seek(position)
+            data = f.read(step) + data
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()  # the file's final newline
+    return lines[-count:] if count else []
 
 
 def register_system_routes(
@@ -118,10 +139,7 @@ def register_system_routes(
             return "kernel has first class support for AmneziaWG" in line
 
         try:
-            buf = deque(maxlen=lines_n)
-            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-                for ln in f:
-                    buf.append(ln.rstrip("\n"))
+            buf = tail_lines(log_path, lines_n)
 
             if not interface:
                 filtered = list(buf)
@@ -158,10 +176,16 @@ def register_system_routes(
         except Exception as e:
             return jsonify({"error": str(e), "path": log_path}), 500
 
-    @system_bp.route("/api/system/refresh-ip")
+    @system_bp.route("/api/system/refresh-ip", methods=["POST"])
     def refresh_ip():
-        """Refresh public IP address"""
+        """Detect the public IP again and give it to every server (their clients' Endpoint).
+
+        A POST, since it writes. When detection fails nothing is written: the old
+        fallback address would have gone into every client config.
+        """
         new_ip = amnezia_manager.detect_public_ip()
+        if not new_ip:
+            return jsonify({"error": "Could not detect the public IP; nothing was changed"}), 502
         amnezia_manager.public_ip = new_ip
         _, public_ip_geo_country_code = amnezia_manager.lookup_geoip(new_ip)
 

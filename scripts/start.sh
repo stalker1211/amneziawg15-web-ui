@@ -37,25 +37,8 @@ echo "wg-quick: $(command -v wg-quick || echo '<missing>')"
 { awg --version 2>/dev/null || awg -v 2>/dev/null || true; } | sed -n '1,3p' || true
 echo "=================================="
 
-# Optional: enable amneziawg-go internal logs.
-# Upstream uses LOG_LEVEL (debug/verbose/error/silent). When LOG_LEVEL is set,
-# amneziawg-go keeps stdout/stderr attached; we additionally route output to a file
-# by forcing awg-quick to use a wrapper.
-if [ -n "${AWG_LOG_LEVEL:-}" ]; then
-    case "${AWG_LOG_LEVEL}" in
-        0|off|false|no)
-            :
-            ;;
-        debug|verbose|error|silent)
-            export LOG_LEVEL="${AWG_LOG_LEVEL}"
-            export WG_QUICK_USERSPACE_IMPLEMENTATION="/usr/local/bin/amneziawg-go-logged"
-            echo "AmneziaWG logs: enabled (LOG_LEVEL=${LOG_LEVEL}, file=${AWG_LOG_FILE:-/var/log/amnezia/amneziawg-go.log})"
-            ;;
-        *)
-            echo "Warning: ignoring invalid AWG_LOG_LEVEL='${AWG_LOG_LEVEL}' (valid: debug|verbose|error|silent|off)"
-            ;;
-    esac
-fi
+# The daemon's log level (AWG_LOG_LEVEL) is not exported here: the panel passes it to
+# `awg-quick up` alone, so it never becomes the panel's own LOG_LEVEL.
 
 # Start supervisord
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf

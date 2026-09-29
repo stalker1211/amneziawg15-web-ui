@@ -73,6 +73,12 @@ class AmneziaManager:
         "https://ident.me",
         "https://icanhazip.com",
     )
+    PUBLIC_IP_SERVICES = EGRESS_PROBE_SERVICES
+
+    # awg-quick runs amneziawg-go through this wrapper when the daemon logs, so its
+    # output lands in AWG_LOG_FILE (scripts/amneziawg-go-logged.sh).
+    LOGGED_DAEMON = "/usr/local/bin/amneziawg-go-logged"
+    DAEMON_LOG_LEVELS = ("off", "error", "debug")
 
     def __init__(
         self,
@@ -89,6 +95,7 @@ class AmneziaManager:
         wireguard_config_dir=None,
         config_file=None,
         enable_geoip=True,
+        awg_log_level="off",
     ):
         # Request handlers and the traffic monitor are separate threads; config
         # writes go through this one at a time (see save_config).
@@ -108,13 +115,14 @@ class AmneziaManager:
         self.config_file = config_file or os.path.join(config_dir, "web_config.json")
 
         self.enable_geoip = enable_geoip
+        self.awg_log_level = awg_log_level if awg_log_level in self.DAEMON_LOG_LEVELS else "off"
 
         self.config = self.load_config()
         self.ensure_directories()
         # Saved at once, so a public IP change before the next save is still caught.
         if self.backfill_config_fingerprints():
             self.save_config()
-        self.public_ip = self.detect_public_ip()
+        self.public_ip = self.detect_public_ip() or self.last_known_public_ip()
 
         # Track derived client status updates (active/inactive) and persist with throttling.
         self._client_status_dirty = False
@@ -137,35 +145,28 @@ class AmneziaManager:
         os.makedirs("/var/log/amnezia", exist_ok=True)
 
     def detect_public_ip(self):
-        """Detect the public IP address of the server"""
-        try:
-            # Try multiple services in case one fails
-            services = ["http://ifconfig.me", "https://api.ipify.org", "https://ident.me"]
+        """The host's public IPv4 address, or None when no service answered.
 
-            for service in services:
-                try:
-                    response = requests.get(service, timeout=5)
-                    if response.status_code == 200:
-                        ip = response.text.strip()
-                        if is_valid_ip(ip):
-                            logger.info("Detected public IP: %s", ip)
-                            return ip
-                except Exception:
-                    continue
+        None rather than a guess: the answer goes into every client config's Endpoint.
+        The old fallbacks -- the `ip route get` source (the LAN address on macvlan) or
+        "YOUR_SERVER_IP" -- sent every device to the wrong place after a refresh
+        during an outage. HTTPS only, so nobody on the path can supply the answer.
+        """
+        for service in self.PUBLIC_IP_SERVICES:
+            try:
+                response = requests.get(service, timeout=5)
+            except Exception:  # pylint: disable=broad-exception-caught  -- try the next one
+                continue
+            ip = response.text.strip() if response.status_code == 200 else ""
+            if is_valid_ip(ip):
+                logger.info("Detected public IP: %s", ip)
+                return ip
+        logger.warning("Could not detect the public IP: none of %s answered", ", ".join(self.PUBLIC_IP_SERVICES))
+        return None
 
-            # Fallback: read the source address the kernel picks for outbound traffic.
-            # Parsed here instead of piping through awk/head so no shell is needed.
-            route = self.run_command(["ip", "route", "get", "1.1.1.1"])
-            if route:
-                match = re.search(r"\bsrc\s+(\S+)", route)
-                local_ip = match.group(1) if match else None
-                if local_ip and is_valid_ip(local_ip):
-                    logger.info("Detected local IP: %s", local_ip)
-                    return local_ip
-
-        except Exception as e:
-            logger.error("Failed to detect public IP: %s", e)
-        return "YOUR_SERVER_IP"  # Fallback
+    def last_known_public_ip(self):
+        """The address the servers were last given, for a boot without internet."""
+        return next((s["public_ip"] for s in self.config["servers"] if is_valid_ip(s.get("public_ip"))), None)
 
     @staticmethod
     def _config_line(params, key):
@@ -821,15 +822,15 @@ class AmneziaManager:
                     os.unlink(tmp_path)
                 raise
 
-    def run_command(self, args):
+    def run_command(self, args, env=None):
         """Run a command from an argv list and return stdout, or None on failure.
 
         Always argv, never a shell string: values such as subnet, interface and
         port originate from API input, and argv form cannot be turned into extra
-        shell commands.
+        shell commands. `env` replaces the environment for this command only.
         """
         try:
-            result = subprocess.run(args, capture_output=True, text=True, check=True)
+            result = subprocess.run(args, capture_output=True, text=True, check=True, env=env)
             return result.stdout.strip()
         except (subprocess.CalledProcessError, OSError) as e:
             logger.error(f"Command failed ({args[0] if args else '?'}): {e}")
@@ -929,6 +930,12 @@ class AmneziaManager:
         enable_nat = to_bool(server_data.get("enable_nat"), self.default_enable_nat)
         block_lan_cidrs = to_bool(server_data.get("block_lan_cidrs"), self.default_block_lan_cidrs)
 
+        # Every client config's Endpoint; a guess here would be baked into all of them.
+        public_ip = self.public_ip or self.detect_public_ip()
+        if not public_ip:
+            raise ValueError("The public IP is unknown (detection failed); try again once the host is online")
+        self.public_ip = public_ip
+
         server_id = str(uuid.uuid4())[:6]
         interface_name = f"wg-{server_id}"
         config_path = os.path.join(self.wireguard_config_dir, f"{interface_name}.conf")
@@ -946,7 +953,7 @@ class AmneziaManager:
             raw_client_defaults = self.generate_client_defaults(mtu)
         client_defaults = self.validate_client_params(raw_client_defaults)
 
-        server_ip = self.get_server_ip(subnet.split("/")[0])
+        server_ip = self.get_server_ip(subnet)
 
         server_config = {
             "id": server_id,
@@ -1007,7 +1014,7 @@ class AmneziaManager:
         subnet_parts = str(subnet).split("/")
         prefix = subnet_parts[1] if len(subnet_parts) > 1 else "24"
 
-        server_ip = server.get("server_ip") or self.get_server_ip(subnet_parts[0])
+        server_ip = server.get("server_ip") or self.get_server_ip(subnet)
         mtu = int(server.get("mtu", self.default_mtu))
         port = int(server.get("port", self.default_port))
 
@@ -1114,12 +1121,10 @@ AllowedIPs = {client["client_ip"]}/32
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
-    def get_server_ip(self, network):
-        """Get server IP from network (first usable IP)"""
-        parts = network.split(".")
-        if len(parts) == 4:
-            return f"{parts[0]}.{parts[1]}.{parts[2]}.1"
-        return "10.0.0.1"
+    @staticmethod
+    def get_server_ip(subnet):
+        """The subnet's first host address: 10.8.0.65 for 10.8.0.64/26 (not a.b.c.1)."""
+        return str(next(ipaddress.ip_network(str(subnet), strict=False).hosts()))
 
     def get_client_ip(self, server):
         """Return the first free client address in the server's subnet.
@@ -1620,6 +1625,21 @@ PersistentKeepalive = 25
         """Cleanup iptables rules for WireGuard interface"""
         return self._run_iptables_script("cleanup", interface, subnet, enable_nat, block_lan_cidrs)
 
+    def daemon_env(self):
+        """The environment awg-quick starts amneziawg-go with: the daemon's log level.
+
+        amneziawg-go reads LOG_LEVEL once at process start (main.go) and has no UAPI
+        key for it, so a new level takes an interface restart. The panel's own
+        LOG_LEVEL is never passed on: with any LOG_LEVEL set the daemon keeps its
+        stdout, which here is run_command's pipe, and `awg-quick up` never returns
+        (verified: a panel started with LOG_LEVEL=DEBUG hung on the first server).
+        Unset, the daemon's output goes to /dev/null.
+        """
+        env = {k: v for k, v in os.environ.items() if k not in ("LOG_LEVEL", "WG_QUICK_USERSPACE_IMPLEMENTATION")}
+        if self.awg_log_level != "off":
+            env.update(LOG_LEVEL=self.awg_log_level, WG_QUICK_USERSPACE_IMPLEMENTATION=self.LOGGED_DAEMON)
+        return env
+
     def start_server(self, server_id):
         """Start a WireGuard server using awg-quick with iptables setup"""
         server = self.get_server(server_id)
@@ -1628,7 +1648,7 @@ PersistentKeepalive = 25
 
         try:
             # Use awg-quick to bring up the interface
-            result = self.run_command(["/usr/bin/awg-quick", "up", server["interface"]])
+            result = self.run_command(["/usr/bin/awg-quick", "up", server["interface"]], env=self.daemon_env())
             if result is not None:
                 # Setup iptables rules
                 iptables_success = self.setup_iptables(

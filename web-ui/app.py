@@ -5,7 +5,7 @@ import time
 from urllib.parse import quote
 
 from core.guards import install_guards
-from core.helpers import to_bool
+from core.helpers import parse_daemon_log_level, to_bool
 from core.logging_setup import configure_logging, get_logger
 from core.runtime import (
     create_flask_app,
@@ -56,6 +56,14 @@ DEFAULT_BLOCK_LAN_CIDRS = os.getenv("BLOCK_LAN_CIDRS", "1").strip().lower() not 
 )
 AWG_LOG_FILE = os.getenv("AWG_LOG_FILE", "/var/log/amnezia/amneziawg-go.log")
 
+
+# The daemon's level reaches `awg-quick up` only (AmneziaManager.daemon_env), never
+# this process: it used to be exported as LOG_LEVEL, which is the panel's own.
+AWG_LOG_LEVEL = parse_daemon_log_level(os.getenv("AWG_LOG_LEVEL"))
+if AWG_LOG_LEVEL is None:
+    logger.warning("Ignoring invalid AWG_LOG_LEVEL=%r (valid: off, error, debug)", os.getenv("AWG_LOG_LEVEL"))
+    AWG_LOG_LEVEL = "off"
+
 # Parse DNS servers from comma-separated string
 DNS_SERVERS = [dns.strip() for dns in DEFAULT_DNS.split(",") if dns.strip()]
 
@@ -99,7 +107,7 @@ if os.getenv("API_TOKEN", "").strip():
     # decides first and the token never admitted or refused anything.
     logger.warning("API_TOKEN is set but no longer used (removed in 2.4); nginx Basic Auth is the only credential")
 logger.info(
-    "defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s",
+    "defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s daemon_log=%s",
     DEFAULT_MTU,
     DEFAULT_SUBNET,
     DEFAULT_PORT,
@@ -107,6 +115,7 @@ logger.info(
     DEFAULT_ENABLE_NAT,
     DEFAULT_BLOCK_LAN_CIDRS,
     ENABLE_GEOIP,
+    AWG_LOG_LEVEL,
 )
 logger.info("config_dir=%s web_ui_port=%s (internal)", CONFIG_DIR, WEB_UI_PORT)
 logger.debug("template files: %s", os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
@@ -132,6 +141,7 @@ amnezia_manager = AmneziaManager(
     wireguard_config_dir=WIREGUARD_CONFIG_DIR,
     config_file=CONFIG_FILE,
     enable_geoip=ENABLE_GEOIP,
+    awg_log_level=AWG_LOG_LEVEL,
 )
 
 register_system_routes(

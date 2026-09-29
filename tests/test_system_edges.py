@@ -15,6 +15,7 @@ from unittest import mock
 
 from tests.support import (
     PRESHARED_KEY,
+    PUBLIC_IP,
     SERVER_PRIVATE_KEY,
     SERVER_PUBLIC_KEY,
     WEB_UI_DIR,
@@ -114,6 +115,26 @@ class StartStopTests(_Base):
 
         self.assertEqual(self._saved()["servers"][0]["status"], "running")
         self.assertIn(("server_status", {"server_id": server["id"], "status": "running"}), self.manager.socketio.emitted)
+
+    def test_the_panels_log_level_never_reaches_the_daemon(self):
+        # With any LOG_LEVEL the daemon keeps run_command's stdout pipe open and
+        # `awg-quick up` never returns.
+        server = self._server()
+        with mock.patch.dict(os.environ, {"LOG_LEVEL": "DEBUG", "WG_QUICK_USERSPACE_IMPLEMENTATION": "/x"}):
+            self.assertTrue(self.manager.start_server(server["id"]))
+        env = self.fake.calls[0]["env"]
+        self.assertNotIn("LOG_LEVEL", env)
+        self.assertNotIn("WG_QUICK_USERSPACE_IMPLEMENTATION", env)
+        self.assertIn("PATH", env)
+
+    def test_daemon_logging_goes_to_awg_quick_up_only(self):
+        server = self._server()
+        self.manager.awg_log_level = "debug"
+        self.assertTrue(self.manager.start_server(server["id"]))
+        up, setup = self.fake.calls
+        self.assertEqual(up["env"]["LOG_LEVEL"], "debug")
+        self.assertEqual(up["env"]["WG_QUICK_USERSPACE_IMPLEMENTATION"], "/usr/local/bin/amneziawg-go-logged")
+        self.assertEqual(setup["args"][0], "/app/scripts/setup_iptables.sh")
 
     def test_failed_start_skips_iptables_and_keeps_status(self):
         server = self._server()
@@ -301,25 +322,40 @@ class PublicIpTests(_Base):
 
     def test_first_valid_answer_wins(self):
         answers = {
-            "http://ifconfig.me": _Response(500),
-            "https://api.ipify.org": _Response(text="<html>not an ip</html>"),
-            "https://ident.me": _Response(text="198.51.100.7\n"),
+            "https://api.ipify.org": _Response(500),
+            "https://ident.me": _Response(text="<html>not an ip</html>"),
+            "https://icanhazip.com": _Response(text="198.51.100.7\n"),
         }
         with (
-            mock.patch(f"{MODULE}.requests.get", side_effect=lambda url, timeout: answers[url]),
+            mock.patch(f"{MODULE}.requests.get", side_effect=lambda url, timeout: answers[url]) as get,
             self.assertLogs(MODULE, "INFO"),
         ):
             self.assertEqual(self._detect(), "198.51.100.7")
+        self.assertTrue(all(call.args[0].startswith("https://") for call in get.call_args_list))
 
-    def test_falls_back_to_the_routing_source_address(self):
-        self.fake.respond(["ip", "route", "get"], "1.1.1.1 via 192.168.1.1 dev eth0 src 192.168.1.5 uid 0")
-        with mock.patch(f"{MODULE}.requests.get", side_effect=OSError("offline")), self.assertLogs(MODULE, "INFO"):
-            self.assertEqual(self._detect(), "192.168.1.5")
+    def test_none_when_nothing_answers_and_no_local_guess(self):
+        # The old fallbacks (the route source address, "YOUR_SERVER_IP") would have
+        # gone into every client config's Endpoint.
+        with mock.patch(f"{MODULE}.requests.get", side_effect=OSError("offline")), self.assertLogs(MODULE, "WARNING"):
+            self.assertIsNone(self._detect())
+        self.assertEqual(self.fake.calls, [])
 
-    def test_placeholder_when_nothing_works(self):
-        self.fake.respond(["ip", "route", "get"], 2)
-        with mock.patch(f"{MODULE}.requests.get", side_effect=OSError("offline")), self.assertLogs(MODULE, "ERROR"):
-            self.assertEqual(self._detect(), "YOUR_SERVER_IP")
+    def test_boot_without_internet_keeps_the_last_known_address(self):
+        self._server()
+        with mock.patch(f"{MODULE}.requests.get", side_effect=OSError("offline")), self.assertLogs(MODULE, "WARNING"):
+            from services.amnezia_manager import AmneziaManager
+
+            self.assertIsNone(AmneziaManager.detect_public_ip(self.manager))
+        self.assertEqual(self.manager.last_known_public_ip(), PUBLIC_IP)
+
+    def test_a_server_cannot_be_created_while_the_public_ip_is_unknown(self):
+        self.manager.public_ip = None
+        with (
+            mock.patch.object(self.manager, "detect_public_ip", return_value=None),
+            self.assertRaisesRegex(ValueError, "public IP is unknown"),
+        ):
+            self._server()
+        self.assertEqual(self.manager.config["servers"], [])
 
 
 class GeoIpTests(_Base):

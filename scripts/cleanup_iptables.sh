@@ -40,17 +40,20 @@ if ! [[ "$WAN_IF" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
     exit 1
 fi
 
-# Remove rules in reverse order
-iptables -t nat -D POSTROUTING -s "$SUBNET" -o "$WAN_IF" -j MASQUERADE 2>/dev/null || true
-iptables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -i "$INTERFACE" -o "$WAN_IF" -s "$SUBNET" -j ACCEPT 2>/dev/null || true
-iptables -D OUTPUT -o "$INTERFACE" -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -i "$INTERFACE" -j ACCEPT 2>/dev/null || true
-iptables -D INPUT -i "$INTERFACE" -j ACCEPT 2>/dev/null || true
+# Only rules carrying this server's tag (see setup_iptables.sh), each written exactly
+# as it was added. `-D` removes one copy per call, so repeat until none is left.
+TAG=(-m comment --comment "awg:$INTERFACE")
+drop() {
+    while iptables "$@" 2>/dev/null; do :; done
+}
 
-# Remove LAN-block rules
-iptables -D FORWARD -s "$SUBNET" -d 192.168.0.0/16 -j DROP 2>/dev/null || true
-iptables -D FORWARD -s "$SUBNET" -d 10.0.0.0/8 -j DROP 2>/dev/null || true
-iptables -D FORWARD -s "$SUBNET" -d 172.16.0.0/12 -j DROP 2>/dev/null || true
+drop -t nat -D POSTROUTING -s "$SUBNET" -o "$WAN_IF" "${TAG[@]}" -j MASQUERADE
+drop -D FORWARD -m state --state ESTABLISHED,RELATED "${TAG[@]}" -j ACCEPT
+drop -D FORWARD -i "$INTERFACE" -o "$WAN_IF" -s "$SUBNET" "${TAG[@]}" -j ACCEPT
+drop -D OUTPUT -o "$INTERFACE" "${TAG[@]}" -j ACCEPT
+drop -D INPUT -i "$INTERFACE" "${TAG[@]}" -j ACCEPT
+drop -D FORWARD -s "$SUBNET" -d 192.168.0.0/16 "${TAG[@]}" -j DROP
+drop -D FORWARD -s "$SUBNET" -d 10.0.0.0/8 "${TAG[@]}" -j DROP
+drop -D FORWARD -s "$SUBNET" -d 172.16.0.0/12 "${TAG[@]}" -j DROP
 
 echo "iptables rules cleaned up successfully for $INTERFACE"
