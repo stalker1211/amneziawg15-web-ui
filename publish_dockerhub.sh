@@ -12,12 +12,16 @@ set -euo pipefail
 # branch never reaches :latest.
 # Each image carries a build label shown under the page heading, e.g.
 # "v2.2 build 20260926.1" or "v2.2-3-gabc1234 build 20260926.2".
+# The build is scanned with grype (brew install grype) before anything is pushed: all
+# findings are printed, and a HIGH or CRITICAL one that has a fix stops the publish.
+# Unfixed ones are shown as "(suppressed)"; no rebuild can clear them.
 #
 # Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh --publish
 #
 # Usage:
 #   ./publish_dockerhub.sh             dry run: print version, label and tags; build nothing
-#   ./publish_dockerhub.sh --publish   build and push HEAD as described above
+#   ./publish_dockerhub.sh --scan      build locally and scan; push nothing
+#   ./publish_dockerhub.sh --publish   build, scan and, if the scan passes, push HEAD as above
 #   ./publish_dockerhub.sh --publish 2.3   same, but stop unless HEAD is release v2.3
 #
 # Env: IMAGE_REPO, DOCKERFILE, PLATFORMS; TAG=2.3 works like the argument.
@@ -31,10 +35,12 @@ DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 
 PUBLISH=0
+SCAN=0
 EXPECTED="${TAG:-}"
 for arg in "$@"; do
 	case "${arg}" in
 	--publish) PUBLISH=1 ;;
+	--scan) SCAN=1 ;;
 	-h | --help)
 		sed -n '4,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
@@ -105,12 +111,12 @@ if [[ -z "${RELEASE}" && "${BRANCH}" != master ]]; then
 	OFF_MASTER="HEAD is ${BRANCH:-detached}, not master; only master or a clean release commit is published"
 fi
 
-if [[ ${PUBLISH} -eq 0 ]]; then
+if [[ ${PUBLISH} -eq 0 && ${SCAN} -eq 0 ]]; then
 	[[ -z "${OFF_MASTER}" ]] || echo "Note: --publish would refuse: ${OFF_MASTER}."
-	echo "Dry run: nothing built or pushed. Add --publish to build and push."
+	echo "Dry run: nothing built or pushed. Add --scan to build and scan, --publish to also push."
 	exit 0
 fi
-if [[ -n "${OFF_MASTER}" ]]; then
+if [[ ${PUBLISH} -eq 1 && -n "${OFF_MASTER}" ]]; then
 	echo "Error: ${OFF_MASTER}." >&2
 	exit 1
 fi
@@ -123,21 +129,57 @@ if ! docker info >/dev/null 2>&1; then
 	echo "Error: docker daemon not reachable. Is Docker running?" >&2
 	exit 1
 fi
+if ! command -v grype >/dev/null 2>&1; then
+	echo "Error: grype is not installed (brew install grype)" >&2
+	exit 1
+fi
 
-mkdir -p .cache
-echo "${TODAY} ${N}" >"${COUNTER_FILE}"
+# Only a publish uses up a build number; a scan's candidate carries the same label.
+if [[ ${PUBLISH} -eq 1 ]]; then
+	mkdir -p .cache
+	echo "${TODAY} ${N}" >"${COUNTER_FILE}"
+fi
 
-BUILD_TAGS=()
-for image in "${IMAGES[@]}"; do
-	BUILD_TAGS+=(-t "${image}")
-done
-
+# Built into the local image store (multi-platform --load needs the containerd store,
+# as in OrbStack and Docker Desktop), scanned, and only then tagged and pushed, so
+# what is pushed is exactly what was scanned. --pull and a fresh runtime stage make
+# its apk upgrade/add fetch today's Alpine fixes; the pinned builder stages stay cached.
+CANDIDATE="amneziawg-web-ui:candidate"
 docker buildx build \
 	--platform "${PLATFORMS}" \
 	-f "${DOCKERFILE}" \
-	"${BUILD_TAGS[@]}" \
+	-t "${CANDIDATE}" \
 	--build-arg "BUILD_LABEL=${LABEL}" \
-	--push \
+	--pull \
+	--no-cache-filter runtime \
+	--load \
 	.
+
+# grype exits 2 on a fixable HIGH/CRITICAL, 1 on its own errors; either stops here.
+# Every platform is scanned before deciding, so one failure does not hide another.
+FAILED=()
+for platform in ${PLATFORMS//,/ }; do
+	echo
+	echo "== Scan ${platform}"
+	grype "docker:${CANDIDATE}" --platform "${platform}" -q \
+		--ignore-states not-fixed,wont-fix,unknown --show-suppressed \
+		--fail-on high || FAILED+=("${platform}")
+done
+echo
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+	echo "Scan FAILED on ${FAILED[*]}: a fixable HIGH/CRITICAL finding (or a grype error) above; nothing pushed." >&2
+	exit 1
+fi
+echo "Scan passed: no fixable HIGH/CRITICAL findings."
+
+if [[ ${PUBLISH} -eq 0 ]]; then
+	echo "Scan only: nothing pushed. The scanned image is ${CANDIDATE}."
+	exit 0
+fi
+
+for image in "${IMAGES[@]}"; do
+	docker tag "${CANDIDATE}" "${image}"
+	docker push "${image}"
+done
 
 echo "Done."

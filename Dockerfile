@@ -96,8 +96,10 @@ RUN ./build_css.sh
 ############################
 # Runtime
 ############################
-FROM alpine:${ALPINE_VERSION}
+# Named so publish_dockerhub.sh can rebuild just this stage (--no-cache-filter runtime).
+FROM alpine:${ALPINE_VERSION} AS runtime
 
+# apk upgrade: every Alpine fix released since the base image was built.
 # Runtime deps:
 # - bash/openresolv/iproute2/iptables: required by awg-quick and our iptables scripts
 # - ca-certificates: required for external IP/Geo lookups
@@ -105,7 +107,7 @@ FROM alpine:${ALPINE_VERSION}
 #   apache2-utils/htpasswd, which pulled in apr-util (CVE-2026-34191,
 #   CVE-2026-32327, both critical and unfixed in Alpine as of 3.24).
 #   `openssl passwd -apr1` emits the identical $apr1$ format nginx expects.
-RUN apk upgrade --no-cache expat zlib \
+RUN apk upgrade --no-cache \
     && apk add --no-cache \
     python3 \
     nginx \

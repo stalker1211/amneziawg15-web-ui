@@ -135,7 +135,7 @@ class PublishRulesTests(unittest.TestCase):
         self.assertEqual(self.pushed(), ["latest"])
         self.assertRegex(self.publish()[1]["Version"], r"^[0-9a-f]{7,}$")
 
-    def real_publish(self, *args):
+    def real_publish(self, *args, flag="--publish"):
         # A stub docker whose daemon is unreachable: getting that error means the
         # script passed its own checks, and nothing can ever be built. It lives
         # outside the repository, where it would count as an untracked change.
@@ -145,10 +145,19 @@ class PublishRulesTests(unittest.TestCase):
         (stub / "docker").chmod(0o755)
         env = {**self.env, "PATH": f"{stub}{os.pathsep}{self.env['PATH']}"}
         result = subprocess.run(
-            ["bash", "publish_dockerhub.sh", "--publish", *args],
+            ["bash", "publish_dockerhub.sh", flag, *args],
             cwd=self.dir, env=env, capture_output=True, text=True, check=False,  # exit code is asserted
         )  # fmt: skip
         return result.returncode, result.stdout + result.stderr
+
+    def test_scan_builds_on_any_branch_and_keeps_the_counter(self):
+        self.git("switch", "-q", "-c", "feature")
+        self.commit("work in progress")
+        code, output = self.real_publish(flag="--scan")
+        self.assertEqual(code, 1)
+        self.assertIn("docker daemon not reachable", output)  # got past the branch rule
+        self.assertNotIn("asked for", output)  # --scan is not read as a version
+        self.assertFalse((self.dir / ".cache" / "build_counter").exists())
 
     def test_publish_refuses_a_branch_other_than_master(self):
         self.git("switch", "-q", "-c", "feature")

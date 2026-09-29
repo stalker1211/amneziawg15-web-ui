@@ -48,7 +48,12 @@ new per-client fields.
 ### Development
 - `tests/demo_server.py` serves the real panel with example data and no container,
   for UI work, the smoke tests and screenshots. The smoke tests drive the drawer and
-  dialogs and fail on any native pop-up. 287 tests, 90% of the backend.
+  dialogs and fail on any native pop-up. 288 tests, 90% of the backend.
+- **CVE scan before every publish.** `publish_dockerhub.sh --publish` builds into the
+  local image store, scans both platforms with grype and pushes only if no fixable
+  HIGH/CRITICAL is found (unfixed findings are listed as suppressed); `--scan` does
+  just the build and scan. The build pulls fresh bases and rebuilds the runtime
+  stage, whose `apk upgrade` now takes every Alpine fix, not only expat and zlib.
 
 ## Version 2.2.1 (2026-09-28)
 
