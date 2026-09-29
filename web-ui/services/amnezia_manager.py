@@ -90,6 +90,8 @@ class AmneziaManager:
     # GeoIP lookups are cached to avoid rate limits; bounded so the dict cannot grow
     # without limit as new client endpoints appear.
     GEOIP_CACHE_TTL_SECONDS = 24 * 3600
+    # A failed lookup (rate limit, timeout) is retried after this, not after a day.
+    GEOIP_FAILURE_TTL_SECONDS = 10 * 60
     GEOIP_CACHE_MAX_ENTRIES = 512
 
     EGRESS_PROBE_SERVICES = (
@@ -155,6 +157,8 @@ class AmneziaManager:
         # Cache GeoIP lookups to avoid rate limits and latency
         # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
         self._geoip_cache = {}
+        # Addresses a background task is looking up now (lookup_geoip_cached).
+        self._geoip_pending = set()
 
         # Auto-start servers based on environment variable
         if self.auto_start_servers_enabled:
@@ -374,7 +378,7 @@ class AmneziaManager:
         self.save_config()
         return probe
 
-    def _cache_geoip(self, ip, now, label, country_code, raw):
+    def _cache_geoip(self, ip, now, label, country_code, raw, failed=False):
         """Store a GeoIP result, evicting expired and then oldest entries.
 
         Unbounded growth was slow but real: one entry per distinct client endpoint IP,
@@ -385,6 +389,7 @@ class AmneziaManager:
             "label": label,
             "country_code": country_code,
             "raw": raw,
+            "failed": failed,
         }
 
         if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
@@ -401,32 +406,70 @@ class AmneziaManager:
                     break
                 del self._geoip_cache[key]
 
-    def lookup_geoip(self, ip):
-        """Return (geo label, country code) for a public IP with caching."""
-        if not self.enable_geoip:
-            return (None, None)
-        if not ip or not isinstance(ip, str):
-            return (None, None)
-
+    def _geoip_candidate(self, ip):
+        """The stripped address when GeoIP is on and it is public, else None."""
+        if not self.enable_geoip or not ip or not isinstance(ip, str):
+            return None
         ip = ip.strip()
         try:
             addr = ipaddress.ip_address(ip)
-            if (
-                addr.is_private
-                or addr.is_loopback
-                or addr.is_link_local
-                or addr.is_multicast
-                or addr.is_reserved
-                or addr.is_unspecified
-            ):
-                return (None, None)
         except ValueError:
+            return None
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_reserved
+            or addr.is_unspecified
+        ):
+            return None
+        return ip
+
+    def _geoip_fresh(self, ip, now):
+        """The cached (label, country code), or None when absent or expired."""
+        cached = self._geoip_cache.get(ip)
+        if not isinstance(cached, dict):
+            return None
+        ttl = self.GEOIP_FAILURE_TTL_SECONDS if cached.get("failed") else self.GEOIP_CACHE_TTL_SECONDS
+        if (now - cached.get("ts", 0)) >= ttl:
+            return None
+        return (cached.get("label"), cached.get("country_code"))
+
+    def lookup_geoip_cached(self, ip):
+        """(label, country code) from the cache only; a miss is looked up in the background.
+
+        For the traffic loop, which must not wait on ipapi.co (up to 2 s per new
+        client endpoint): the label appears on the next tick.
+        """
+        ip = self._geoip_candidate(ip)
+        if not ip:
+            return (None, None)
+        fresh = self._geoip_fresh(ip, time.time())
+        if fresh is not None:
+            return fresh
+        if ip not in self._geoip_pending:
+            self._geoip_pending.add(ip)
+
+            def resolve():
+                try:
+                    self.lookup_geoip(ip)
+                finally:
+                    self._geoip_pending.discard(ip)
+
+            self.socketio.start_background_task(resolve)
+        return (None, None)
+
+    def lookup_geoip(self, ip):
+        """Return (geo label, country code) for a public IP with caching."""
+        ip = self._geoip_candidate(ip)
+        if not ip:
             return (None, None)
 
         now = time.time()
-        cached = self._geoip_cache.get(ip)
-        if isinstance(cached, dict) and (now - cached.get("ts", 0)) < self.GEOIP_CACHE_TTL_SECONDS:
-            return (cached.get("label"), cached.get("country_code"))
+        fresh = self._geoip_fresh(ip, now)
+        if fresh is not None:
+            return fresh
 
         def format_geo_label(raw):
             if not isinstance(raw, dict):
@@ -463,7 +506,7 @@ class AmneziaManager:
                 headers={"User-Agent": "amneziawg-web-ui"},
             )
             if resp.status_code != 200:
-                self._cache_geoip(ip, now, None, None, {"status": resp.status_code})
+                self._cache_geoip(ip, now, None, None, {"status": resp.status_code}, failed=True)
                 return (None, None)
 
             content_type = resp.headers.get("content-type", "")
@@ -473,7 +516,7 @@ class AmneziaManager:
             self._cache_geoip(ip, now, label, country_code, data)
             return (label, country_code)
         except Exception:
-            self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"})
+            self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"}, failed=True)
             return (None, None)
 
     def auto_start_servers(self):
@@ -1951,7 +1994,7 @@ PersistentKeepalive = 25
         traffic = {}
         for client in server.get("clients", []):
             info, seconds = self._peer_telemetry(server, client)
-            geo_label, geo_country_code = self.lookup_geoip(self.endpoint_ip(info.get("endpoint")))
+            geo_label, geo_country_code = self.lookup_geoip_cached(self.endpoint_ip(info.get("endpoint")))
             traffic[client.get("id")] = {
                 "received_bytes": info.get("rx", 0),
                 "sent_bytes": info.get("tx", 0),

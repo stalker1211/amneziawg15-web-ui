@@ -408,6 +408,32 @@ class GeoIpTests(_Base):
             self.assertEqual(second, first)
             get.assert_not_called()
 
+    def test_a_failure_is_retried_after_ten_minutes_an_answer_after_a_day(self):
+        with mock.patch(f"{MODULE}.time.time", return_value=1_000_000):
+            self._lookup("9.9.9.9", side_effect=OSError("down"))
+            self._lookup("1.0.0.1", _Response(data={"country": "NL"}))
+        with mock.patch(f"{MODULE}.time.time", return_value=1_000_000 + 11 * 60):
+            retried, get = self._lookup("9.9.9.9", _Response(data={"country": "FR"}))
+            self.assertEqual(retried, ("FR", "FR"))
+            kept, get = self._lookup("1.0.0.1", _Response(data={"country": "DE"}))
+            self.assertEqual(kept, ("NL", "NL"))
+            get.assert_not_called()
+
+    def test_the_cached_lookup_never_waits_and_resolves_in_the_background(self):
+        # The traffic loop reads the cache only; a miss is looked up in a background task.
+        tasks = []
+        self.manager.socketio.start_background_task = lambda target: tasks.append(target)
+        with mock.patch(f"{MODULE}.requests.get") as get:
+            self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), (None, None))
+            self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), (None, None))
+            self.assertEqual(self.manager.lookup_geoip_cached("10.0.0.1"), (None, None))
+            get.assert_not_called()
+        self.assertEqual(len(tasks), 1)  # one lookup per address, however often it is asked
+        with mock.patch(f"{MODULE}.requests.get", return_value=_Response(data={"country": "US"})):
+            tasks[0]()
+        self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), ("US", "US"))
+        self.assertEqual(self.manager._geoip_pending, set())
+
     def test_disabled(self):
         self.manager.enable_geoip = False
         result, get = self._lookup("8.8.8.8", _Response(data={"country": "US"}))

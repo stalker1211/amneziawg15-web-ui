@@ -200,12 +200,8 @@ def main():
         print(f"\tServer IP = {server_public}  port = {server_port}{server_geo_str}")
         print(f"\tEgress IP = {egress}{egress_geo_str}")
 
-        clients, err = _get_json(s, f"{base}/api/servers/{sid}/clients", args.timeout)
-        if err:
-            print(f"\t<error: {err}>")
-            continue
-
-        traffic, _ = _get_json(s, f"{base}/api/servers/{sid}/traffic", args.timeout)
+        # /api/servers carries each server's clients and its last telemetry snapshot.
+        clients, traffic = server.get("clients") or [], server.get("traffic") or {}
         if not clients:
             print("\t<no clients>")
             continue

@@ -147,7 +147,7 @@ Basic Auth credentials.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/servers` | list servers with live status and clients |
+| GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes, endpoint, handshake age) |
 | POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
 | DELETE | `/api/servers/<id>` | delete server and its clients |
 | POST | `/api/servers/<id>/start` \| `/stop` | bring the interface up/down |
@@ -156,9 +156,7 @@ Basic Auth credentials.
 | POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey` / AWG 3.1 toggles; restarts if running |
 | POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables |
 | POST | `/api/servers/<id>/rename` | `{"name": "..."}` |
-| GET | `/api/servers/<id>/traffic` | per-client rx/tx, endpoint, handshake age |
 | POST | `/api/servers/<id>/egress-ip` | probe the server's outbound IP |
-| GET | `/api/servers/<id>/clients` | list clients |
 | POST | `/api/servers/<id>/clients` | add (`name`, optional `client_params`, `copy_from_client_id`) |
 | DELETE | `/api/servers/<id>/clients/<cid>` | delete client |
 | GET | `/api/servers/<id>/clients/<cid>/config` | download client `.conf` |
@@ -168,7 +166,6 @@ Basic Auth credentials.
 | POST | `/api/servers/<id>/clients/<cid>/issued` | record that the current config was handed to the device (clears `config_outdated`) |
 | POST | `/api/generate` | random parameters for a protocol: `{"protocol", "mtu"}` → `{"transport_params", "client_defaults"}`; saves nothing |
 | POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params"}` or `{"server_id", "client_params"}` → `{"errors", "warnings"}` |
-| GET | `/api/clients` | all clients across all servers |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
 | POST | `/api/system/refresh-ip` | re-detect the public IP (`502`, nothing changed, when detection fails) |

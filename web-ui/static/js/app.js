@@ -7,9 +7,10 @@ class AmneziaApp {
         this.socketReconnectFailures = 0;
         this.socketLastRebuildAt = 0;
         this.socketLifecycleHandlersInstalled = false;
+        // The only page state: GET /api/servers, each server with its clients and
+        // its last telemetry snapshot (`traffic`), kept current by traffic_update.
         this.lastServers = [];
-        this.serverClients = new Map();
-        this.lastTrafficByServer = new Map();
+        this.lastResyncAt = 0;
         this.drawerCtx = null;
         this.environment = {};
         this.currentPublicIp = '';
@@ -124,13 +125,10 @@ class AmneziaApp {
             return;
         }
 
-        // Try higher error correction first, then fall back to fit larger payloads.
-        const levels = [
-            QRCode?.CorrectLevel?.H,
-            QRCode?.CorrectLevel?.Q,
-            QRCode?.CorrectLevel?.M,
-            QRCode?.CorrectLevel?.L
-        ].filter((l) => l !== undefined);
+        // M, then L for a config too large for M. H, the densest, turned a 450-byte
+        // config into 109 modules a side (81 at M): harder to scan off a screen, and
+        // a screen does not get dirty.
+        const levels = [QRCode?.CorrectLevel?.M, QRCode?.CorrectLevel?.L].filter((l) => l !== undefined);
 
         let lastError = null;
         for (const level of levels) {
@@ -334,7 +332,12 @@ class AmneziaApp {
         });
     }
 
+    // pageshow, focus and visibilitychange tend to fire together, and a reconnect right
+    // after them; one reload serves them all.
     resyncAppState() {
+        const now = Date.now();
+        if (now - this.lastResyncAt < 2000) return;
+        this.lastResyncAt = now;
         this.loadServers();
         this.loadPublicIp();
     }
@@ -571,9 +574,9 @@ class AmneziaApp {
         });
     }
 
+    // Through the throttle: the socket connects a moment later and would load it all again.
     loadInitialData() {
-        this.loadServers();
-        this.loadPublicIp();
+        this.resyncAppState();
     }
 
     loadPublicIp() {
@@ -617,19 +620,18 @@ class AmneziaApp {
         const serversList = this.getElement('serversList');
         if (!serversList) return;
 
-        // Rows start with the last known traffic, so a reload does not blank them.
+        // A full render replaces every button, so a ⋯ menu would stay anchored to a
+        // detached one.
+        window.Ui.closeMenu();
         serversList.innerHTML = window.ServerUi.renderServersHtml({
             servers,
             escapeHtml: (v) => this.escapeHtml(v),
-            renderServerClients: (serverId, clients) =>
-                this.renderServerClients(serverId, clients, this.lastTrafficByServer.get(serverId) || {}),
+            renderServerClients: (serverId, clients) => {
+                const server = servers.find((s) => s.id === serverId) || {};
+                return this.renderServerClients(serverId, clients, server.traffic || {});
+            },
         });
         this.renderStrip();
-
-        // Load clients for each server
-        servers.forEach(server => {
-            this.loadServerClients(server.id);
-        });
     }
 
     renderServerClients(serverId, clients, traffic = {}) {
@@ -650,8 +652,8 @@ class AmneziaApp {
         let total = 0;
         let online = 0;
         servers.forEach((server) => {
-            const clients = this.serverClients.get(server.id) || server.clients || [];
-            const traffic = this.lastTrafficByServer.get(server.id) || {};
+            const clients = server.clients || [];
+            const traffic = server.traffic || {};
             total += clients.length;
             online += clients.filter((c) => window.ServerUi.isOnline(server, c, traffic[c.id],
                 (t) => this.isClientActiveFromTraffic(t))).length;
@@ -684,51 +686,20 @@ class AmneziaApp {
         ]);
     }
 
-    loadServerClients(serverId) {
-        Promise.all([
-            this.apiFetch(`/api/servers/${serverId}/clients`).then(res => res.json()),
-            this.apiFetch(`/api/servers/${serverId}/traffic`).then(res => res.ok ? res.json() : {})
-        ]).then(([clients, traffic]) => {
-            this.serverClients.set(serverId, Array.isArray(clients) ? clients : []);
-            const trafficObj = (traffic && typeof traffic === 'object') ? traffic : {};
-            // Initial load: store snapshot but do not flash.
-            this.lastTrafficByServer.set(serverId, trafficObj);
-            const clientsContainer = this.getElement(`clients-${serverId}`);
-            if (clientsContainer) {
-                clientsContainer.innerHTML = this.renderServerClients(serverId, this.serverClients.get(serverId), trafficObj);
-            }
-            this.renderStrip();
-        }).catch(error => {
-            console.error(`Error loading clients or traffic for server ${serverId}:`, error);
-        });
-    }
-
+    // Every 7 s: the running server's new telemetry, patched into its rows in place.
     updateServerTraffic(serverId, traffic) {
-        // Update traffic without full reload - only if clients are already loaded
-        const clients = this.serverClients.get(serverId);
-        if (!clients) return;
-
-        const nextTraffic = (traffic && typeof traffic === 'object') ? traffic : {};
-        const prevTraffic = this.lastTrafficByServer.get(serverId) || {};
-
-        // Decorate traffic entries with change flags so the UI can flash rx/tx updates.
-        const decoratedTraffic = {};
-        for (const [clientId, info] of Object.entries(nextTraffic)) {
-            const prev = prevTraffic[clientId] || {};
-            decoratedTraffic[clientId] = {
-                ...(info || {}),
-                _rx_changed: prev.received_bytes !== undefined && info?.received_bytes !== prev.received_bytes,
-                _tx_changed: prev.sent_bytes !== undefined && info?.sent_bytes !== prev.sent_bytes,
-            };
-        }
-
-        this.lastTrafficByServer.set(serverId, nextTraffic);
-
-        const clientsContainer = this.getElement(`clients-${serverId}`);
-        // Leave a row alone while its name is being edited in place.
-        if (clientsContainer && !clientsContainer.querySelector('input[aria-label="New client name"]')) {
-            clientsContainer.innerHTML = this.renderServerClients(serverId, clients, decoratedTraffic);
-        }
+        const server = (this.lastServers || []).find((s) => s.id === serverId);
+        if (!server) return;
+        const previous = server.traffic || {};
+        server.traffic = (traffic && typeof traffic === 'object') ? traffic : {};
+        window.ServerUi.patchClients({
+            container: this.getElement(`clients-${serverId}`),
+            server,
+            traffic: server.traffic,
+            previous,
+            escapeHtml: (v) => this.escapeHtml(v),
+            isClientActiveFromTraffic: (t) => this.isClientActiveFromTraffic(t),
+        });
         this.renderStrip();
     }
 
@@ -799,7 +770,7 @@ class AmneziaApp {
     }
 
     renameClient(serverId, clientId, target) {
-        const client = (this.serverClients.get(serverId) || []).find(c => c.id === clientId);
+        const client = this.findClient(serverId, clientId);
         window.Ui.startRename(target, {
             value: client ? client.name : (target?.textContent || '').trim(),
             label: 'New client name',
@@ -811,6 +782,11 @@ class AmneziaApp {
                 this.loadServers();
             },
         });
+    }
+
+    findClient(serverId, clientId) {
+        const server = (this.lastServers || []).find((s) => s.id === serverId);
+        return (server?.clients || []).find((c) => c.id === clientId);
     }
 
     // GET JSON; throws with the server's error message on a non-2xx answer.

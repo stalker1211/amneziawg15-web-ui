@@ -57,7 +57,7 @@ class CsrfGuardTests(unittest.TestCase):
 
     def test_get_requests_need_no_content_type(self):
         self.assertEqual(self.client.get("/api/servers").status_code, 200)
-        self.assertEqual(self.client.get("/api/clients").status_code, 200)
+        self.assertEqual(self.client.get("/api/servers/none/info").status_code, 404)
 
     def test_delete_also_requires_json(self):
         self.assertEqual(self.client.delete("/api/servers/none").status_code, 415)
@@ -421,10 +421,6 @@ class RouteNotFoundTests(_RealSystemApp):
         for rule, method in self._routes("server_id"):
             label = f"{method} {rule.rule}"
             response = self._call(rule, method, "nope")
-            if (method, rule.rule) == ("GET", "/api/servers/<server_id>/clients"):
-                # Lists by filter: an unknown server simply has no clients.
-                self.assertEqual((response.status_code, response.get_json()), (200, []), label)
-                continue
             self.assertEqual(response.status_code, 404, label)
             self.assertIn("error", response.get_json(), label)
             checked += 1
@@ -450,7 +446,7 @@ SERVER_KEYS = {
     "auto_start", "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns",
     "egress_probe", "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip",
     "public_ip_geo", "public_ip_geo_country_code", "server_ip", "server_public_key", "status", "subnet",
-    "transport_params",
+    "traffic", "transport_params",
 }  # fmt: skip
 CLIENT_KEYS = {
     "client_ip", "client_params", "client_public_key", "config_issued_at", "config_outdated", "created_at", "id",
@@ -474,8 +470,6 @@ class ApiContractTests(unittest.TestCase):
             "POST .../issued": self.client.post(
                 f"/api/servers/{self.server['id']}/clients/{self.added['client']['id']}/issued", json={}
             ).get_json()["client"],
-            "GET .../clients": self.client.get(f"/api/servers/{self.server['id']}/clients").get_json()[0],
-            "GET /api/clients": self.client.get("/api/clients").get_json()[0],
         }
         for label, client in payloads.items():
             self.assertEqual(set(client), CLIENT_KEYS, label)
@@ -491,8 +485,6 @@ class ApiContractTests(unittest.TestCase):
                 json={"name": "t", "protocol": "AWG 2.0", "subnet": "10.66.0.0/24", "port": 51966, "auto_start": False},
             ),
             "GET /api/servers": self.client.get("/api/servers"),
-            "GET /api/clients": self.client.get("/api/clients"),
-            "GET .../clients": self.client.get(f"/api/servers/{self.server['id']}/clients"),
             "GET .../info": self.client.get(f"/api/servers/{self.server['id']}/info"),
             "POST .../suspend": self.client.post(f"{client_url}/suspend", json={}),
             "POST .../client-params": self.client.post(f"{client_url}/client-params", json={"client_params": {"Jc": 6}}),
@@ -509,7 +501,7 @@ class ApiContractTests(unittest.TestCase):
             secrets |= {client["client_private_key"], client["preshared_key"]}
             secrets |= {client["config_issued_fingerprint"]} - {None}
         self.assertTrue(any(len(secret) == 16 for secret in secrets))  # a fingerprint is among them
-        for label in ("GET /api/servers", "GET /api/clients", "GET .../clients"):
+        for label in ("GET /api/servers",):
             body = responses[label].get_data(as_text=True)
             for secret in secrets:
                 self.assertNotIn(secret, body, label)
@@ -672,9 +664,18 @@ class ServerRouteTests(_RealSystemApp):
         self.assertEqual((both["clean_length"], both["full_length"]), (len(both["clean_config"]), len(both["full_config"])))
         self.assertEqual(both["client_name"], "phone")
 
-    def test_traffic(self):
-        with mock.patch.object(self.manager, "get_traffic_for_server", return_value={"clients": {"a": {"rx": 1}}}):
-            self.assertEqual(self.client.get(self._url("traffic")).get_json(), {"clients": {"a": {"rx": 1}}})
+    def test_the_server_list_carries_the_telemetry_snapshot(self):
+        # One request loads the page: clients and traffic come with the servers.
+        traffic = {"a": {"received_bytes": 1}}
+        with mock.patch.object(self.manager, "get_traffic_for_server", return_value=traffic):
+            self.assertEqual(self.client.get("/api/servers").get_json()[0]["traffic"], traffic)
+        with mock.patch.object(self.manager, "get_traffic_for_server", return_value=None):
+            self.assertEqual(self.client.get("/api/servers").get_json()[0]["traffic"], {})
+
+    def test_the_per_server_list_routes_are_gone(self):
+        for url in ("/api/clients", self._url("clients"), self._url("traffic")):
+            # 405 for .../clients, which still takes a POST (add a client).
+            self.assertIn(self.client.get(url).status_code, (404, 405), url)
 
     def test_egress_probe(self):
         probe = {"external_ip": "198.51.100.9", "service": "https://ident.me", "error": None}
@@ -698,13 +699,12 @@ class ServerRouteTests(_RealSystemApp):
         self.assertEqual(params({"name": "d", "copy_from_client_id": "gone"}),
                          {key: defaults[key] for key in ("Jc", "Jmin", "Jmax")})  # fmt: skip
 
-    def test_client_lists_are_scoped(self):
+    def test_each_server_lists_only_its_clients(self):
         other = _create_server(self.client, "o", "10.63.0.0/24", 51963)
         self.client.post(self._url("clients"), json={"name": "mine"})
         self.client.post(f"/api/servers/{other['id']}/clients", json={"name": "theirs"})
-        names = lambda url: sorted(c["name"] for c in self.client.get(url).get_json())
-        self.assertEqual(names(self._url("clients")), ["mine"])
-        self.assertEqual(names("/api/clients"), ["mine", "theirs"])
+        listed = {s["name"]: [c["name"] for c in s["clients"]] for s in self.client.get("/api/servers").get_json()}
+        self.assertEqual((listed[self.server["name"]], listed["o"]), (["mine"], ["theirs"]))
 
 
 class RouteErrorTests(unittest.TestCase):

@@ -168,12 +168,15 @@ def register_server_routes(
 
     @server_bp.route("/api/servers", methods=["GET"])
     def get_servers():
-        """List servers with live status and geo labels. Read-only: the display values
-        are computed into the response, never written back to the stored config."""
+        """Everything the page shows, in one request: servers with their clients, live
+        status, geo labels and the last telemetry snapshot (`traffic`, per client id;
+        empty for a stopped server). Read-only: display values are computed into the
+        response, never written back to the stored config."""
         payload = []
         for server in amnezia_manager.config["servers"]:
             item = serialize_server(server)
             item["status"] = amnezia_manager.get_server_status(server["id"])
+            item["traffic"] = amnezia_manager.get_traffic_for_server(server["id"]) or {}
             item["public_ip_geo"], item["public_ip_geo_country_code"] = amnezia_manager.lookup_geoip(server.get("public_ip"))
 
             if isinstance(server.get("egress_probe"), dict):
@@ -302,13 +305,6 @@ def register_server_routes(
             }
         )
 
-    @server_bp.route("/api/servers/<server_id>/traffic")
-    def get_server_traffic(server_id):
-        traffic = amnezia_manager.get_traffic_for_server(server_id)
-        if traffic is None:
-            abort(404, description="Server not found or no traffic data")
-        return jsonify(traffic)
-
     @server_bp.route("/api/servers/<server_id>/egress-ip", methods=["POST"])
     def probe_server_egress_ip(server_id):
         server = server_or_404(server_id)
@@ -316,15 +312,6 @@ def register_server_routes(
         return jsonify({"server_id": server_id, "server_name": server.get("name"), **probe})
 
     # --- clients ------------------------------------------------------------------
-
-    @server_bp.route("/api/clients", methods=["GET"])
-    def get_all_clients():
-        return jsonify([serialize_client(client) for client in amnezia_manager.get_client_configs()])
-
-    @server_bp.route("/api/servers/<server_id>/clients", methods=["GET"])
-    def get_server_clients(server_id):
-        # Lists by filter: an unknown server simply has no clients.
-        return jsonify([serialize_client(client) for client in amnezia_manager.get_client_configs(server_id)])
 
     @server_bp.route("/api/servers/<server_id>/clients", methods=["POST"])
     def add_client(server_id):

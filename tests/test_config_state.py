@@ -249,7 +249,7 @@ class ClientMutationTests(unittest.TestCase):
     def test_rename_server_is_seen_by_every_client(self):
         response = self.http.post(self._url("rename"), json={"name": "cabin"})
         self.assertEqual(response.status_code, 200)
-        listed = self.http.get(self._url("clients")).get_json()
+        listed = self.http.get("/api/servers").get_json()[0]["clients"]
         self.assertEqual({c["server_name"] for c in listed}, {"cabin"})
         self.assert_saved_state_matches()
 

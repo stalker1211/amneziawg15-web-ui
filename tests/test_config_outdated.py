@@ -63,7 +63,8 @@ class OutdatedFlagTests(unittest.TestCase):
         return response.get_json()["client"]
 
     def outdated(self):
-        return {c["name"] for c in self.http.get("/api/clients").get_json() if c["config_outdated"]}
+        servers = self.http.get("/api/servers").get_json()
+        return {c["name"] for s in servers for c in s["clients"] if c["config_outdated"]}
 
     def _refresh_ip(self, address):
         with mock.patch.object(self.manager, "detect_public_ip", return_value=address), \
@@ -136,7 +137,7 @@ class OutdatedFlagTests(unittest.TestCase):
         stored = json.loads(Path(self.manager.config_file).read_text(encoding="utf-8"))
         fingerprint = stored["servers"][0]["clients"][0]["config_issued_fingerprint"]
         self.assertRegex(fingerprint, r"^[0-9a-f]{16}$")
-        for url in ("/api/servers", "/api/clients", f"/api/servers/{self.home['id']}/clients"):
+        for url in ("/api/servers", f"/api/servers/{self.home['id']}/info"):
             body = self.http.get(url).get_data(as_text=True)
             self.assertNotIn("config_issued_fingerprint", body, url)
             self.assertNotIn(fingerprint, body, url)

@@ -65,6 +65,36 @@ function check(label, condition, detail) {
     check('theme button toggles light/dark and remembers the choice',
         toggles.join(' ') === 'light:light dark:dark', toggles);
 
+    // One request draws the page: the servers carry their clients and traffic.
+    const apiRequests = [];
+    const recordApi = (r) => { if (new URL(r.url()).pathname.startsWith('/api/')) apiRequests.push(new URL(r.url()).pathname); };
+    page.on('request', recordApi);
+    await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
+    await new Promise((r) => setTimeout(r, 1500));
+    page.off('request', recordApi);
+    check('a page load asks /api/servers once and nothing per server',
+        apiRequests.filter((u) => u === '/api/servers').length === 1 && apiRequests.every((u) => ['/api/servers', '/api/system/status'].includes(u)),
+        apiRequests);
+
+    // Telemetry patches the rows in place: buttons, focus and an open menu survive.
+    check('a traffic update patches the rows in place', await page.evaluate(() => {
+        const server = amneziaApp.lastServers.find((s) => s.status === 'running' && (s.clients || []).some((c) => !c.suspended));
+        if (!server) return false;
+        const client = server.clients.find((c) => !c.suspended);
+        const row = () => document.querySelector(`#clients-${server.id} li[data-client-id="${client.id}"]`);
+        const edit = [...row().querySelectorAll('button')].find((b) => /Edit/.test(b.textContent));
+        edit.focus();
+        const before = server.traffic[client.id] || {};
+        amneziaApp.updateServerTraffic(server.id, { ...server.traffic, [client.id]: {
+            ...before, endpoint: '198.51.100.99:4242', latest_handshake_seconds: 3, active: true,
+            received_bytes: (before.received_bytes || 0) + 5 * 1024 * 1024 } });
+        return edit.isConnected && document.activeElement === edit && /198\.51\.100\.99/.test(row().textContent)
+            && /handshake 3 s ago/.test(row().textContent)
+            && row().querySelector('[data-cell="rx-arrow"]').classList.contains('traffic-flash');
+    }));
+    await page.evaluate(() => amneziaApp.loadServers());
+    await new Promise((r) => setTimeout(r, 500));
+
     const servers = await page.evaluate(() => (amneziaApp.lastServers || []).map((s) => ({ id: s.id, protocol: s.protocol })));
     check('at least one server exists to test against', servers.length > 0, servers.length);
     if (!servers.length) { await browser.close(); process.exit(1); }
@@ -118,9 +148,8 @@ function check(label, condition, detail) {
             await page.evaluate(() => window.Ui.closeDrawer());
 
             const clientId = await page.evaluate(async (s) => {
-                const r = await amneziaApp.apiFetch(`/api/servers/${s}/clients`);
-                const c = await r.json();
-                amneziaApp.serverClients.set(s, c);
+                await amneziaApp.loadServers();
+                const c = (amneziaApp.lastServers.find((x) => x.id === s) || {}).clients || [];
                 return c[0] && c[0].id;
             }, id);
             if (!clientId) { check(`${protocol} has a client to inspect`, false); continue; }
@@ -147,8 +176,8 @@ function check(label, condition, detail) {
             check(`${protocol} QR code rendered`, await page.evaluate(() => !!document.querySelector('#qrModal canvas, #qrModal img')));
             // Showing the QR hands the config out, which the server records.
             check(`${protocol} showing the QR records the config as issued`, await page.evaluate(async (s, c) => {
-                const r = await amneziaApp.apiFetch(`/api/servers/${s}/clients`);
-                const client = (await r.json()).find((x) => x.id === c);
+                const r = await amneziaApp.apiFetch('/api/servers');
+                const client = ((await r.json()).find((x) => x.id === s)?.clients || []).find((x) => x.id === c);
                 return !!client && client.config_issued_at !== null && client.config_outdated === false;
             }, id, clientId));
             await page.evaluate(() => window.Ui.closeDialog());

@@ -137,16 +137,23 @@ class ServerUi {
         </article>`;
     }
 
-    // The Clients header and rows of one card: re-rendered on every traffic update.
-    static renderServerClientsHtml({ server, clients, traffic, escapeHtml, isClientActiveFromTraffic }) {
-        const safe = (v) => escapeHtml(v ?? '');
+    // The Clients header's summary: "4 · 2 online · 1 to re-import".
+    static summaryHtml({ server, clients, traffic, isClientActiveFromTraffic }) {
         const online = clients.filter((c) => ServerUi.isOnline(server, c, traffic[c.id], isClientActiveFromTraffic)).length;
         const stale = clients.filter((c) => c.config_outdated).length;
+        return `${clients.length} · ${online} online${stale
+            ? ` · <span class="font-semibold text-rose-700 dark:text-[#fda4af]">${stale} to re-import</span>` : ''}`;
+    }
+
+    // The Clients header and rows of one card, rendered with the servers. Telemetry
+    // then patches the data-cell elements in place (patchClients), so the buttons,
+    // keyboard focus, a text selection and an open ⋯ menu survive every update.
+    static renderServerClientsHtml({ server, clients, traffic, escapeHtml, isClientActiveFromTraffic }) {
+        const safe = (v) => escapeHtml(v ?? '');
         const header = `
             <div class="px-4 sm:px-5 pt-3 pb-1 flex items-center gap-2">
                 <span class="section-title">Clients</span>
-                <span class="text-xs text-gray-500 dark:text-[#94a3b8] tabular-nums">${clients.length} · ${online} online${stale
-                    ? ` · <span class="font-semibold text-rose-700 dark:text-[#fda4af]">${stale} to re-import</span>` : ''}</span>
+                <span class="text-xs text-gray-500 dark:text-[#94a3b8] tabular-nums" data-cell="summary">${ServerUi.summaryHtml({ server, clients, traffic, isClientActiveFromTraffic })}</span>
             </div>`;
         if (clients.length === 0) {
             return `${header}<p class="px-4 sm:px-5 pb-4 text-sm text-gray-500 dark:text-[#94a3b8]">No clients yet. Add one with + Client.</p>`;
@@ -157,23 +164,33 @@ class ServerUi {
         return `${header}<ul class="divide-y divide-gray-200 dark:divide-[#2b3647]">${rows}</ul>`;
     }
 
+    // What the telemetry-driven cells of a row show; shared by the render and the patch.
+    static liveCells({ server, client, clientTraffic, safe, isClientActiveFromTraffic }) {
+        const suspended = !!client.suspended;
+        const on = ServerUi.isOnline(server, client, clientTraffic, isClientActiveFromTraffic);
+        const endpoint = clientTraffic.endpoint || '';
+        const cc = String(clientTraffic.geo_country_code || '').toUpperCase();
+        const where = [cc, clientTraffic.geo].filter(Boolean).join(' / ');
+        const age = ServerUi.since(clientTraffic.latest_handshake_seconds);
+        return {
+            dotClass: `w-2.5 h-2.5 rounded-full flex-none ${suspended ? 'bg-amber-400'
+                : on ? 'bg-green-500' : 'ring-1 ring-inset ring-gray-400 dark:ring-[#64748b]'}`,
+            dotTitle: suspended ? 'Suspended' : on ? 'Online: handshake in the last 5 minutes' : 'Offline',
+            place: endpoint
+                ? `${ServerUi.flag(cc)} <span class="font-mono">${safe(endpoint)}</span>${where ? ` <span class="text-gray-500 dark:text-[#94a3b8]">${safe(where)}</span>` : ''}`
+                : '<span class="text-gray-400 dark:text-[#64748b]">Not connected</span>',
+            handshake: endpoint && age ? `handshake ${age}` : '',
+            rx: ServerUi.bytes(clientTraffic.received_bytes),
+            tx: ServerUi.bytes(clientTraffic.sent_bytes),
+        };
+    }
+
     static clientRowHtml({ server, client, clientTraffic, safe, isClientActiveFromTraffic }) {
         const icon = window.Ui.icon;
         const sid = safe(server.id);
         const cid = safe(client.id);
         const suspended = !!client.suspended;
-        const on = ServerUi.isOnline(server, client, clientTraffic, isClientActiveFromTraffic);
-        const dotClass = suspended ? 'bg-amber-400'
-            : on ? 'bg-green-500' : 'ring-1 ring-inset ring-gray-400 dark:ring-[#64748b]';
-        const dotTitle = suspended ? 'Suspended' : on ? 'Online: handshake in the last 5 minutes' : 'Offline';
-        const endpoint = clientTraffic.endpoint || '';
-        const cc = String(clientTraffic.geo_country_code || '').toUpperCase();
-        const where = [cc, clientTraffic.geo].filter(Boolean).join(' / ');
-        const place = endpoint
-            ? `${ServerUi.flag(cc)} <span class="font-mono">${safe(endpoint)}</span>${where ? ` <span class="text-gray-500 dark:text-[#94a3b8]">${safe(where)}</span>` : ''}`
-            : '<span class="text-gray-400 dark:text-[#64748b]">Not connected</span>';
-        const age = ServerUi.since(clientTraffic.latest_handshake_seconds);
-        const handshake = endpoint && age ? `handshake ${safe(age)}` : '';
+        const cells = ServerUi.liveCells({ server, client, clientTraffic, safe, isClientActiveFromTraffic });
         const dim = suspended ? 'opacity-55' : '';
 
         const suspendedPill = suspended
@@ -184,23 +201,21 @@ class ServerUi {
                    onclick="amneziaApp.showClientQRCode('${sid}', '${cid}')"
                    title="The config changed after it was handed out${issuedOn ? ` on ${safe(issuedOn)}` : ''}. Show the new one.">${icon('refresh', 'w-3 h-3')}Re-import</button>`
             : '';
-        const rxFlash = clientTraffic._rx_changed ? 'traffic-flash' : '';
-        const txFlash = clientTraffic._tx_changed ? 'traffic-flash' : '';
 
         return `
         <li class="px-4 sm:px-5 py-3 grid gap-x-4 gap-y-1.5 grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_7.5rem_auto] items-center" data-client-id="${cid}">
             <div class="col-span-2 md:col-span-1 flex items-center gap-2 min-w-0 ${dim}">
-                <span class="w-2.5 h-2.5 rounded-full flex-none ${dotClass}" title="${dotTitle}"></span>
+                <span data-cell="dot" class="${cells.dotClass}" title="${cells.dotTitle}"></span>
                 <span class="text-sm font-medium text-sky-700 dark:text-[#7dd3fc] truncate" data-name="${cid}">${safe(client.name)}</span>
                 <span class="font-mono text-xs text-gray-500 dark:text-[#94a3b8]">${safe(client.client_ip)}</span>
             </div>
             <div class="col-span-2 md:col-span-1 flex flex-col items-start gap-0.5 text-xs text-gray-600 dark:text-[#cbd5e1] min-w-0">
-                <span class="flex items-center gap-2 min-w-0 max-w-full">${reimportPill}${suspendedPill}<span class="min-w-0 truncate ${dim}">${place}</span></span>
-                ${handshake ? `<span class="text-gray-500 dark:text-[#94a3b8] ${dim}">${handshake}</span>` : ''}
+                <span class="flex items-center gap-2 min-w-0 max-w-full">${reimportPill}${suspendedPill}<span data-cell="place" class="min-w-0 truncate ${dim}">${cells.place}</span></span>
+                <span data-cell="handshake" class="text-gray-500 dark:text-[#94a3b8] ${dim}"${cells.handshake ? '' : ' hidden'}>${safe(cells.handshake)}</span>
             </div>
             <div class="flex flex-col whitespace-nowrap text-xs font-mono tabular-nums text-gray-600 dark:text-[#cbd5e1] md:text-right ${dim}">
-                <span title="Received"><span class="traffic-arrow ${rxFlash}">↓</span> ${safe(ServerUi.bytes(clientTraffic.received_bytes))}</span>
-                <span title="Sent"><span class="traffic-arrow ${txFlash}">↑</span> ${safe(ServerUi.bytes(clientTraffic.sent_bytes))}</span>
+                <span title="Received"><span class="traffic-arrow" data-cell="rx-arrow">↓</span> <span data-cell="rx">${safe(cells.rx)}</span></span>
+                <span title="Sent"><span class="traffic-arrow" data-cell="tx-arrow">↑</span> <span data-cell="tx">${safe(cells.tx)}</span></span>
             </div>
             <div class="flex items-center gap-1 justify-end">
                 <label class="switch switch-sm switch-amber mr-1.5" title="${suspended ? 'Reactivate client' : 'Suspend client'}">
@@ -213,6 +228,46 @@ class ServerUi {
                 <button type="button" class="icon-btn icon-btn-sm" onclick="amneziaApp.openClientMenu('${sid}', '${cid}', this)" aria-label="More actions for ${safe(client.name)}" aria-haspopup="menu">${icon('dots')}</button>
             </div>
         </li>`;
+    }
+
+    // Apply a telemetry update to a rendered card: only the data-cell elements change.
+    // `previous` is the traffic the rows show now, to flash the arrows of totals that grew.
+    static patchClients({ container, server, traffic, previous, escapeHtml, isClientActiveFromTraffic }) {
+        if (!container) return;
+        const safe = (v) => escapeHtml(v ?? '');
+        const clients = server.clients || [];
+        const summary = container.querySelector('[data-cell="summary"]');
+        if (summary) summary.innerHTML = ServerUi.summaryHtml({ server, clients, traffic, isClientActiveFromTraffic });
+        container.querySelectorAll('li[data-client-id]').forEach((row) => {
+            const client = clients.find((c) => c.id === row.dataset.clientId);
+            if (!client) return;
+            const now = traffic[client.id] || {};
+            const before = previous[client.id] || {};
+            const cells = ServerUi.liveCells({ server, client, clientTraffic: now, safe, isClientActiveFromTraffic });
+            const cell = (name) => row.querySelector(`[data-cell="${name}"]`);
+            const dot = cell('dot');
+            if (dot) {
+                dot.className = cells.dotClass;
+                dot.title = cells.dotTitle;
+            }
+            const place = cell('place');
+            if (place && place.innerHTML !== cells.place) place.innerHTML = cells.place;
+            const handshake = cell('handshake');
+            if (handshake) {
+                handshake.textContent = cells.handshake;
+                handshake.hidden = !cells.handshake;
+            }
+            [['rx', 'received_bytes'], ['tx', 'sent_bytes']].forEach(([name, key]) => {
+                const value = cell(name);
+                if (value) value.textContent = cells[name];
+                const arrow = cell(`${name}-arrow`);
+                if (arrow && before[key] !== undefined && now[key] !== before[key]) {
+                    arrow.classList.remove('traffic-flash');
+                    void arrow.offsetWidth; // restart the animation
+                    arrow.classList.add('traffic-flash');
+                }
+            });
+        });
     }
 }
 

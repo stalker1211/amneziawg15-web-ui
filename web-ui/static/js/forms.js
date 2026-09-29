@@ -530,7 +530,7 @@ class FormUi {
             return;
         }
         const safe = (v) => this.escapeHtml(v ?? '');
-        const clients = this.serverClients.get(serverId) || server.clients || [];
+        const clients = server.clients || [];
         const defaults = server.client_defaults || {};
         const name = () => (document.getElementById('c-name')?.value || '').trim();
 
@@ -573,7 +573,7 @@ class FormUi {
     fillClientFromCopy(clientId) {
         const serverId = this.drawerCtx?.serverId;
         const server = (this.lastServers || []).find((s) => s.id === serverId);
-        const source = (this.serverClients.get(serverId) || server?.clients || []).find((c) => c.id === clientId);
+        const source = (server?.clients || []).find((c) => c.id === clientId);
         const params = source ? source.client_params || {} : server?.client_defaults || {};
         ['Jc', 'Jmin', 'Jmax', ...AmneziaApp.I_PARAM_KEYS, ...AmneziaApp.AWG3_CLIENT_PARAM_KEYS].forEach((k) => {
             const el = document.getElementById(`c-${k}`);
@@ -585,13 +585,13 @@ class FormUi {
 
     showClientParamsModal(serverId, clientId) {
         const server = (this.lastServers || []).find((s) => String(s.id) === String(serverId));
-        const client = (this.serverClients.get(serverId) || server?.clients || []).find((c) => c.id === clientId);
+        const client = (server?.clients || []).find((c) => c.id === clientId);
         if (!server || !client) {
             this.showTempMessage('Client not found', 'error');
             return;
         }
         const safe = (v) => this.escapeHtml(v ?? '');
-        const traffic = (this.lastTrafficByServer.get(serverId) || {})[clientId] || {};
+        const traffic = (server.traffic || {})[clientId] || {};
         const age = window.ServerUi.since(traffic.latest_handshake_seconds);
         const seen = traffic.endpoint && age ? `handshake ${safe(age)}` : 'not connected';
         const params = { ...(server.client_defaults || {}), ...(client.client_params || {}) };

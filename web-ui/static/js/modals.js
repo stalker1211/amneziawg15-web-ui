@@ -13,7 +13,7 @@ class ModalUi {
     // which clears the client's Re-import flag.
     async showClientQRCode(serverId, clientId) {
         const server = (this.lastServers || []).find((s) => s.id === serverId) || {};
-        const client = (this.serverClients.get(serverId) || server.clients || []).find((c) => c.id === clientId) || {};
+        const client = (server.clients || []).find((c) => c.id === clientId) || {};
         const safe = (v) => this.escapeHtml(v ?? '');
         const icon = window.Ui.icon;
         let config;
