@@ -247,16 +247,18 @@ def build_manager(**overrides):
     return _TestManager(**kwargs)
 
 
-def build_app(secret_key_path=None, awg_log_file="/nonexistent/awg.log", manager=None):
+def build_app(secret_key_path=None, awg_log_file="/nonexistent/awg.log", manager=None, access=None):
     """The Flask app wired as app.py does it -- real guards and routes -- around a stubbed manager.
 
     app.py itself is not imported: it builds everything at import time against
-    /etc/amnezia and a real AmneziaManager.
+    /etc/amnezia and a real AmneziaManager. The settings routes are registered when
+    the manager has settings (build_manager(settings=...)) and `access` is given.
     """
-    from core.guards import install_guards
+    from core.guards import install_guards, rotate_secret_key
     from core.helpers import to_bool
     from flask import Flask
     from routes.servers import register_server_routes
+    from routes.settings import register_settings_routes
     from routes.system import register_system_routes
 
     manager = manager or build_manager()
@@ -267,24 +269,16 @@ def build_app(secret_key_path=None, awg_log_file="/nonexistent/awg.log", manager
         secret_key_path = os.path.join(manager.config_dir, ".flask_secret_key")
     install_guards(app, secret_key_path=secret_key_path)
 
-    register_system_routes(
-        app,
-        manager,
-        awg_log_file=awg_log_file,
-        nginx_port="80",
-        auto_start_servers=False,
-        default_mtu=1420,
-        default_subnet="10.0.0.0/24",
-        default_port=51820,
-        default_dns="1.1.1.1",
-    )
-    register_server_routes(
-        app,
-        manager,
-        to_bool=to_bool,
-        default_enable_nat=True,
-        default_block_lan_cidrs=True,
-    )
+    register_system_routes(app, manager, awg_log_file=awg_log_file, nginx_port="80")
+    register_server_routes(app, manager, to_bool=to_bool)
+    if manager.settings is not None and access is not None:
+        register_settings_routes(
+            app,
+            manager,
+            access,
+            build_label="test",
+            rotate_secret_key=lambda: rotate_secret_key(app, secret_key_path),
+        )
     return app, manager
 
 

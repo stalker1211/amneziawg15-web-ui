@@ -425,7 +425,7 @@ class RouteNotFoundTests(_RealSystemApp):
 # hashes a config that holds the client's private key.
 SECRET_KEYS = {"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"}
 SERVER_KEYS = {
-    "auto_start", "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns",
+    "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns",
     "egress_probe", "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip",
     "public_ip_geo", "public_ip_geo_country_code", "server_ip", "server_public_key", "status", "subnet",
     "traffic", "transport_params",

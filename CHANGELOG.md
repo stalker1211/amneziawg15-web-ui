@@ -1,5 +1,83 @@
 # CHANGELOG
 
+## Version 2.4 (unreleased)
+
+Panel settings in the panel, one parameter generator on the server, and a round of
+fixes and hardening. Upgrading needs no action: the first boot copies today's
+environment variables into the stored settings, so nothing changes until you trim
+them. A new volume, or one that never set `NGINX_PASSWORD`, signs in with
+admin/changeme and says so in a banner.
+
+### Settings and behaviour
+- **Panel settings drawer** (⚙ in the header): the sign-in (user name and password,
+  the current password required), the daemon's and the panel's log levels, GeoIP,
+  and the defaults for new servers. Stored in `web_config.json`; the sign-in hashed
+  (SHA-512 crypt) in `/etc/amnezia/.htpasswd`, which nginx reads, so it survives
+  image updates. `GET`/`POST /api/settings` never serve the password or its hash.
+- **One rule for environment variables:** a set, non-empty variable pins its setting
+  (copied in at every boot, read-only in the drawer); removing it keeps the last
+  value, now editable. `NGINX_PASSWORD` doubles as recovery.
+- **Default password banner** until admin/changeme is changed.
+- **A restart brings back what was running:** each server's last start/stop state
+  decides, so a server stopped in the panel stays stopped. `AUTO_START_SERVERS` is
+  retired (`false` still means "start nothing at boot" for now).
+- **Daemon log:** `off`, `error` (the new default: silent unless something fails) or
+  `debug`. It reaches the daemon only; the drawer offers to restart the running
+  servers, since the daemon reads its level when it starts.
+
+### Parameters
+- **Every new server gets its own random parameters**, drawn by the server
+  (`POST /api/generate`, ported from AmneziaWG Architect, MIT): four disjoint H ranges
+  under 2³¹−1, S sizes that never make two message types the same length, a small
+  junk train (Jc 4–12, Jmin 8–40, Jmax ≤ 160 instead of up to the MTU: junk precedes
+  every handshake), and on AWG 3.x a header protection key, content padding and
+  timers that keep WireGuard's timer rules. Until 2.4 the drawer used one fixed set
+  unless Randomize was pressed, and the JS and Python generators disagreed.
+- **Validation:** I1–I5 checked as amneziawg-go parses them (an unknown tag, `<c>`
+  included, is refused); S1–S4, Jc, Jmin, Jmax at most 65535 and H at most 2³²−1;
+  duplicate H refused on AWG 1.5 too; Jc 0 allowed (no junk). New warnings: two
+  message types of the same length, H in WireGuard's own 1–4 without header
+  protection, AWG 3.x timers that fight each other, a signature packet above the MTU.
+
+### Fixes
+- **The API answered without a password on the container's own address.** Flask
+  listened on `0.0.0.0:5000`; on a macvlan network that is the LAN. It listens on
+  127.0.0.1 now, behind nginx.
+- **A panel `LOG_LEVEL` hung every server start** (the daemon kept `awg-quick`'s
+  output pipe open), including at boot. The daemon's level now reaches `awg-quick up`
+  alone, and the panel's own `LOG_LEVEL` is its own again.
+- **↻ during an outage wrote a wrong address into every client config** (the LAN
+  address, or `YOUR_SERVER_IP`). Refresh is a POST that answers 502 and changes
+  nothing when detection fails; detection is HTTPS only.
+- A server on a subnet other than a /24 got an address outside it (`10.8.0.1` for
+  `10.8.0.64/26`); it is the subnet's first host now.
+- Stopping one server removed the forwarding rule every other server relied on;
+  each server's iptables rules carry its own tag now.
+- `is_valid_ip` accepted `+1.2.3.4` and `1_0.0.0.1`.
+- The Logs view read the whole daemon log every 10 s; it reads the end.
+
+### Live view
+- One request draws the page (it used to be 1 + 2 per server, on every focus), and
+  telemetry updates patch the rows in place every 7 s: keyboard focus, a text
+  selection and an open ⋯ menu survive.
+- Telemetry is one `awg show all dump` per tick (byte counts and handshake times
+  instead of parsing text), and running state comes from sysfs. Stopped servers no
+  longer log an error on every page load.
+- GeoIP lookups leave the traffic loop, and a failed one is retried after 10 minutes,
+  not a day. The QR code uses error correction M (L for large configs) instead of H:
+  81 modules a side instead of 109 for a typical config.
+
+### Security and housekeeping
+- **`API_TOKEN` removed**: behind nginx it never admitted or refused anything. A
+  container that still sets it logs a warning.
+- **Content-Security-Policy `script-src 'self'`**, plus `frame-ancestors 'none'`,
+  `nosniff` and `no-referrer`: the page has no inline script or handler left.
+- The protocol table reaches the page as JSON from the backend; the JS copy is gone.
+- `web_config.json` holds each client once and nothing derived; the traffic monitor
+  never writes it. (The v2.1 rollback copy is gone; loading a 2.1 file still works.)
+- Alpine pinned to 3.24; the unused `nftables` package, the GitHub Actions workflow
+  and `SYS_MODULE` dropped.
+
 ## Version 2.3 (2026-09-28)
 
 A redesigned panel, and the panel now tells you which devices hold a config that no

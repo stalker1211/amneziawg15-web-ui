@@ -145,7 +145,7 @@ class NginxAuthConfigTests(unittest.TestCase):
     def test_ui_and_api_require_basic_auth(self):
         for path in ("/", "/api/"):
             self.assertRegex(self.locations[path], r"auth_basic\s+\"", path)
-            self.assertIn("auth_basic_user_file /etc/nginx/.htpasswd;", self.locations[path], path)
+            self.assertIn("auth_basic_user_file /etc/amnezia/.htpasswd;", self.locations[path], path)
 
     def test_socket_io_is_the_only_ungated_proxy_to_flask(self):
         # /socket.io/ relies on the session cookie instead; /status is localhost-only.

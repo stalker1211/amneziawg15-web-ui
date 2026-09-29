@@ -16,6 +16,7 @@ on exit. The smoke tests run against it the same way they run against a containe
 import argparse
 import base64
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -25,11 +26,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "web-ui"))
 
-from core.guards import install_guards
+from core.guards import install_guards, rotate_secret_key
 from core.helpers import to_bool
 from core.runtime import create_flask_app, create_socketio, register_socket_handlers
+from core.settings import Access, Settings
 from flask import render_template, send_from_directory
 from routes.servers import register_server_routes
+from routes.settings import register_settings_routes
 from routes.system import page_config, register_system_routes
 from services.amnezia_manager import AmneziaManager
 
@@ -235,28 +238,40 @@ def main():
     tmp = tempfile.mkdtemp(prefix="awg-demo-")
     web_ui = REPO / "web-ui"
     app = create_flask_app(str(web_ui / "templates"), str(web_ui / "static"))
-    install_guards(app, secret_key_path=os.path.join(tmp, ".flask_secret_key"))
+    secret_key = os.path.join(tmp, ".flask_secret_key")
+    install_guards(app, secret_key_path=secret_key)
     socketio = create_socketio(app, None)
-    defaults = {"default_mtu": 1420, "default_subnet": "10.10.0.0/24", "default_port": 51820}
+    # Settings as a deployment would have them: DEFAULT_MTU pinned by its variable (the
+    # drawer shows it read-only), the rest stored; and the default admin/changeme
+    # credential with its banner, as start.sh leaves a fresh volume.
+    Path(tmp, "web_config.json").write_text(
+        json.dumps({"servers": [], "settings": {"default_subnet": "10.10.0.0/24", "default_dns": "1.1.1.1, 9.9.9.9"}}),
+        encoding="utf-8",
+    )
+    settings = Settings({"DEFAULT_MTU": "1420"})
+    access = Access(os.path.join(tmp, ".htpasswd"), os.path.join(tmp, ".htpasswd.default"), environ={})
+    Path(access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
+    Path(access.marker).touch()
     manager = DemoManager(
         socketio_instance=socketio, auto_start_servers=False, dns_servers=["1.1.1.1", "9.9.9.9"],
-        default_enable_nat=True, default_block_lan_cidrs=True, config_dir=tmp, enable_geoip=True, **defaults,
+        default_enable_nat=True, default_block_lan_cidrs=True, config_dir=tmp, enable_geoip=True,
+        default_mtu=1420, default_subnet="10.10.0.0/24", default_port=51820, settings=settings,
     )  # fmt: skip
     if not args.empty:
         seed(manager)
     log_file = os.path.join(tmp, "awg.log")
     write_log(log_file, manager)
 
-    register_system_routes(app, manager, awg_log_file=log_file, nginx_port=str(args.port),
-                           auto_start_servers=False, default_dns="1.1.1.1, 9.9.9.9", **defaults)  # fmt: skip
-    register_server_routes(app, manager, to_bool=to_bool,
-                           default_enable_nat=True, default_block_lan_cidrs=True)  # fmt: skip
+    register_system_routes(app, manager, awg_log_file=log_file, nginx_port=str(args.port))
+    register_server_routes(app, manager, to_bool=to_bool)
+    register_settings_routes(app, manager, access, build_label=args.label,
+                             rotate_secret_key=lambda: rotate_secret_key(app, secret_key))  # fmt: skip
     register_socket_handlers(socketio, manager, str(args.port))
 
     @app.route("/")
     def index():
         return render_template(
-            "index.html", cache_bust=int(time.time()), build_label=args.label, app_config=page_config(manager)
+            "index.html", cache_bust=int(time.time()), build_label=args.label, app_config=page_config(manager, access)
         )
 
     @app.route("/static/<path:filename>")

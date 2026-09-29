@@ -22,15 +22,26 @@ class FormUi {
             </div>`;
     }
 
-    formSwitch(id, title, description, checked) {
+    formSwitch(id, title, description, checked, disabled = false) {
         return `
-            <label class="flex items-start justify-between gap-4 py-1.5 cursor-pointer" for="${id}">
+            <label class="flex items-start justify-between gap-4 py-1.5 ${disabled ? 'opacity-60' : 'cursor-pointer'}" for="${id}">
                 <span>
                     <span class="block text-sm font-medium text-gray-800 dark:text-[#e5e7eb]">${title}</span>
                     <span class="block text-xs text-gray-500 dark:text-[#94a3b8]">${description}</span>
                 </span>
-                <span class="switch mt-0.5"><input id="${id}" type="checkbox" ${checked ? 'checked' : ''}><span class="track"></span></span>
+                <span class="switch mt-0.5"><input id="${id}" type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="track"></span></span>
             </label>`;
+    }
+
+    formSelect(id, label, options, selected, { hint = '', disabled = false } = {}) {
+        const safe = (v) => this.escapeHtml(v ?? '');
+        return `
+            <div>
+                <label class="label" for="${id}">${label}</label>
+                <select id="${id}" class="field" ${disabled ? 'disabled' : ''}>${options.map(([value, text]) =>
+                    `<option value="${safe(value)}"${String(value) === String(selected) ? ' selected' : ''}>${safe(text)}</option>`).join('')}</select>
+                ${hint ? `<p class="hint">${hint}</p>` : ''}
+            </div>`;
     }
 
     formSection(title, inner, extra = '') {
@@ -143,6 +154,10 @@ class FormUi {
             <details class="help text-sm text-gray-600 dark:text-[#cbd5e1]"${anySignature ? ' open' : ''}>
                 <summary class="font-medium">Signature packets I1-I5 <span class="font-normal text-gray-400 dark:text-[#64748b]">optional</span></summary>
                 <div class="mt-3 flex flex-col gap-3">
+                    <p class="text-xs text-gray-500 dark:text-[#94a3b8]">Tags: <span class="font-mono">&lt;b 0x…&gt; &lt;t&gt; &lt;r n&gt; &lt;rc n&gt; &lt;rd n&gt;</span>, checked as you type.
+                        To build packets that look like QUIC, DNS or TLS, try
+                        <a href="https://architect.vai-rice.space" target="_blank" rel="noopener noreferrer" class="text-purple-700 hover:underline dark:text-[#c084fc]">AmneziaWG Architect</a>
+                        and paste its I1-I5 here.</p>
                     ${AmneziaApp.I_PARAM_KEYS.map((k) => `
                         <div><label class="label" for="c-${k}">${k}</label>
                         <textarea id="c-${k}" rows="1" class="field field-area" placeholder="e.g. &lt;b 0xc6000000010843&gt;&lt;r 16&gt;">${safe(params[k] || '')}</textarea></div>`).join('')}
@@ -628,6 +643,191 @@ class FormUi {
             ctx,
         });
         this.autosizeClientParamTextareas('c', 200);
+    }
+
+    // --- panel settings (⚙ in the header) -------------------------------------------------
+    // GET /api/settings, checked through /api/validate, saved by POST /api/settings. A
+    // field whose environment variable is set is read-only ("set by DEFAULT_MTU").
+    async openSettings() {
+        let data;
+        try {
+            data = await this.getJson('/api/settings');
+        } catch (error) {
+            this.showTempMessage(`Could not load the settings: ${error.message}`, 'error');
+            return;
+        }
+        const values = data.values;
+        const access = data.access;
+        const safe = (v) => this.escapeHtml(v ?? '');
+        const pinned = (k) => data.sources[k] === 'env';
+        const hint = (k, text = '') => (pinned(k)
+            ? `Set by <span class="font-mono">${safe(data.env[k])}</span>; remove the variable to change it here.` : text);
+        const field = (k, label, opts = {}) => this.formField(`s-${k}`, label, values[k],
+            { ...opts, hint: hint(k, opts.hint), attrs: `${opts.attrs || ''} ${pinned(k) ? 'disabled' : ''}` });
+        const toggle = (k, title, text) => this.formSwitch(`s-${k}`, title, hint(k, text), values[k], pinned(k));
+        const choose = (k, label, options, text) => this.formSelect(`s-${k}`, label, options, values[k], { hint: hint(k, text), disabled: pinned(k) });
+        const userPinned = access.user_source === 'env';
+        const passwordPinned = access.password_source === 'env';
+        const row = (k, v) => `<dt class="text-gray-500 dark:text-[#94a3b8]">${k}</dt><dd class="font-mono text-xs text-gray-800 dark:text-[#e5e7eb] min-w-0 break-all">${safe(v || '—')}</dd>`;
+
+        const collectSettings = () => {
+            const out = {};
+            Object.keys(values).forEach((k) => {
+                const el = document.getElementById(`s-${k}`);
+                if (!el || el.disabled) return;
+                out[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? this.numberOrText(el.id) : el.value.trim());
+            });
+            return out;
+        };
+        const collectAccess = () => {
+            const user = (document.getElementById('s-user')?.value || '').trim();
+            const password = document.getElementById('s-password')?.value || '';
+            return {
+                ...(!userPinned && user !== access.user ? { user } : {}),
+                ...(!passwordPinned && password ? { password } : {}),
+            };
+        };
+        const ctx = {
+            snapshot: null,
+            saveLabel: 'Save settings',
+            collect: () => ({ settings: collectSettings(), access: collectAccess() }),
+            validateBody: () => ({ settings: collectSettings(), access: collectAccess() }),
+            localErrors: () => {
+                const errors = [];
+                const changing = Object.keys(collectAccess()).length > 0;
+                const password = document.getElementById('s-password')?.value || '';
+                if (password && password !== (document.getElementById('s-password2')?.value || '')) {
+                    errors.push('The new password and its repeat differ.');
+                }
+                if (changing && !(document.getElementById('s-current')?.value)) {
+                    errors.push('Enter the current password to change the user name or password.');
+                }
+                return errors;
+            },
+            submit: async () => {
+                const credential = collectAccess();
+                const saved = await this.postJson('/api/settings', {
+                    settings: collectSettings(),
+                    ...(Object.keys(credential).length
+                        ? { access: { ...credential, current_password: document.getElementById('s-current')?.value || '' } } : {}),
+                });
+                window.Ui.closeDrawer();
+                this.applySettings(saved);
+                if (saved.access_changed) {
+                    this.showTempMessage('Sign-in changed. The browser now asks for the new one.', 'info');
+                    setTimeout(() => window.location.reload(), 1500);
+                    return;
+                }
+                this.showTempMessage(saved.changed.length ? 'Settings saved' : 'Nothing changed', 'success');
+                if (saved.restart_needed) await this.offerDaemonRestart(saved.restart_needed);
+            },
+        };
+
+        this.openFormDrawer({
+            title: 'Panel settings',
+            sub: 'Stored with the servers; a field set by an environment variable is read-only.',
+            body: `
+                ${this.formSection('Access', `
+                    ${access.password_is_default ? this.formCallout('This panel still signs in with the default password <span class="font-mono">changeme</span>.') : ''}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${this.formField('s-user', 'User name', access.user, { attrs: `autocomplete="username" ${userPinned ? 'disabled' : ''}`,
+                            hint: userPinned ? 'Set by <span class="font-mono">NGINX_USER</span>.' : '' })}
+                        ${this.formField('s-current', 'Current password', '', { type: 'password', attrs: 'autocomplete="current-password"',
+                            hint: 'Needed to change the user name or password.' })}
+                        ${this.formField('s-password', 'New password', '', { type: 'password', attrs: `autocomplete="new-password" ${passwordPinned ? 'disabled' : ''}`,
+                            hint: passwordPinned ? 'Set by <span class="font-mono">NGINX_PASSWORD</span>; remove the variable to change it here.' : 'At least 8 characters.' })}
+                        ${this.formField('s-password2', 'Repeat new password', '', { type: 'password', attrs: `autocomplete="new-password" ${passwordPinned ? 'disabled' : ''}` })}
+                    </div>
+                    <p class="hint">Saving a new one signs every browser out; this one asks for it again.</p>`)}
+                ${this.formSection('New servers', `
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${field('default_mtu', 'MTU', { type: 'number', mono: true, hint: '1280-1440.' })}
+                        ${field('default_port', 'First port (UDP)', { type: 'number', mono: true })}
+                        ${field('default_subnet', 'Subnet', { mono: true })}
+                        ${field('default_dns', 'DNS servers', { mono: true, hint: 'Comma-separated.' })}
+                    </div>
+                    <div class="flex flex-col">
+                        ${toggle('enable_nat', 'NAT (masquerade)', 'New servers let clients reach the internet through this host.')}
+                        ${toggle('block_lan_cidrs', 'Block private LAN ranges', 'New servers keep clients off 10/8, 172.16/12 and 192.168/16.')}
+                    </div>`)}
+                ${this.formSection('Logging', `
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${choose('awg_log_level', 'VPN daemon', [['off', 'Off'], ['error', 'Errors only'], ['debug', 'Debug']],
+                            'Debug adds every handshake and "unknown type" packets: the trace of a client with outdated parameters. Applies when a server starts.')}
+                        ${choose('log_level', 'Web panel', [['ERROR', 'Errors'], ['WARNING', 'Warnings'], ['INFO', 'Info'], ['DEBUG', 'Debug']],
+                            'Applies at once.')}
+                    </div>`)}
+                ${this.formSection('Privacy', `
+                    <div class="flex flex-col">
+                        ${toggle('geoip', 'Show where addresses are', 'Looks up country and city of endpoint, public and egress IPs at ipapi.co.')}
+                    </div>`)}
+                ${this.formSection('About', `
+                    <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
+                        ${row('Panel', data.about.build_label)}${row('Daemon', data.about.daemon)}${row('Tools', data.about.tools)}
+                    </dl>
+                    <div class="flex flex-col gap-2">
+                        <button type="button" class="btn btn-secondary btn-sm self-start" data-action="iptables-check">Check iptables rules</button>
+                        <div id="s-iptables" class="flex flex-col gap-1 text-xs"></div>
+                    </div>`)}`,
+            primaryLabel: 'No changes',
+            ctx,
+        });
+    }
+
+    // After a save: the defaults new servers get, and the banner.
+    applySettings(saved) {
+        const v = saved.values;
+        this.environment = {
+            mtu: v.default_mtu, subnet: v.default_subnet, port: v.default_port, dns: v.default_dns,
+            enable_nat: v.enable_nat, block_lan_cidrs: v.block_lan_cidrs,
+        };
+        const banner = document.getElementById('passwordBanner');
+        if (banner) banner.hidden = !saved.access.password_is_default;
+    }
+
+    // amneziawg-go reads its log level once, when it starts.
+    async offerDaemonRestart(count) {
+        const ok = await window.Ui.confirm({
+            title: `Restart ${count} running server${count === 1 ? '' : 's'} now?`,
+            body: 'The VPN daemon reads its log level when it starts. Connected clients reconnect within about 15 seconds. '
+                + 'Otherwise the new level applies at each server\'s next start.',
+            confirmLabel: 'Restart now',
+            cancelLabel: 'Later',
+            danger: false,
+        });
+        if (!ok) return;
+        try {
+            const result = await this.postJson('/api/settings/restart-servers', {});
+            this.showTempMessage(result.failed.length ? `Could not restart ${result.failed.join(', ')}`
+                : `Restarted ${result.restarted.length} server${result.restarted.length === 1 ? '' : 's'}`, result.failed.length ? 'error' : 'success');
+        } catch (error) {
+            this.showTempMessage(`Restart failed: ${error.message}`, 'error');
+        }
+        this.loadServers();
+    }
+
+    // About → Check iptables rules: the diagnostic for each running server.
+    async checkIptables() {
+        const box = document.getElementById('s-iptables');
+        if (!box) return;
+        const running = (this.lastServers || []).filter((s) => s.status === 'running');
+        if (!running.length) {
+            box.innerHTML = '<p class="text-gray-500 dark:text-[#94a3b8]">No server is running.</p>';
+            return;
+        }
+        box.innerHTML = '<p class="text-gray-400 dark:text-[#64748b]">Checking…</p>';
+        const lines = await Promise.all(running.map(async (server) => {
+            try {
+                const data = await this.getJson(`/api/system/iptables-test?server_id=${encodeURIComponent(server.id)}`);
+                const results = Object.values(data.iptables_check || {});
+                const ok = results.every((r) => r === 'Found' || r === 'Not found');
+                const found = results.filter((r) => r === 'Found').length;
+                return `<p class="${ok ? 'text-gray-700 dark:text-[#cbd5e1]' : 'text-red-700 dark:text-[#fca5a5]'}">${this.escapeHtml(server.name)}: ${found} of ${results.length} rule sets present</p>`;
+            } catch (error) {
+                return `<p class="text-red-700 dark:text-[#fca5a5]">${this.escapeHtml(server.name)}: ${this.escapeHtml(error.message)}</p>`;
+            }
+        }));
+        box.innerHTML = lines.join('');
     }
 
     showServerConfig(serverId) {

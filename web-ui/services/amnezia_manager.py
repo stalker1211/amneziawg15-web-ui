@@ -122,6 +122,7 @@ class AmneziaManager:
         config_file=None,
         enable_geoip=True,
         awg_log_level="off",
+        settings=None,
     ):
         # Request handlers and the traffic monitor are separate threads; config
         # writes go through this one at a time (see save_config).
@@ -144,6 +145,13 @@ class AmneziaManager:
         self.awg_log_level = awg_log_level if awg_log_level in self.DAEMON_LOG_LEVELS else "off"
 
         self.config = self.load_config()
+        # Stored settings, pinned by the environment (core/settings.py): they replace
+        # the defaults passed in above. The tests pass none.
+        self.settings = settings
+        if settings is not None:
+            if settings.resolve(self.config.setdefault("settings", {})):
+                self.save_config()
+            self.apply_settings()
         self.ensure_directories()
         # Saved at once, so a public IP change before the next save is still caught.
         if self.backfill_config_fingerprints():
@@ -160,7 +168,7 @@ class AmneziaManager:
         # Addresses a background task is looking up now (lookup_geoip_cached).
         self._geoip_pending = set()
 
-        # Auto-start servers based on environment variable
+        # Bring back the servers that were running (see auto_start_servers).
         if self.auto_start_servers_enabled:
             self.auto_start_servers()
 
@@ -519,20 +527,37 @@ class AmneziaManager:
             self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"}, failed=True)
             return (None, None)
 
+    def apply_settings(self):
+        """Take the new-server defaults, GeoIP and the daemon's log level from the settings."""
+        values = self.settings.values
+        self.default_mtu = values["default_mtu"]
+        self.default_subnet = values["default_subnet"]
+        self.default_port = values["default_port"]
+        self.dns_servers = [dns.strip() for dns in values["default_dns"].split(",") if dns.strip()]
+        self.default_enable_nat = values["enable_nat"]
+        self.default_block_lan_cidrs = values["block_lan_cidrs"]
+        self.enable_geoip = values["geoip"]
+        self.awg_log_level = values["awg_log_level"]
+
     def auto_start_servers(self):
-        """Auto-start servers that have config files and were running before"""
-        logger.info("Checking for existing servers to auto-start...")
+        """At boot, restore each server's last start/stop state.
+
+        `status` is written by start_server/stop_server only, so it is what was last
+        asked for: a server stopped in the panel stays stopped. (Until 2.4 a
+        creation-time `auto_start` flag decided, so a stopped server came back up.)
+        """
+        logger.info("Restoring the servers that were running...")
         for server in self.config["servers"]:
-            if os.path.exists(server["config_path"]):
-                current_status = self.get_server_status(server["id"])
-                if current_status == "stopped" and server.get("auto_start", True):
-                    logger.info(f"Auto-starting server: {server['name']}")
-                    try:
-                        self.start_server(server["id"])
-                    except Exception as e:
-                        # Never crash the Web UI on boot due to a VPN startup failure.
-                        server_name = server.get("name", server.get("id"))
-                        logger.error("Auto-start failed for server '%s': %s", server_name, e)
+            if server.get("status") != "running" or not os.path.exists(server["config_path"]):
+                continue
+            if self.get_server_status(server["id"]) == "running":
+                continue
+            logger.info("Starting server: %s", server["name"])
+            try:
+                self.start_server(server["id"])
+            except Exception as e:
+                # Never crash the Web UI on boot due to a VPN startup failure.
+                logger.error("Auto-start failed for server '%s': %s", server.get("name", server.get("id")), e)
 
     def normalize_protocol(self, value):
         """Map any accepted spelling to a canonical name from SUPPORTED_PROTOCOLS.
@@ -891,6 +916,8 @@ class AmneziaManager:
             # they are computed per response now.
             for derived in ("public_ip_geo", "public_ip_geo_country_code", "current_status"):
                 server.pop(derived, None)
+            # Until 2.4 a creation-time flag decided auto-start; the last start/stop does now.
+            server.pop("auto_start", None)
             if isinstance(server.get("egress_probe"), dict):
                 server["egress_probe"].pop("service_name", None)
 
@@ -1030,7 +1057,8 @@ class AmneziaManager:
         self.assert_no_conflicts(port, subnet)
 
         protocol = self.normalize_protocol(server_data.get("protocol"))
-        auto_start = server_data.get("auto_start", self.auto_start_servers_enabled)
+        # "Start after creating"; what happens at the next boot follows the last start/stop.
+        auto_start = to_bool(server_data.get("auto_start"), True)
         enable_nat = to_bool(server_data.get("enable_nat"), self.default_enable_nat)
         block_lan_cidrs = to_bool(server_data.get("block_lan_cidrs"), self.default_block_lan_cidrs)
 
@@ -1075,7 +1103,6 @@ class AmneziaManager:
             "public_ip": self.public_ip,
             "transport_params": transport_params,
             "client_defaults": client_defaults,
-            "auto_start": auto_start,
             "enable_nat": enable_nat,
             "block_lan_cidrs": block_lan_cidrs,
             "egress_probe": None,

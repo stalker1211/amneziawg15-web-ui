@@ -27,10 +27,21 @@
                       class="inline-flex items-center gap-2 h-9 px-3 rounded-full border border-gray-300 bg-white text-sm text-gray-700 dark:bg-[#1f2937] dark:border-[#334155] dark:text-[#cbd5e1]">
                     <span id="statusDot" class="w-2 h-2 rounded-full bg-gray-400"></span><span id="status">Connecting…</span>
                 </span>
+                <button id="settingsBtn" type="button" data-action="open-settings" aria-label="Panel settings" title="Panel settings"
+                        class="icon-btn border border-gray-300 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
                 <button id="themeToggleBtn" type="button" aria-label="Switch theme"
                         class="icon-btn border border-gray-300 bg-white dark:bg-[#1f2937] dark:border-[#334155]"></button>
             </div>
         </header>
+
+        <!-- Shown while the credential is start.sh's admin/changeme (page_config's passwordIsDefault). -->
+        <div id="passwordBanner" role="alert" hidden
+             class="rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3 bg-amber-50 border-amber-200 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]">
+            <span><strong class="font-semibold">Default password.</strong> This panel still signs in with <span class="font-mono">changeme</span>.</span>
+            <button type="button" class="btn btn-secondary btn-sm" data-action="open-settings">Change it in Settings</button>
+        </div>
 
         <!-- Status strip: public IP, servers running, clients online (handshake <= 5 min). -->
         <section aria-label="Status"

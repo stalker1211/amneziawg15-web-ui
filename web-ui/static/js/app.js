@@ -28,6 +28,8 @@ class AmneziaApp {
         document.addEventListener('DOMContentLoaded', () => {
             console.log("AmneziaWG Web UI initializing...");
             this.applyTheme(this.getPreferredTheme(), false);
+            const banner = document.getElementById('passwordBanner');
+            if (banner) banner.hidden = !window.AppConfig.passwordIsDefault;
             this.setupEventListeners();
             this.setupSocketLifecycleHandlers();
             this.setupSocketIO();
@@ -186,6 +188,8 @@ class AmneziaApp {
             'generate-key': () => this.fillHeaderProtectionKey('t-HeaderProtectionKey'),
             'copy-public-key': () => this.copyText(document.getElementById('s-publicKey')?.textContent, 'Public key'),
             'show-checks': () => document.getElementById('checks')?.scrollIntoView({ block: 'nearest' }),
+            'open-settings': () => this.openSettings(),
+            'iptables-check': () => this.checkIptables(),
         };
         const run = (event) => {
             const el = event.target.closest('[data-action]');

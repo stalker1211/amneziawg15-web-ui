@@ -267,6 +267,42 @@ function check(label, condition, detail) {
         await page.evaluate(() => window.Ui.closeDrawer());
     }
 
+    // Panel settings: pinned fields are read-only, a save reaches the new-server
+    // defaults, and the credential needs its repeat and the current password.
+    const settingsPinned = await page.evaluate(async () => {
+        await amneziaApp.openSettings();
+        await new Promise((r) => setTimeout(r, 800));
+        const pinned = [...document.querySelectorAll('#drawerBody input:disabled, #drawerBody select:disabled')].map((e) => e.id);
+        return { pinned, banner: !document.getElementById('passwordBanner').hidden };
+    });
+    check('settings drawer shows env-pinned fields read-only', settingsPinned.pinned.length > 0
+        && settingsPinned.pinned.every((id) => id.startsWith("s-")) && settingsPinned.banner, settingsPinned);
+    const settingsSaved = await page.evaluate(async () => {
+        const port = document.getElementById('s-default_port');
+        if (!port || port.disabled) return 'port field missing or pinned';
+        port.value = String(Number(port.value) + 7);
+        port.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 900));
+        const button = document.getElementById('drawerPrimary');
+        if (button.disabled) return `save not armed: ${document.getElementById('checks').textContent}`;
+        document.getElementById('drawerForm').requestSubmit();
+        await new Promise((r) => setTimeout(r, 900));
+        return window.Ui.isDrawerOpen() ? 'drawer still open' : amneziaApp.environment.port;
+    });
+    check('saving settings updates the new-server defaults', typeof settingsSaved === 'number', settingsSaved);
+    check('the credential needs its repeat and the current password', await page.evaluate(async () => {
+        await amneziaApp.openSettings();
+        await new Promise((r) => setTimeout(r, 600));
+        const password = document.getElementById('s-password');
+        password.value = 'n3w-secret-1';
+        password.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 900));
+        const text = document.getElementById('checks').textContent;
+        const blocked = document.getElementById('drawerPrimary').disabled;
+        window.Ui.closeDrawer();
+        return blocked && /repeat differ/.test(text) && /current password/.test(text);
+    }));
+
     console.log('');
     check('no request left the panel\'s origin', foreignRequests.size === 0, [...foreignRequests]);
     check('no uncaught page errors', pageErrors.length === 0, pageErrors);

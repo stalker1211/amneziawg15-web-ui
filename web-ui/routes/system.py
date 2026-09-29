@@ -36,7 +36,7 @@ def tail_lines(path, count, block_size=64 * 1024):
     return lines[-count:] if count else []
 
 
-def page_config(amnezia_manager):
+def page_config(amnezia_manager, access=None):
     """What the page needs from the backend before its first request, rendered into
     index.html as JSON (`#appConfig`): the protocol table, the parameter key lists and
     the new-server defaults. The UI keeps no copy of any of it (static/js/protocols.js
@@ -70,21 +70,12 @@ def page_config(amnezia_manager):
             "enable_nat": m.default_enable_nat,
             "block_lan_cidrs": m.default_block_lan_cidrs,
         },
+        # Shows the "default password" banner from the first paint.
+        "passwordIsDefault": bool(access and access.is_default()),
     }
 
 
-def register_system_routes(
-    app,
-    amnezia_manager,
-    *,
-    awg_log_file,
-    nginx_port,
-    auto_start_servers,
-    default_mtu,
-    default_subnet,
-    default_port,
-    default_dns,
-):
+def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
     """Register system and health-related Flask routes on the app."""
     system_bp = Blueprint("system_routes", __name__)
 
@@ -103,11 +94,10 @@ def register_system_routes(
             "timestamp": time.time(),
             "environment": {
                 "nginx_port": nginx_port,
-                "auto_start_servers": auto_start_servers,
-                "default_mtu": default_mtu,
-                "default_subnet": default_subnet,
-                "default_port": default_port,
-                "default_dns": default_dns,
+                "default_mtu": amnezia_manager.default_mtu,
+                "default_subnet": amnezia_manager.default_subnet,
+                "default_port": amnezia_manager.default_port,
+                "default_dns": ", ".join(amnezia_manager.dns_servers),
             },
         }
         return jsonify(status)

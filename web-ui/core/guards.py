@@ -35,6 +35,21 @@ def load_or_create_secret_key(path):
     return key
 
 
+def rotate_secret_key(app, path):
+    """Replace the persisted secret key, after the Basic Auth credential changed.
+
+    Every session cookie signed with the old key stops being accepted, so a tab
+    that held one cannot reconnect its WebSocket without passing the new Basic Auth.
+    """
+    key = os.urandom(24)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as key_file:
+        key_file.write(key)
+    os.chmod(path, 0o600)
+    app.secret_key = key
+    return key
+
+
 def install_guards(app, *, secret_key_path):
     """Set up the session secret and the before_request guards.
 

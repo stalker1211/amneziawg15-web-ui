@@ -256,23 +256,33 @@ class ServerStatusTests(_Base):
 
 
 class AutoStartTests(_Base):
-    def test_starts_only_eligible_servers_and_survives_a_failure(self):
-        wanted = self._server("wanted", "10.51.0.0/24", 51951, auto_start=False)
-        opted_out = self._server("opted-out", "10.52.0.0/24", 51952)
+    def test_boot_restores_each_servers_last_state_and_survives_a_failure(self):
+        # `status` is the last start/stop; until 2.4 a creation-time flag decided.
+        was_running = self._server("was-running", "10.51.0.0/24", 51951)
+        stopped = self._server("stopped-by-hand", "10.52.0.0/24", 51952)
         no_conf = self._server("no-conf", "10.53.0.0/24", 51953)
         broken = self._server("broken", "10.54.0.0/24", 51954)
-        for server in (wanted, no_conf, broken):
-            self.manager.get_server(server["id"])["auto_start"] = True
-        self.manager.get_server(opted_out["id"])["auto_start"] = False
+        already_up = self._server("already-up", "10.57.0.0/24", 51957)
+        for server in (was_running, no_conf, broken, already_up):
+            self.manager.get_server(server["id"])["status"] = "running"
+        self.manager.get_server(stopped["id"])["status"] = "stopped"
         os.remove(no_conf["config_path"])
+        self.paths.interfaces.add(already_up["interface"])
         self.fake.respond(["/usr/bin/awg-quick", "up", broken["interface"]], 1)
+        self.fake.calls.clear()
 
         with self.assertLogs(MODULE, "INFO"):
             self.manager.auto_start_servers()
 
         brought_up = [argv[2] for argv in self.fake.argvs() if argv[:2] == ["/usr/bin/awg-quick", "up"]]
-        self.assertEqual(sorted(brought_up), sorted([wanted["interface"], broken["interface"]]))
-        self.assertEqual(self.manager.get_server(wanted["id"])["status"], "running")
+        self.assertEqual(sorted(brought_up), sorted([was_running["interface"], broken["interface"]]))
+        self.assertEqual(self.manager.get_server(stopped["id"])["status"], "stopped")
+
+    def test_the_old_creation_flag_is_dropped_on_load(self):
+        from services.amnezia_manager import AmneziaManager
+
+        config = AmneziaManager.migrate_config_schema(self.manager, {"servers": [{"id": "x", "auto_start": True}]})
+        self.assertNotIn("auto_start", config["servers"][0])
 
 
 class StopLoop(BaseException):

@@ -4,12 +4,12 @@ A web UI for running [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) VP
 servers — WireGuard with obfuscation that resists DPI-based blocking. Create servers,
 manage clients, hand out configs, and watch traffic live, all from one container.
 
-Almost everything is configurable in the UI. A handful of settings are startup-only
-environment variables: `NGINX_PORT`, `NGINX_USER`/`NGINX_PASSWORD`,
-`ENABLE_GEOIP`, `WAN_IF`, `ALLOWED_ORIGINS`, `LOG_LEVEL` (`ENABLE_NAT` and
-`BLOCK_LAN_CIDRS` are only *defaults* — override them per server in the UI).
+Everything is configurable in the panel, including its own settings (⚙ in the
+header: sign-in, logging, GeoIP, new-server defaults). An environment variable can
+pin a setting; only `NGINX_PORT`, `ALLOWED_ORIGINS`, `WAN_IF` and `AWG_LOG_FILE` are
+deployment-only. See [Environment variables](#environment-variables).
 
-Current version: **2.3**
+Current version: **2.4**
 
 > Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, the
 > state model, protocol/parameter details, conventions and open items.
@@ -31,28 +31,36 @@ Current version: **2.3**
   devices a change affects before you save.
 - **Client suspend** — revoke access without deleting; keys are preserved.
 - **Automatic networking** — iptables NAT and optional private-LAN blocking per
-  server, auto-start on container restart, smart port/subnet/IP proposals.
+  server; a container restart brings back exactly the servers that were running;
+  smart port/subnet/IP proposals.
+- **Panel settings** (⚙) — the sign-in credential, the daemon's and the panel's log
+  levels, GeoIP, and the defaults for new servers, stored with the servers.
 - **Forms checked as you type** by the server, in a side drawer; toasts and in-app
   confirmations instead of browser pop-ups; works down to phone width.
 - **Dark theme** (the OS preference picks the first one), collapsible help, inline rename.
 - **Self-contained UI** — no CDN: the page loads nothing from other hosts, so it works
   without internet access and never tells a third party where your panel is.
-- Behind nginx HTTP Basic Auth; the web UI itself listens on loopback only.
+- Behind nginx HTTP Basic Auth; the web UI itself listens on loopback only, and the
+  page runs no inline script (CSP `script-src 'self'`).
 
 ## 📝 Logging
 
-There are two independent log streams, each with its own variable.
+There are two independent log streams, each set in **⚙ → Logging** (or pinned by its
+variable).
 
-**VPN daemon (`amneziawg-go`)** — produced by the daemon itself, off by default. The container wraps it safely:
+**VPN daemon (`amneziawg-go`)** — `off`, `error` (the default: silent unless something
+fails) or `debug`, which adds every handshake and "Received message with unknown
+type": the only trace of a client with outdated parameters, or of a scanner. The
+daemon reads its level when a server starts, so the drawer offers to restart the
+running servers. Variable: `AWG_LOG_LEVEL` (`verbose` means `debug`, `silent` means
+`off`); it reaches the daemon only, never the panel's own level. The file is
+`AWG_LOG_FILE` (default `/var/log/amnezia/amneziawg-go.log`).
 
-- `AWG_LOG_LEVEL`: `error` or `debug` to enable logs (`verbose` means `debug`; empty/`off`/`silent` disables). It reaches the daemon only, never the web UI's own `LOG_LEVEL`.
-- `AWG_LOG_FILE`: log file path (default: `/var/log/amnezia/amneziawg-go.log`).
+Use **⋯ → Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
 
-Once enabled, use **⋯ → Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
-
-**Web UI** — always on, written to `/var/log/webui/access.log` with timestamps, levels and module names:
-
-- `LOG_LEVEL`: `DEBUG|INFO|WARNING|ERROR` (default `INFO`). Use `DEBUG` when troubleshooting; anything unrecognised falls back to `INFO`.
+**Web UI** — always on, written to `/var/log/webui/access.log` with timestamps,
+levels and module names. `ERROR`/`WARNING`/`INFO` (default)/`DEBUG`, applied at once.
+Variable: `LOG_LEVEL`.
 
 ```
 2026-08-07 17:49:02 INFO    [services.amnezia_manager] Server myvpn started successfully
@@ -164,6 +172,9 @@ Basic Auth credentials.
 | POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.x timings |
 | POST | `/api/servers/<id>/clients/<cid>/rename` \| `/suspend` | rename, or toggle access |
 | POST | `/api/servers/<id>/clients/<cid>/issued` | record that the current config was handed to the device (clears `config_outdated`) |
+| GET | `/api/settings` | panel settings: values, where each comes from (`env`, `panel`, `default`), the sign-in's state, versions |
+| POST | `/api/settings` | `{"settings": {...}, "access": {"current_password", "user", "password"}}`; nothing applies unless all of it is valid |
+| POST | `/api/settings/restart-servers` | restart the running servers (a new daemon log level) |
 | POST | `/api/generate` | random parameters for a protocol: `{"protocol", "mtu"}` → `{"transport_params", "client_defaults"}`; saves nothing |
 | POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params"}` or `{"server_id", "client_params"}` → `{"errors", "warnings"}` |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
@@ -190,23 +201,39 @@ per-client and only appear in client configs.
 
 Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg15-web-ui
 
-### Environment Variables
+### Environment variables
+
+**Settings.** Each is also in the panel (⚙). While its variable is set (and not
+empty) the value is copied into the stored settings at every boot and the field is
+read-only; remove the variable and the last value stays, now editable. An invalid
+value is logged and ignored. So upgrading changes nothing: the first 2.4 boot copies
+today's environment.
+
+| Variable | Default | Setting |
+|----------|---------|---------|
+| `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in. Stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
+| `DEFAULT_MTU` | `1280` | MTU of new servers (1280–1440) |
+| `DEFAULT_SUBNET` | `10.0.0.0/24` | Subnet of new servers |
+| `DEFAULT_PORT` | `51820` | First UDP port offered for new servers |
+| `DEFAULT_DNS` | `8.8.8.8, 1.1.1.1` | DNS servers of new servers, pushed to clients |
+| `ENABLE_NAT` | `1` | NAT/MASQUERADE for new servers; each server has its own switch |
+| `BLOCK_LAN_CIDRS` | `1` | Block private LAN ranges for new servers; each server has its own switch |
+| `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
+| `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
+| `LOG_LEVEL` | `INFO` | The web panel's log |
+
+**Deployment.**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NGINX_PORT` | `80` | External port for web interface |
-| `NGINX_USER` | `admin` | Username for basic auth in the app |
-| `NGINX_PASSWORD` | `changeme` | Password for basic auth in the app |
-| `AUTO_START_SERVERS` | `true` | Auto-start servers on container startup |
-| `DEFAULT_MTU` | `1280` | Default MTU value for new servers. Effective only for api requests. For UI management set via UI. |
-| `DEFAULT_SUBNET` | `10.0.0.0/24` | Default subnet for new servers. Effective only for api requests. For UI management set via UI. |
-| `DEFAULT_PORT` | `51820` | Default port for new servers. Effective only for api requests. For UI management set via UI. |
-| `DEFAULT_DNS` | `8.8.8.8,1.1.1.1` | Default DNS servers for clients. Effective only for api requests. For UI management set via UI. |
-| `ENABLE_NAT` | `1` | Default NAT/MASQUERADE setting for new servers (set `0` to disable). Per-server override is available in the UI. |
-| `WAN_IF` | *(auto)* | Outbound/WAN interface used for NAT and forwarding rules. Auto-detected from the default route if unset (set explicitly if detection fails). |
-| `BLOCK_LAN_CIDRS` | `1` | Default LAN-blocking for new servers. Blocks private LAN ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12). Set `0` to allow LAN access. Per-server override is available in the UI. |
-| `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoint IPs plus server public/egress IPs (adds country flag + location). Set `0` to disable external requests. |
-| `ALLOWED_ORIGINS` | *(empty)* | Socket.IO CORS allowed origins. Empty = same-origin only (recommended). Use `*` for development/all origins, or comma-separated list: `http://localhost:3000,https://vpn.example.com` |
+| `NGINX_PORT` | `80` | Port nginx listens on inside the container |
+| `ALLOWED_ORIGINS` | *(empty)* | Socket.IO origins besides the panel's own. Needed behind a TLS reverse proxy: nginx passes on `X-Forwarded-Proto: http`, so the `https://` origin fails Socket.IO's same-origin check; set it to that origin, e.g. `https://vpn.example.com`. `*` allows any |
+| `WAN_IF` | *(auto)* | Outbound interface for the NAT and forwarding rules; detected from the default route |
+| `AWG_LOG_FILE` | `/var/log/amnezia/amneziawg-go.log` | Where the daemon's log goes |
+
+Retired: `AUTO_START_SERVERS` (a restart brings back what was running; `false` still
+means "start nothing at boot" for now), `API_TOKEN` (2.4; ignored with a warning).
+`SYS_MODULE` is not needed: the daemon runs in userspace.
 
 ## 🧪 Local build/run (dev)
 
@@ -237,8 +264,6 @@ services:
       - "51820:51820/udp"
     environment:
       - NGINX_PORT=8080
-      - AUTO_START_SERVERS=true
-      - DEFAULT_MTU=1280
     volumes:
       - amnezia-data:/etc/amnezia
     cap_add:
@@ -266,12 +291,6 @@ docker run -d \
   -p 9090:9090 \
   -p 51821:51821/udp \
   -e NGINX_PORT=9090 \
-  -e NGINX_PASSWORD=1234 \
-  -e AUTO_START_SERVERS=false \
-  -e DEFAULT_MTU=1420 \
-  -e DEFAULT_SUBNET=10.8.0.0/24 \
-  -e DEFAULT_PORT=51821 \
-  -e DEFAULT_DNS="8.8.8.8,8.8.4.4" \
   -v amnezia-data:/etc/amnezia \
   stalker1211/amneziawg15-web-ui:latest
 ```
@@ -338,8 +357,9 @@ curl -u admin:pass "http://localhost:8080/api/system/iptables-test?server_id=<se
 ```
 
 Server ids are 6 characters (e.g. `a1b2c3`); the interface is `wg-<id>`. Restore by
-putting `/etc/amnezia` back and restarting the container — servers with
-`auto_start` come back up on their own.
+putting `/etc/amnezia` back and restarting the container — the servers that were
+running come back up on their own. The backup holds the settings and the hashed
+sign-in (`.htpasswd`) too.
 
 # Security
 The app is exposed directly on 80 or custom port with basic authentication.
@@ -348,7 +368,13 @@ The app is exposed directly on 80 or custom port with basic authentication.
 > I strongly recommend protecting endpoints with firewall and/or nginx authentication.
 > Basic auth alone is not strong enough and can be bruteforced.
 
-By default, docker image is built with user `admin` and password `changeme`. To change the default behavior you need to provide with docker envs `NGINX_USER` and `NGINX_PASSWORD`.
+A new volume signs in with `admin` / `changeme`, and the panel shows a **Default
+password** banner (and the log a warning) until it is changed. Change it in
+**⚙ → Access** (the current password is required); it is stored hashed (SHA-512 crypt)
+in `/etc/amnezia/.htpasswd`, so it survives image updates, and saving it signs every
+browser out. Setting `NGINX_PASSWORD` instead pins it (the field turns read-only),
+which also works as a recovery: set it, restart, sign in, remove it. Prefer the
+drawer for a compose file kept in git.
 
 > [!NOTE]
 > There is no possibility to protect the built-in nginx with allow ip rule, because when run in docker with bridge mode docker doesn't pass the real client ip into the container. External proxy or additional container is required to perform client ip check.

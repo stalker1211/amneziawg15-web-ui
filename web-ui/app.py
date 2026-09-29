@@ -1,11 +1,12 @@
 """Main Flask entrypoint for the AmneziaWG web UI."""
 
+import logging
 import os
 import time
 from urllib.parse import quote
 
-from core.guards import install_guards
-from core.helpers import parse_daemon_log_level, to_bool
+from core.guards import install_guards, rotate_secret_key
+from core.helpers import to_bool
 from core.logging_setup import configure_logging, get_logger
 from core.runtime import (
     create_flask_app,
@@ -13,8 +14,10 @@ from core.runtime import (
     register_socket_handlers,
     run_web_ui,
 )
+from core.settings import Access, Settings
 from flask import render_template, send_from_directory
 from routes.servers import register_server_routes
+from routes.settings import register_settings_routes
 from routes.system import page_config, register_system_routes
 from services.amnezia_manager import AmneziaManager
 
@@ -35,37 +38,10 @@ try:
 except OSError:
     BUILD_LABEL = "dev"
 
-# Essential environment variables
+# Deployment-only environment variables. Everything else is a panel setting
+# (core/settings.py): stored in web_config.json, pinned while its variable is set.
 NGINX_PORT = os.getenv("NGINX_PORT", "80")
-AUTO_START_SERVERS = to_bool(os.getenv("AUTO_START_SERVERS"), True)
-DEFAULT_MTU = int(os.getenv("DEFAULT_MTU", "1280"))
-DEFAULT_SUBNET = os.getenv("DEFAULT_SUBNET", "10.0.0.0/24")
-DEFAULT_PORT = int(os.getenv("DEFAULT_PORT", "51820"))
-DEFAULT_DNS = os.getenv("DEFAULT_DNS", "8.8.8.8,1.1.1.1")
-DEFAULT_ENABLE_NAT = os.getenv("ENABLE_NAT", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-    "off",
-)
-DEFAULT_BLOCK_LAN_CIDRS = os.getenv("BLOCK_LAN_CIDRS", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
-    "off",
-)
 AWG_LOG_FILE = os.getenv("AWG_LOG_FILE", "/var/log/amnezia/amneziawg-go.log")
-
-
-# The daemon's level reaches `awg-quick up` only (AmneziaManager.daemon_env), never
-# this process: it used to be exported as LOG_LEVEL, which is the panel's own.
-AWG_LOG_LEVEL = parse_daemon_log_level(os.getenv("AWG_LOG_LEVEL"))
-if AWG_LOG_LEVEL is None:
-    logger.warning("Ignoring invalid AWG_LOG_LEVEL=%r (valid: off, error, debug)", os.getenv("AWG_LOG_LEVEL"))
-    AWG_LOG_LEVEL = "off"
-
-# Parse DNS servers from comma-separated string
-DNS_SERVERS = [dns.strip() for dns in DEFAULT_DNS.split(",") if dns.strip()]
 
 # Fixed values for other settings
 WEB_UI_PORT = 5000
@@ -73,7 +49,9 @@ CONFIG_DIR = "/etc/amnezia"
 WIREGUARD_CONFIG_DIR = os.path.join(CONFIG_DIR, "amneziawg")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "web_config.json")
 SECRET_KEY_FILE = os.path.join(CONFIG_DIR, ".flask_secret_key")
-ENABLE_GEOIP = os.getenv("ENABLE_GEOIP", "1").strip().lower() not in ("0", "false", "no", "off")
+# Written by scripts/start.sh; nginx reads the credential from the volume.
+HTPASSWD_FILE = os.path.join(CONFIG_DIR, ".htpasswd")
+DEFAULT_PASSWORD_MARKER = os.path.join(CONFIG_DIR, ".htpasswd.default")
 
 # Socket.IO CORS origins (comma-separated list or '*' for all)
 # Empty/not set = same-origin only (recommended for production)
@@ -87,6 +65,11 @@ else:
     # Default: same-origin only (let Flask-SocketIO use its default behavior)
     ALLOWED_ORIGINS = []
 
+# Retired in 2.4: boot restores each server's last start/stop state. For a while a
+# false value still means "start nothing at boot".
+AUTO_START_RAW = os.getenv("AUTO_START_SERVERS", "").strip()
+RESTORE_AT_BOOT = to_bool(AUTO_START_RAW, True)
+
 logger.info("=== AmneziaWG Web UI configuration ===")
 logger.info(
     "dirs: base=%s templates=%s (exists=%s) static=%s (exists=%s)",
@@ -96,27 +79,16 @@ logger.info(
     STATIC_DIR,
     os.path.exists(STATIC_DIR),
 )
-logger.info(
-    "nginx_port=%s auto_start=%s allowed_origins=%s",
-    NGINX_PORT,
-    AUTO_START_SERVERS,
-    ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>",
-)
+logger.info("nginx_port=%s allowed_origins=%s", NGINX_PORT, ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>")
+if AUTO_START_RAW:
+    logger.warning(
+        "AUTO_START_SERVERS is retired: servers come back as they were last left%s",
+        "" if RESTORE_AT_BOOT else "; set to false, so none is started at boot",
+    )
 if os.getenv("API_TOKEN", "").strip():
     # Removed in 2.4: Flask listens on 127.0.0.1 only, so nginx's Basic Auth always
     # decides first and the token never admitted or refused anything.
     logger.warning("API_TOKEN is set but no longer used (removed in 2.4); nginx Basic Auth is the only credential")
-logger.info(
-    "defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s daemon_log=%s",
-    DEFAULT_MTU,
-    DEFAULT_SUBNET,
-    DEFAULT_PORT,
-    DNS_SERVERS,
-    DEFAULT_ENABLE_NAT,
-    DEFAULT_BLOCK_LAN_CIDRS,
-    ENABLE_GEOIP,
-    AWG_LOG_LEVEL,
-)
 logger.info("config_dir=%s web_ui_port=%s (internal)", CONFIG_DIR, WEB_UI_PORT)
 logger.debug("template files: %s", os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
 logger.debug("static files: %s", os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
@@ -127,41 +99,37 @@ app = create_flask_app(TEMPLATE_DIR, STATIC_DIR)
 install_guards(app, secret_key_path=SECRET_KEY_FILE)
 socketio = create_socketio(app, ALLOWED_ORIGINS)
 
+settings = Settings()
+access = Access(HTPASSWD_FILE, DEFAULT_PASSWORD_MARKER)
 
+# The defaults below are replaced by the resolved settings as the manager loads them.
 amnezia_manager = AmneziaManager(
     socketio_instance=socketio,
-    auto_start_servers=AUTO_START_SERVERS,
-    default_mtu=DEFAULT_MTU,
-    default_subnet=DEFAULT_SUBNET,
-    default_port=DEFAULT_PORT,
-    dns_servers=DNS_SERVERS,
-    default_enable_nat=DEFAULT_ENABLE_NAT,
-    default_block_lan_cidrs=DEFAULT_BLOCK_LAN_CIDRS,
+    auto_start_servers=RESTORE_AT_BOOT,
+    default_mtu=1280,
+    default_subnet="10.0.0.0/24",
+    default_port=51820,
+    dns_servers=["8.8.8.8", "1.1.1.1"],
+    default_enable_nat=True,
+    default_block_lan_cidrs=True,
     config_dir=CONFIG_DIR,
     wireguard_config_dir=WIREGUARD_CONFIG_DIR,
     config_file=CONFIG_FILE,
-    enable_geoip=ENABLE_GEOIP,
-    awg_log_level=AWG_LOG_LEVEL,
+    settings=settings,
 )
+logging.getLogger().setLevel(settings.values["log_level"])
+logger.info("settings: %s", ", ".join(f"{k}={v} ({settings.sources[k]})" for k, v in settings.values.items()))
+if access.is_default():
+    logger.warning("The panel is on the default password (%s/changeme): change it in Settings", access.user())
 
-register_system_routes(
+register_system_routes(app, amnezia_manager, awg_log_file=AWG_LOG_FILE, nginx_port=NGINX_PORT)
+register_server_routes(app, amnezia_manager, to_bool=to_bool)
+register_settings_routes(
     app,
     amnezia_manager,
-    awg_log_file=AWG_LOG_FILE,
-    nginx_port=NGINX_PORT,
-    auto_start_servers=AUTO_START_SERVERS,
-    default_mtu=DEFAULT_MTU,
-    default_subnet=DEFAULT_SUBNET,
-    default_port=DEFAULT_PORT,
-    default_dns=DEFAULT_DNS,
-)
-
-register_server_routes(
-    app,
-    amnezia_manager,
-    to_bool=to_bool,
-    default_enable_nat=DEFAULT_ENABLE_NAT,
-    default_block_lan_cidrs=DEFAULT_BLOCK_LAN_CIDRS,
+    access,
+    build_label=BUILD_LABEL,
+    rotate_secret_key=lambda: rotate_secret_key(app, SECRET_KEY_FILE),
 )
 
 register_socket_handlers(socketio, amnezia_manager, NGINX_PORT)
@@ -173,7 +141,7 @@ def index():
     """Render the main single-page web UI."""
     logger.debug("Serving index.html")
     return render_template(
-        "index.html", cache_bust=cache_bust(), build_label=BUILD_LABEL, app_config=page_config(amnezia_manager)
+        "index.html", cache_bust=cache_bust(), build_label=BUILD_LABEL, app_config=page_config(amnezia_manager, access)
     )
 
 

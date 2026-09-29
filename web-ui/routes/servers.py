@@ -5,6 +5,7 @@ import os
 import re
 
 from core.logging_setup import get_logger
+from core.settings import Access
 from flask import Blueprint, abort, jsonify, request, send_file
 from werkzeug.exceptions import HTTPException
 
@@ -13,14 +14,7 @@ from werkzeug.exceptions import HTTPException
 logger = get_logger(__name__)
 
 
-def register_server_routes(
-    app,
-    amnezia_manager,
-    *,
-    to_bool,
-    default_enable_nat,
-    default_block_lan_cidrs,
-):
+def register_server_routes(app, amnezia_manager, *, to_bool):
     """Register server/client management routes on the Flask app."""
     server_bp = Blueprint("server_routes", __name__)
 
@@ -124,6 +118,21 @@ def register_server_routes(
                 client_params = collect(errors, amnezia_manager.validate_client_params, server_data["client_defaults"])
                 if client_params:
                     warnings += amnezia_manager.client_param_warnings(client_params, mtu)
+            return jsonify({"errors": errors, "warnings": warnings})
+
+        if isinstance(data.get("settings"), dict) or isinstance(data.get("access"), dict):
+            # The settings drawer: {"settings": {...partial}, "access": {user?, password?}}.
+            # The current password is checked only on save.
+            settings = amnezia_manager.settings
+            if settings is None:
+                abort(400, description="This panel has no settings")
+            values, errors = settings.check(data.get("settings") or {})
+            credential = data.get("access") if isinstance(data.get("access"), dict) else {}
+            errors += Access.check_new(credential.get("user"), credential.get("password"))
+            if values.get("awg_log_level") == "debug":
+                warnings.append(
+                    "Debug logs every handshake: about 100 KB a day for a busy server. Use it while troubleshooting."
+                )
             return jsonify({"errors": errors, "warnings": warnings})
 
         if "server_id" not in data:
@@ -244,8 +253,8 @@ def register_server_routes(
                 "mtu": server.get("mtu", 1420),
                 "transport_params": server.get("transport_params", {}),
                 "client_defaults": server.get("client_defaults", {}),
-                "enable_nat": server.get("enable_nat", default_enable_nat),
-                "block_lan_cidrs": server.get("block_lan_cidrs", default_block_lan_cidrs),
+                "enable_nat": server.get("enable_nat", amnezia_manager.default_enable_nat),
+                "block_lan_cidrs": server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs),
                 "clients_count": len(server["clients"]),
                 "created_at": server["created_at"],
                 "public_key": server["server_public_key"],
@@ -287,8 +296,10 @@ def register_server_routes(
     def update_server_networking(server_id):
         server = server_or_404(server_id)
         data = json_body()
-        server["enable_nat"] = to_bool(data.get("enable_nat"), server.get("enable_nat", default_enable_nat))
-        server["block_lan_cidrs"] = to_bool(data.get("block_lan_cidrs"), server.get("block_lan_cidrs", default_block_lan_cidrs))
+        server["enable_nat"] = to_bool(data.get("enable_nat"), server.get("enable_nat", amnezia_manager.default_enable_nat))
+        server["block_lan_cidrs"] = to_bool(
+            data.get("block_lan_cidrs"), server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs)
+        )
         amnezia_manager.save_config()
 
         iptables_status = "skipped"

@@ -107,7 +107,8 @@ FROM alpine:${ALPINE_VERSION} AS runtime
 # - openssl: generates the nginx Basic Auth hash in scripts/start.sh. Replaces
 #   apache2-utils/htpasswd, which pulled in apr-util (CVE-2026-34191,
 #   CVE-2026-32327, both critical and unfixed in Alpine as of 3.24).
-#   `openssl passwd -apr1` emits the identical $apr1$ format nginx expects.
+#   Since 2.4 the hash is SHA-512 crypt (`openssl passwd -6`), which musl's crypt
+#   and so nginx read; the panel's settings drawer writes the same format.
 RUN apk upgrade --no-cache \
     && apk add --no-cache \
     python3 \
