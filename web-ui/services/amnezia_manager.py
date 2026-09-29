@@ -83,6 +83,14 @@ class AmneziaManager:
     # HeaderProtectionKey is set (device/noise-types.go: HeaderCipherNonceSize).
     HEADER_CIPHER_NONCE_SIZE = 12
 
+    # What a client routes through the tunnel. New clients claim IPv6 too: with only
+    # 0.0.0.0/0 a device on an IPv6 network reaches dual-stack sites outside the
+    # tunnel (no obfuscation, its real address visible). The server's peer entry
+    # stays the client's /32, so WireGuard's source check drops that IPv6 and apps
+    # fall back to IPv4. Clients from before 2.4 keep IPv4 only until edited.
+    NEW_CLIENT_ALLOWED_IPS = "0.0.0.0/0, ::/0"
+    LEGACY_ALLOWED_IPS = "0.0.0.0/0"
+
     # A client is online (and "active") after a handshake this recent; with keepalive
     # 25 a connected device handshakes about every 2 minutes.
     ACTIVE_WITHIN_SECONDS = 5 * 60
@@ -912,6 +920,7 @@ class AmneziaManager:
             server.setdefault("enable_nat", self.default_enable_nat)
             server.setdefault("block_lan_cidrs", self.default_block_lan_cidrs)
             server.setdefault("egress_probe", None)
+            server.setdefault("endpoint_host", "")
             # Display values that GET /api/servers and /info used to write into state;
             # they are computed per response now.
             for derived in ("public_ip_geo", "public_ip_geo_country_code", "current_status"):
@@ -927,6 +936,8 @@ class AmneziaManager:
                 if not isinstance(client_params, dict):
                     client_params = client.get("obfuscation_params") or legacy_params
                 client["client_params"] = self.extract_client_params(client_params)
+                # IPv4 only, as issued before 2.4: the device's config still matches.
+                client.setdefault("allowed_ips", self.LEGACY_ALLOWED_IPS)
                 client["server_id"] = server.get("id")
                 # Derived when serialized: the name and protocol from the server, the
                 # status from live telemetry. Until 2.4 the traffic monitor saved
@@ -1055,6 +1066,7 @@ class AmneziaManager:
             raise ValueError(errors[0])
         port, subnet, mtu, dns_servers = basics["port"], basics["subnet"], basics["mtu"], basics["dns"]
         self.assert_no_conflicts(port, subnet)
+        endpoint_host = self.validate_endpoint_host(server_data.get("endpoint_host"))
 
         protocol = self.normalize_protocol(server_data.get("protocol"))
         # "Start after creating"; what happens at the next boot follows the last start/stop.
@@ -1101,6 +1113,7 @@ class AmneziaManager:
             "server_ip": server_ip,
             "mtu": mtu,
             "public_ip": self.public_ip,
+            "endpoint_host": endpoint_host,
             "transport_params": transport_params,
             "client_defaults": client_defaults,
             "enable_nat": enable_nat,
@@ -1338,6 +1351,48 @@ AllowedIPs = {client["client_ip"]}/32
                 errors.append(str(exc))
         return values, errors
 
+    @staticmethod
+    def validate_allowed_ips(value):
+        """A client's AllowedIPs: IPv4/IPv6 CIDRs, comma-separated, as 'a, b'.
+
+        A narrower list than 0.0.0.0/0, ::/0 is split tunnelling.
+        """
+        raw = value if isinstance(value, list) else sanitize_config_value(value if value is not None else "").split(",")
+        networks = []
+        for part in (str(p).strip() for p in raw):
+            if not part:
+                continue
+            try:
+                network = str(ipaddress.ip_network(part, strict=False))
+            except ValueError as exc:
+                raise ValueError(f"Invalid AllowedIPs entry '{part}': expected a CIDR such as 0.0.0.0/0 or ::/0") from exc
+            if network not in networks:
+                networks.append(network)
+        if not networks:
+            raise ValueError("AllowedIPs needs at least one network, e.g. 0.0.0.0/0, ::/0")
+        return ", ".join(networks)
+
+    @staticmethod
+    def validate_endpoint_host(value):
+        """The host clients dial: an IPv4 address or a DNS name, or '' for the detected IP.
+
+        With a name (e.g. a dynamic DNS one that follows the WAN address), a new public
+        IP changes no client config, so nothing needs re-importing.
+        """
+        host = sanitize_config_value(value if value is not None else "").strip().rstrip(".").lower()
+        if not host or is_valid_ip(host):
+            return host
+        labels = host.split(".")
+        label = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+        if len(host) > 253 or len(labels) < 2 or not all(label.fullmatch(x) for x in labels) or labels[-1].isdigit():
+            raise ValueError(f"Endpoint host '{host}' must be an IPv4 address or a DNS name such as vpn.example.com")
+        return host
+
+    @staticmethod
+    def endpoint_of(server):
+        """What client configs put in Endpoint's host: endpoint_host, else the detected IP."""
+        return server.get("endpoint_host") or server.get("public_ip")
+
     def transport_param_warnings(self, protocol, transport, mtu):
         """Practical guidance for validated transport params; none of it is a protocol limit."""
         warnings = []
@@ -1429,14 +1484,16 @@ AllowedIPs = {client["client_ip"]}/32
             )
         return warnings
 
-    def preview_transport_change(self, server, protocol, transport):
-        """What saving new transport params would do to the server's client configs.
+    def preview_transport_change(self, server, protocol, transport, endpoint_host=None):
+        """What saving new transport params (and endpoint host) would do to the server's client configs.
 
         configs_changed: clients whose config would differ from today's.
         outdated_now / outdated_after: issued clients whose device no longer matches,
         before and after the change (after < now means the change reverts something).
         """
         candidate = {**server, "protocol": protocol, "transport_params": transport}
+        if endpoint_host is not None:
+            candidate["endpoint_host"] = endpoint_host
         counts = {"configs_changed": 0, "outdated_now": 0, "outdated_after": 0}
         for client in server.get("clients") or []:
             now = self.config_fingerprint(server, client)
@@ -1513,7 +1570,7 @@ AllowedIPs = {client["client_ip"]}/32
         self.save_config()
         return True
 
-    def add_wireguard_client(self, server_id, client_name, client_params=None, copy_from_client_id=None):
+    def add_wireguard_client(self, server_id, client_name, client_params=None, copy_from_client_id=None, allowed_ips=None):
         """Add a client to a WireGuard server"""
         server = self.get_server(server_id)
         if not server:
@@ -1556,6 +1613,7 @@ AllowedIPs = {client["client_ip"]}/32
             "client_public_key": client_keys["public_key"],
             "preshared_key": preshared_key,
             "client_ip": client_ip,
+            "allowed_ips": self.validate_allowed_ips(allowed_ips or self.NEW_CLIENT_ALLOWED_IPS),
             "suspended": False,
             "client_params": dict(base_client_params),
             # Not handed out yet; set by mark_config_issued. None, not absent, so
@@ -1583,8 +1641,8 @@ AllowedIPs = {client["client_ip"]}/32
         )
         return client_config, config_content
 
-    def update_client_params(self, server_id, client_id, params):
-        """Update full client-side J/I parameters for a specific client."""
+    def update_client_params(self, server_id, client_id, params, allowed_ips=None):
+        """Update a client's J/I parameters and, when given, its AllowedIPs."""
         server = self.get_server(server_id)
         if not server:
             return None
@@ -1598,9 +1656,21 @@ AllowedIPs = {client["client_ip"]}/32
         if isinstance(params, dict):
             raw_client_params.update(self.extract_client_params(params))
 
-        client["client_params"] = self.validate_client_params(raw_client_params)
+        validated = self.validate_client_params(raw_client_params)
+        if allowed_ips is not None:
+            client["allowed_ips"] = self.validate_allowed_ips(allowed_ips)
+        client["client_params"] = validated
         self.save_config()
         return client
+
+    def update_endpoint_host(self, server_id, endpoint_host):
+        """Set the host client configs dial; no restart (the server's .conf has no Endpoint)."""
+        server = self.get_server(server_id)
+        if not server:
+            return None
+        server["endpoint_host"] = self.validate_endpoint_host(endpoint_host)
+        self.save_config()
+        return server
 
     def rename_server(self, server_id, new_name):
         """Rename a server (display name only)."""
@@ -1679,7 +1749,7 @@ AllowedIPs = {client["client_ip"]}/32
 # Server: {server["name"]}
 # Client: {client_config["name"]}
 # Generated: {time.ctime()}
-# Server IP: {server["public_ip"]}:{server["port"]}
+# Server IP: {self.endpoint_of(server)}:{server["port"]}
 
 """
 
@@ -1732,8 +1802,8 @@ H4 = {params.get("H4", 0)}
 [Peer]
 PublicKey = {server["server_public_key"]}
 PresharedKey = {client_config["preshared_key"]}
-Endpoint = {server["public_ip"]}:{server["port"]}
-AllowedIPs = 0.0.0.0/0
+Endpoint = {self.endpoint_of(server)}:{server["port"]}
+AllowedIPs = {client_config.get("allowed_ips") or self.LEGACY_ALLOWED_IPS}
 PersistentKeepalive = 25
 """
         return config

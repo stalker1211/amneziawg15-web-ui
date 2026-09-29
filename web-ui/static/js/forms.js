@@ -173,6 +173,22 @@ class FormUi {
             </div>` : ''}`;
     }
 
+    // What the device routes through the tunnel. The default claims IPv6 too, so an
+    // IPv6 network cannot carry traffic past the tunnel; narrower is split tunnelling.
+    allowedIpsFieldHtml(value) {
+        return this.formField('c-allowed_ips', 'Allowed IPs', value, {
+            mono: true,
+            hint: '<span class="font-mono">0.0.0.0/0, ::/0</span> sends everything through the tunnel, IPv6 included '
+                + '(the server drops IPv6, so apps use IPv4). A Linux device with IPv6 switched off cannot bring '
+                + 'up <span class="font-mono">::/0</span>: give it <span class="font-mono">0.0.0.0/0</span>. '
+                + 'A narrower list is split tunnelling.',
+        });
+    }
+
+    allowedIps() {
+        return (document.getElementById('c-allowed_ips')?.value || '').trim();
+    }
+
     // Jc/Jmin/Jmax as numbers when they are numbers (the server explains anything else).
     collectClientForm() {
         const value = (k) => (document.getElementById(`c-${k}`)?.value || '').trim();
@@ -331,6 +347,7 @@ class FormUi {
             subnet: (document.getElementById('f-subnet')?.value || '').trim(),
             mtu: this.numberOrText('f-mtu'),
             dns: (document.getElementById('f-dns')?.value || '').trim(),
+            endpoint_host: (document.getElementById('f-endpoint_host')?.value || '').trim(),
         });
         const transportParams = () => {
             const { protocol: _protocol, ...rest } = this.collectTransportForm();
@@ -348,6 +365,8 @@ class FormUi {
                         ${this.formField('f-subnet', 'Subnet', `10.10.${third}.0/24`, { mono: true })}
                         ${this.formField('f-mtu', 'MTU', mtu, { type: 'number', mono: true, hint: '1280-1440; 1420 suits most links, 1280 the most restrictive ones.' })}
                         ${this.formField('f-dns', 'DNS servers', env.dns || '1.1.1.1, 9.9.9.9', { mono: true, hint: 'Comma-separated, pushed to clients.' })}
+                        ${this.formField('f-endpoint_host', 'Endpoint host', '', { cls: 'sm:col-span-2', mono: true, placeholder: `detected: ${this.currentPublicIp || 'public IP'}`,
+                            hint: 'Optional: a DNS name (e.g. dynamic DNS) or IPv4 that clients dial. With a name, a new public IP needs no re-import.' })}
                     </div>`)}
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
@@ -447,12 +466,14 @@ class FormUi {
         const defaultImpact = 'Changing anything here rewrites every client config, and a running server restarts. '
             + 'Each client then has to re-import its QR code or .conf.';
         const row = (k, v, mono = true) => `<dt class="text-gray-500 dark:text-[#94a3b8]">${k}</dt><dd class="${mono ? 'font-mono' : ''} text-gray-800 dark:text-[#e5e7eb] min-w-0 truncate">${v}</dd>`;
+        const endpointHost = () => (document.getElementById('s-endpoint_host')?.value || '').trim();
         const collect = () => ({
             nat: !!document.getElementById('s-nat')?.checked,
             lan: !!document.getElementById('s-lan')?.checked,
+            host: endpointHost(),
             ...this.collectTransportForm(),
         });
-        const transportOnly = (state) => { const { nat: _n, lan: _l, ...rest } = state; return rest; };
+        const transportOnly = (state) => { const { nat: _n, lan: _l, host: _h, ...rest } = state; return rest; };
 
         const ctx = {
             snapshot: null,
@@ -462,7 +483,7 @@ class FormUi {
             collect,
             validateBody: () => {
                 const { protocol, ...transport } = this.collectTransportForm();
-                return { server_id: info.id, protocol, transport_params: transport };
+                return { server_id: info.id, protocol, transport_params: transport, endpoint_host: endpointHost() };
             },
             onResult: (result) => {
                 const impact = document.getElementById('impact');
@@ -472,7 +493,10 @@ class FormUi {
                 const now = result.outdated_now || 0;
                 const n = clients.length;
                 const configs = `${changed} client config${changed === 1 ? '' : 's'}`;
-                const restart = running ? ' and restarts the server' : '';
+                // An endpoint host alone changes client configs without a restart.
+                const before = ctx.snapshot ? JSON.parse(ctx.snapshot) : null;
+                const transportTouched = !before || JSON.stringify(transportOnly(collect())) !== JSON.stringify(transportOnly(before));
+                const restart = running && transportTouched ? ' and restarts the server' : '';
                 let text = this.escapeHtml(defaultImpact);
                 if (changed && after) {
                     text = `Saving changes ${configs}${restart}. <strong>${after} of ${n} client${n === 1 ? '' : 's'} will need to re-import</strong> (QR code or .conf) and stay marked until then.`;
@@ -488,7 +512,11 @@ class FormUi {
                 const before = JSON.parse(ctx.snapshot);
                 const networkChanged = now.nat !== before.nat || now.lan !== before.lan;
                 const transportChanged = JSON.stringify(transportOnly(now)) !== JSON.stringify(transportOnly(before));
+                const hostChanged = now.host !== before.host;
                 let restarted = false;
+                if (hostChanged) {
+                    await this.postJson(`/api/servers/${info.id}/endpoint-host`, { endpoint_host: now.host });
+                }
                 if (networkChanged) {
                     const data = await this.postJson(`/api/servers/${info.id}/networking`, { enable_nat: now.nat, block_lan_cidrs: now.lan });
                     if (data.iptables === 'failed') this.showTempMessage('Networking saved, but reapplying iptables failed.', 'error');
@@ -499,7 +527,7 @@ class FormUi {
                 }
                 window.Ui.closeDrawer();
                 await this.loadServers();
-                if (transportChanged) {
+                if (transportChanged || hostChanged) {
                     const fresh = (this.lastServers || []).find((s) => s.id === info.id);
                     const stale = (fresh?.clients || []).filter((c) => c.config_outdated).length;
                     this.showTempMessage(`${info.name} saved${restarted ? ' and restarted' : ''}. ${stale
@@ -525,6 +553,9 @@ class FormUi {
                             <button type="button" class="icon-btn icon-btn-sm" aria-label="Copy public key"
                                 data-action="copy-public-key">${window.Ui.icon('copy', 'w-3.5 h-3.5')}</button></dd>
                     </dl>`)}
+                ${this.formSection('Endpoint', `
+                    ${this.formField('s-endpoint_host', 'Endpoint host', info.endpoint_host || '', { mono: true, placeholder: `detected: ${info.public_ip || ''}`,
+                        hint: 'What client configs dial: a DNS name (e.g. dynamic DNS) or IPv4; empty uses the detected public IP. Changing it means every client re-imports; with a name, a new public IP needs none.' })}`)}
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
                         ${this.formSwitch('s-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', info.enable_nat)}
@@ -566,16 +597,18 @@ class FormUi {
                             ${clients.map((c) => `<option value="${safe(c.id)}">Copy ${safe(c.name)} (${safe(c.client_ip)})</option>`).join('')}
                         </select>
                     </div>`)}
+                ${this.formSection('Routing', this.allowedIpsFieldHtml('0.0.0.0/0, ::/0'))}
                 ${this.formSection('Client-side parameters', this.clientFieldsHtml(server, defaults))}`,
             primaryLabel: 'Create client',
             ctx: {
                 serverId,
-                collect: () => ({ name: name(), ...this.collectClientForm() }),
+                collect: () => ({ name: name(), allowed_ips: this.allowedIps(), ...this.collectClientForm() }),
                 localErrors: () => (name() ? [] : ['Enter a client name.']),
-                validateBody: () => ({ server_id: serverId, client_params: this.collectClientForm() }),
+                validateBody: () => ({ server_id: serverId, client_params: this.collectClientForm(), allowed_ips: this.allowedIps() }),
                 submit: async () => {
                     const data = await this.postJson(`/api/servers/${serverId}/clients`, {
                         name: name(),
+                        allowed_ips: this.allowedIps(),
                         client_params: this.collectClientForm(),
                         copy_from_client_id: document.getElementById('c-copyFrom')?.value || null,
                     });
@@ -617,11 +650,12 @@ class FormUi {
         const ctx = {
             snapshot: null,
             saveLabel: 'Save changes',
-            collect: () => this.collectClientForm(),
-            validateBody: () => ({ server_id: serverId, client_params: this.collectClientForm() }),
+            collect: () => ({ allowed_ips: this.allowedIps(), ...this.collectClientForm() }),
+            validateBody: () => ({ server_id: serverId, client_params: this.collectClientForm(), allowed_ips: this.allowedIps() }),
             submit: async () => {
                 const data = await this.postJson(`/api/servers/${serverId}/clients/${clientId}/client-params`, {
                     client_params: this.collectClientForm(),
+                    allowed_ips: this.allowedIps(),
                 });
                 window.Ui.closeDrawer();
                 const saved = data.client || {};
@@ -636,6 +670,7 @@ class FormUi {
             title: `<span class="text-sky-700 dark:text-[#7dd3fc]">${safe(client.name)}</span>`,
             sub: `<span class="font-mono">${safe(client.client_ip)}</span> · ${safe(server.name)} · ${seen}`,
             body: `
+                ${this.formSection('Routing', this.allowedIpsFieldHtml(client.allowed_ips || '0.0.0.0/0'))}
                 ${this.formSection('Client-side parameters', this.clientFieldsHtml(server, params))}
                 ${this.formCallout('Only this client changes. Re-import its QR code or .conf on the device afterwards.')}`,
             primaryLabel: 'No changes',

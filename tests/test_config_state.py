@@ -94,9 +94,13 @@ class LegacyConfigMigrationTests(unittest.TestCase):
         text = Path(self.server["config_path"]).read_text(encoding="utf-8")
         self.assertEqual(normalize_conf(text), read_golden("server-awg15.conf"))
 
-    def test_client_conf_matches_a_client_created_today(self):
+    def test_client_conf_matches_a_client_created_today_but_ipv4_only(self):
+        # A client from before 2.4 keeps AllowedIPs = 0.0.0.0/0, so its device's config
+        # still matches; a new client also claims ::/0 (2.4).
+        self.assertEqual(self.client["allowed_ips"], "0.0.0.0/0")
         text = self.manager.generate_wireguard_client_config(self.server, self.client, include_comments=True)
-        self.assertEqual(normalize_conf(text), read_golden("client-awg15.conf"))
+        today = read_golden("client-awg15.conf").replace("AllowedIPs = 0.0.0.0/0, ::/0", "AllowedIPs = 0.0.0.0/0")
+        self.assertEqual(normalize_conf(text), today)
 
     def test_legacy_obfuscation_dicts_are_not_kept(self):
         self.manager.save_config()

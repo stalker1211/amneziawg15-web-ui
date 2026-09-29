@@ -25,6 +25,17 @@ admin/changeme and says so in a banner.
   `debug`. It reaches the daemon only; the drawer offers to restart the running
   servers, since the daemon reads its level when it starts.
 
+### IPv6 and the endpoint
+- **New clients send IPv6 through the tunnel too** (`AllowedIPs = 0.0.0.0/0, ::/0`):
+  with IPv4 only, a device on an IPv6 network reached dual-stack sites outside the
+  tunnel, unobfuscated and with its real address. The server drops that IPv6, so
+  apps use IPv4. Existing clients keep `0.0.0.0/0` (their devices are not flagged);
+  switch each in its Edit drawer, which also allows split tunnelling. A Linux device
+  with IPv6 switched off cannot bring up `::/0`: give it `0.0.0.0/0`.
+- **Endpoint host per server:** a DNS name (e.g. dynamic DNS) or IPv4 that client
+  configs dial instead of the detected IP. With a name, a new public IP flags no
+  client of that server. The settings drawer counts the re-imports before you save.
+
 ### Parameters
 - **Every new server gets its own random parameters**, drawn by the server
   (`POST /api/generate`, ported from AmneziaWG Architect, MIT): four disjoint H ranges

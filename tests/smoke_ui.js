@@ -267,16 +267,49 @@ function check(label, condition, detail) {
         await page.evaluate(() => window.Ui.closeDrawer());
     }
 
+    // IPv6: a client routed IPv4-only gets a warning; an endpoint host counts every
+    // client config it changes, without the restart a transport change needs.
+    check('AllowedIPs IPv4-only is a warning, and Save arms', await page.evaluate(async () => {
+        const server = amneziaApp.lastServers.find((s) => (s.clients || []).length);
+        const client = server.clients[0];
+        amneziaApp.showClientParamsModal(server.id, client.id);
+        await new Promise((r) => setTimeout(r, 700));
+        const field = document.getElementById('c-allowed_ips');
+        field.value = field.value.includes('::/0') ? '0.0.0.0/0' : '0.0.0.0/0, ::/0';
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 900));
+        const warned = /IPv6 is not routed/.test(document.getElementById('checks').textContent);
+        const armed = !document.getElementById('drawerPrimary').disabled;
+        window.Ui.closeDrawer();
+        return armed && (field.value === '0.0.0.0/0' ? warned : !warned);
+    }));
+    check('an endpoint host previews its re-imports without a restart', await page.evaluate(async () => {
+        const server = amneziaApp.lastServers.find((s) => s.status === 'running' && (s.clients || []).length);
+        amneziaApp.showServerConfig(server.id);
+        await new Promise((r) => setTimeout(r, 900));
+        const host = document.getElementById('s-endpoint_host');
+        host.value = 'vpn.example.com';
+        host.dispatchEvent(new Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 900));
+        const impact = document.getElementById('impact').textContent;
+        window.Ui.closeDrawer();
+        return /client config/.test(impact) && !/restarts/.test(impact);
+    }));
+
     // Panel settings: pinned fields are read-only, a save reaches the new-server
     // defaults, and the credential needs its repeat and the current password.
     const settingsPinned = await page.evaluate(async () => {
+        const data = await amneziaApp.getJson('/api/settings');
         await amneziaApp.openSettings();
         await new Promise((r) => setTimeout(r, 800));
-        const pinned = [...document.querySelectorAll('#drawerBody input:disabled, #drawerBody select:disabled')].map((e) => e.id);
-        return { pinned, banner: !document.getElementById('passwordBanner').hidden };
+        const disabled = [...document.querySelectorAll('#drawerBody input:disabled, #drawerBody select:disabled')]
+            .map((e) => e.id).filter((id) => !['s-user', 's-password', 's-password2'].includes(id)).sort();
+        const pinned = Object.keys(data.sources).filter((k) => data.sources[k] === 'env').map((k) => `s-${k}`).sort();
+        return { disabled, pinned, banner: !document.getElementById('passwordBanner').hidden, isDefault: data.access.password_is_default };
     });
-    check('settings drawer shows env-pinned fields read-only', settingsPinned.pinned.length > 0
-        && settingsPinned.pinned.every((id) => id.startsWith("s-")) && settingsPinned.banner, settingsPinned);
+    check('settings drawer shows exactly the env-pinned fields read-only, and the banner follows the credential',
+        JSON.stringify(settingsPinned.disabled) === JSON.stringify(settingsPinned.pinned)
+            && settingsPinned.banner === settingsPinned.isDefault, settingsPinned);
     const settingsSaved = await page.evaluate(async () => {
         const port = document.getElementById('s-default_port');
         if (!port || port.disabled) return 'port field missing or pinned';

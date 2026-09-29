@@ -78,6 +78,7 @@ class ServerUi {
             `<span>UDP <span class="font-mono">${safe(server.port)}</span></span>`,
             `<span class="font-mono">${safe(server.subnet)}</span>`,
             `<span class="font-mono">${safe(server.interface)}</span>`,
+            ...(server.endpoint_host ? [`<span title="Clients dial this host">→ <span class="font-mono">${safe(server.endpoint_host)}</span></span>`] : []),
             `<span>NAT ${server.enable_nat ? 'on' : 'off'}</span>`,
             `<span>LAN ${server.block_lan_cidrs ? 'blocked' : 'allowed'}</span>`,
         ].join(sep);

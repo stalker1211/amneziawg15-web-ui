@@ -164,12 +164,13 @@ Basic Auth credentials.
 | POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey` / AWG 3.1 toggles; restarts if running |
 | POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables |
 | POST | `/api/servers/<id>/rename` | `{"name": "..."}` |
+| POST | `/api/servers/<id>/endpoint-host` | `{"endpoint_host": "vpn.example.com"}`: what client configs dial (empty: the detected IP) |
 | POST | `/api/servers/<id>/egress-ip` | probe the server's outbound IP |
-| POST | `/api/servers/<id>/clients` | add (`name`, optional `client_params`, `copy_from_client_id`) |
+| POST | `/api/servers/<id>/clients` | add (`name`, optional `client_params`, `copy_from_client_id`, `allowed_ips`) |
 | DELETE | `/api/servers/<id>/clients/<cid>` | delete client |
 | GET | `/api/servers/<id>/clients/<cid>/config` | download client `.conf` |
 | GET | `/api/servers/<id>/clients/<cid>/config-both` | JSON: clean + commented, for QR |
-| POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.x timings |
+| POST | `/api/servers/<id>/clients/<cid>/client-params` | update Jc/Jmin/Jmax, I1–I5, AWG 3.x timings, and optionally `allowed_ips` |
 | POST | `/api/servers/<id>/clients/<cid>/rename` \| `/suspend` | rename, or toggle access |
 | POST | `/api/servers/<id>/clients/<cid>/issued` | record that the current config was handed to the device (clears `config_outdated`) |
 | GET | `/api/settings` | panel settings: values, where each comes from (`env`, `panel`, `default`), the sign-in's state, versions |
@@ -318,6 +319,8 @@ Two kinds, and the distinction matters:
 | `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends |
 | `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
 | `MTU` | — | all | Interface MTU (1280–1440) |
+| `AllowedIPs` | client | all | What the device sends through the tunnel. New clients: `0.0.0.0/0, ::/0`, so IPv6 cannot bypass it (the server drops IPv6; apps fall back to IPv4). A Linux device with IPv6 switched off cannot bring up `::/0`: give it `0.0.0.0/0`. Narrower is split tunnelling |
+| `Endpoint` | server | all | The detected public IP, or the server's **endpoint host** (a DNS name or IPv4). With a dynamic DNS name, a new public IP needs no re-import |
 
 Junk packets and signature packets camouflage the *handshake* only; S/H values and
 header protection affect the tunnel itself. The UI shows only the fields the selected

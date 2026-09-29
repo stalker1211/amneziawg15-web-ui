@@ -106,6 +106,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             errors += basic_errors
             if "port" in basics and "subnet" in basics:
                 collect(errors, amnezia_manager.assert_no_conflicts, basics["port"], basics["subnet"])
+            collect(errors, amnezia_manager.validate_endpoint_host, server_data.get("endpoint_host"))
             mtu = basics.get("mtu", amnezia_manager.default_mtu)
             protocol = amnezia_manager.normalize_protocol(server_data.get("protocol"))
             if isinstance(server_data.get("transport_params"), dict):
@@ -143,16 +144,28 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
         if isinstance(data.get("transport_params"), dict):
             protocol = amnezia_manager.normalize_protocol(data.get("protocol", server.get("protocol")))
             transport = collect(errors, amnezia_manager.validate_transport_params, protocol, data["transport_params"])
+            # The endpoint host is in the same drawer and in every client config, so
+            # the counts include it; None (not sent, or invalid) leaves it as it is.
+            endpoint_host = None
+            if "endpoint_host" in data:
+                endpoint_host = collect(errors, amnezia_manager.validate_endpoint_host, data["endpoint_host"])
             counts = {"configs_changed": 0, "outdated_now": 0, "outdated_after": 0}
-            if transport:
+            if transport and not errors:
                 warnings += amnezia_manager.transport_param_warnings(protocol, transport, mtu)
-                counts = amnezia_manager.preview_transport_change(server, protocol, transport)
+                counts = amnezia_manager.preview_transport_change(server, protocol, transport, endpoint_host)
             return jsonify({"errors": errors, "warnings": warnings, **counts})
 
         if isinstance(data.get("client_params"), dict):
             client_params = collect(errors, amnezia_manager.validate_client_params, data["client_params"])
             if client_params:
                 warnings += amnezia_manager.client_param_warnings(client_params, mtu)
+            if "allowed_ips" in data:
+                allowed = collect(errors, amnezia_manager.validate_allowed_ips, data["allowed_ips"])
+                if allowed and "::/0" not in allowed.split(", ") and "0.0.0.0/0" in allowed.split(", "):
+                    warnings.append(
+                        "IPv6 is not routed: on an IPv6 network the device reaches dual-stack sites "
+                        "outside the tunnel. Add ::/0 to send it in (the server drops it, apps fall back to IPv4)."
+                    )
             return jsonify({"errors": errors, "warnings": warnings})
 
         abort(400, description="Expected transport_params or client_params with server_id")
@@ -248,6 +261,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
                 "interface": server["interface"],
                 "config_path": server["config_path"],
                 "public_ip": server["public_ip"],
+                "endpoint_host": server.get("endpoint_host", ""),
                 "server_ip": server["server_ip"],
                 "subnet": server["subnet"],
                 "mtu": server.get("mtu", 1420),
@@ -316,6 +330,14 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             }
         )
 
+    @server_bp.route("/api/servers/<server_id>/endpoint-host", methods=["POST"])
+    def update_endpoint_host(server_id):
+        """{"endpoint_host": "vpn.example.com" | "203.0.113.5" | ""}: what client configs dial.
+        Every client's config changes, so the Re-import flags follow; no restart."""
+        server_or_404(server_id)
+        server = amnezia_manager.update_endpoint_host(server_id, json_body().get("endpoint_host"))
+        return jsonify({"status": "updated", "server_id": server_id, "endpoint_host": server["endpoint_host"]})
+
     @server_bp.route("/api/servers/<server_id>/egress-ip", methods=["POST"])
     def probe_server_egress_ip(server_id):
         server = server_or_404(server_id)
@@ -334,6 +356,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             data.get("name", "New Client"),
             client_params=client_params,
             copy_from_client_id=data.get("copy_from_client_id"),
+            allowed_ips=data.get("allowed_ips"),
         )
         return jsonify({"client": serialize_client(client_config), "config": config_content})
 
@@ -372,7 +395,9 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
         client_params = json_body().get("client_params")
         if not isinstance(client_params, dict):
             return jsonify({"error": "client_params must be an object"}), 400
-        client = amnezia_manager.update_client_params(server_id, client_id, client_params)
+        client = amnezia_manager.update_client_params(
+            server_id, client_id, client_params, allowed_ips=json_body().get("allowed_ips")
+        )
         return jsonify(
             {
                 "status": "updated",

@@ -425,13 +425,13 @@ class RouteNotFoundTests(_RealSystemApp):
 # hashes a config that holds the client's private key.
 SECRET_KEYS = {"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"}
 SERVER_KEYS = {
-    "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns",
+    "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns", "endpoint_host",
     "egress_probe", "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip",
     "public_ip_geo", "public_ip_geo_country_code", "server_ip", "server_public_key", "status", "subnet",
     "traffic", "transport_params",
 }  # fmt: skip
 CLIENT_KEYS = {
-    "client_ip", "client_params", "client_public_key", "config_issued_at", "config_outdated", "created_at", "id",
+    "allowed_ips", "client_ip", "client_params", "client_public_key", "config_issued_at", "config_outdated", "created_at", "id",
     "name", "protocol", "server_id", "server_name", "status", "suspended",
 }  # fmt: skip
 
@@ -502,7 +502,7 @@ class ApiContractTests(unittest.TestCase):
             set(info),
             {
                 "block_lan_cidrs", "client_defaults", "clients_count", "config_path", "created_at", "dns",
-                "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip", "public_key",
+                "enable_nat", "endpoint_host", "id", "interface", "mtu", "name", "port", "protocol", "public_ip", "public_key",
                 "server_ip", "status", "subnet", "transport_params",
             },
         )  # fmt: skip
