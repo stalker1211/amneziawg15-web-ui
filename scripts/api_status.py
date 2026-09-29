@@ -47,13 +47,11 @@ def _handshake_color(handshake):
     return _Ansi.RED if "never" in s else (_Ansi.DIM if not s or s == "-" else _Ansi.YELLOW)
 
 
-def _http_session(user, password, token):
-    """Create session with optional basic auth and API token."""
+def _http_session(user, password):
+    """Create a session with the panel's Basic Auth credentials."""
     s = requests.Session()
     if user and password:
         s.auth = HTTPBasicAuth(user, password)
-    if token:
-        s.headers["X-API-Token"] = token  # avoids clobbering Basic Auth
     return s
 
 
@@ -133,12 +131,11 @@ def main():
     p.add_argument(
         "--password", default=os.getenv("AMNEZIA_API_PASSWORD"), help="Basic auth password (or AMNEZIA_API_PASSWORD)"
     )
-    p.add_argument("--token", default=os.getenv("AMNEZIA_API_TOKEN"), help="Bearer token (or AMNEZIA_API_TOKEN)")
     p.add_argument("--refresh-egress", action="store_true", help="Refresh per-server egress IP before showing status")
     args = p.parse_args()
 
     color_enabled = sys.stdout.isatty()
-    s = _http_session(args.user, args.password, args.token)
+    s = _http_session(args.user, args.password)
 
     base = args.base_url.rstrip("/")
     servers, err = _get_json(s, f"{base}/api/servers", args.timeout)

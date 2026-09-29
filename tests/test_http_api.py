@@ -102,27 +102,20 @@ class CreateServerValidationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
 
-class TokenAuthTests(unittest.TestCase):
-    def setUp(self):
-        self.app, _ = build_app(api_token="s3cr3t")
-        self.client = self.app.test_client()
+class NoAppLayerCredentialTests(unittest.TestCase):
+    """nginx's Basic Auth is the only gate (API_TOKEN went in 2.4), which holds only
+    because Flask cannot be reached around nginx."""
 
-    def test_missing_token_rejected_and_message_mentions_token(self):
-        response = self.client.get("/api/servers")
-        self.assertEqual(response.status_code, 401)
-        # ApiClient.isMissingApiToken() looks for "token" to decide whether to prompt.
-        self.assertIn("token", response.get_json()["error"].lower())
+    def test_api_answers_without_any_credential_header(self):
+        app, _ = build_app()
+        self.assertEqual(app.test_client().get("/api/servers").status_code, 200)
 
-    def test_wrong_token_rejected(self):
-        response = self.client.get("/api/servers", headers={"X-API-Token": "nope"})
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("token", response.get_json()["error"].lower())
+    def test_flask_listens_on_loopback_only(self):
+        from core.runtime import run_web_ui
 
-    def test_correct_token_accepted(self):
-        self.assertEqual(self.client.get("/api/servers", headers={"X-API-Token": "s3cr3t"}).status_code, 200)
-
-    def test_bearer_form_accepted(self):
-        self.assertEqual(self.client.get("/api/servers", headers={"Authorization": "Bearer s3cr3t"}).status_code, 200)
+        socketio = mock.Mock()
+        run_web_ui(socketio, object(), web_ui_port=5000, nginx_port="80", public_ip="203.0.113.9")
+        self.assertEqual(socketio.run.call_args.kwargs["host"], "127.0.0.1")
 
 
 class SerializationTests(unittest.TestCase):

@@ -108,6 +108,13 @@ class SocketAuthTests(unittest.TestCase):
         self.assertEqual(len(status), 1)
         self.assertEqual(status[0]["args"][0]["public_ip"], PUBLIC_IP)
 
+    def test_status_goes_only_to_the_tab_that_connected(self):
+        self.client.get("/api/servers")
+        first = self.socketio.test_client(self.app, flask_test_client=self.client)
+        first.get_received()
+        self.socketio.test_client(self.app, flask_test_client=self.client)
+        self.assertEqual(first.get_received(), [])
+
     def test_cookie_survives_a_restart_with_the_persisted_key(self):
         headers = self._session_cookie_header()
         app, socketio, _ = self._build(self.key_path)

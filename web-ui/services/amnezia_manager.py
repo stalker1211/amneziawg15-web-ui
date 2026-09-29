@@ -147,7 +147,7 @@ class AmneziaManager:
                     response = requests.get(service, timeout=5)
                     if response.status_code == 200:
                         ip = response.text.strip()
-                        if self.is_valid_ip(ip):
+                        if is_valid_ip(ip):
                             logger.info("Detected public IP: %s", ip)
                             return ip
                 except Exception:
@@ -159,17 +159,13 @@ class AmneziaManager:
             if route:
                 match = re.search(r"\bsrc\s+(\S+)", route)
                 local_ip = match.group(1) if match else None
-                if local_ip and self.is_valid_ip(local_ip):
+                if local_ip and is_valid_ip(local_ip):
                     logger.info("Detected local IP: %s", local_ip)
                     return local_ip
 
         except Exception as e:
             logger.error("Failed to detect public IP: %s", e)
         return "YOUR_SERVER_IP"  # Fallback
-
-    def is_valid_ip(self, ip):
-        """Check if the string is a valid IP address"""
-        return is_valid_ip(ip)
 
     @staticmethod
     def _config_line(params, key):
@@ -245,7 +241,7 @@ class AmneziaManager:
 
     def detect_public_ip_from_source(self, source_ip, service):
         """Detect external IP for traffic originating from a specific source IP."""
-        if not self.is_valid_ip(source_ip):
+        if not is_valid_ip(source_ip):
             raise ValueError(f"Invalid source IP: {source_ip}")
 
         if service not in self.EGRESS_PROBE_SERVICES:
@@ -261,7 +257,7 @@ class AmneziaManager:
                     raise RuntimeError(f"{service}: HTTP {response.status_code}")
 
                 body = response.text.strip()
-                if body and self.is_valid_ip(body):
+                if body and is_valid_ip(body):
                     return body, service
 
                 raise RuntimeError(f"{service}: invalid IP response '{body[:120]}'")
@@ -305,30 +301,19 @@ class AmneziaManager:
             "src": None,
         }
 
-        if not self.is_valid_ip(source_ip):
+        if not is_valid_ip(source_ip):
             return result
 
-        try:
-            proc = subprocess.run(
-                ["ip", "route", "get", destination, "from", source_ip],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            raw = (proc.stdout or "").strip().splitlines()
-            line = raw[0] if raw else ""
-            result["raw"] = line
+        output = self.run_command(["ip", "route", "get", destination, "from", source_ip])
+        if output is None:
+            result["raw"] = "route lookup failed"
+            return result
 
-            if line:
-                dev_match = re.search(r"\bdev\s+(\S+)", line)
-                via_match = re.search(r"\bvia\s+(\S+)", line)
-                src_match = re.search(r"\bsrc\s+(\S+)", line)
-                result["dev"] = dev_match.group(1) if dev_match else None
-                result["via"] = via_match.group(1) if via_match else None
-                result["src"] = src_match.group(1) if src_match else None
-        except Exception as e:
-            result["raw"] = f"route lookup failed: {e}"
-
+        line = (output.splitlines() or [""])[0]
+        result["raw"] = line
+        for key in ("dev", "via", "src"):
+            match = re.search(rf"\b{key}\s+(\S+)", line)
+            result[key] = match.group(1) if match else None
         return result
 
     def probe_server_egress_ip(self, server_id):
@@ -906,7 +891,6 @@ class AmneziaManager:
             "H2": random.randint(100000, 200000),
             "H3": random.randint(200000, 300000),
             "H4": random.randint(300000, 400000),
-            "MTU": mtu,
         }
         if self.protocol_supports_s34(protocol):
             params["S3"] = random.randint(15, 150)
@@ -962,13 +946,7 @@ class AmneziaManager:
             raw_client_defaults = self.generate_client_defaults(mtu)
         client_defaults = self.validate_client_params(raw_client_defaults)
 
-        # Parse subnet for server IP
-        subnet_parts = subnet.split("/")
-        network = subnet_parts[0]
-        prefix = subnet_parts[1] if len(subnet_parts) > 1 else "24"
-        server_ip = self.get_server_ip(network)
-
-        del prefix  # _build_server_config_content derives this from the subnet.
+        server_ip = self.get_server_ip(subnet.split("/")[0])
 
         server_config = {
             "id": server_id,
@@ -1200,7 +1178,7 @@ AllowedIPs = {client["client_ip"]}/32
             servers = []
         servers = servers or self.dns_servers
         for dns in servers:
-            if not self.is_valid_ip(dns):
+            if not is_valid_ip(dns):
                 raise ValueError(f"Invalid DNS server IP: {dns}")
         return servers
 

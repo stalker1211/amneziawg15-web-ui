@@ -2,6 +2,7 @@
 
 import os
 import time
+from urllib.parse import quote
 
 from core.guards import install_guards
 from core.helpers import to_bool
@@ -25,9 +26,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-# Build label shown under the page heading. publish_dockerhub.sh writes this
-# file into the build context, so it is baked into a published image but absent
-# from a plain `docker build` or a source bind-mount, which then read "dev".
+# Build label shown under the page heading. The Dockerfile writes this file from
+# --build-arg BUILD_LABEL (run.sh, publish_dockerhub.sh), so a plain `docker build`
+# or a source bind-mount has none and reads "dev".
 try:
     with open(os.path.join(BASE_DIR, "BUILD"), encoding="utf-8") as _fh:
         BUILD_LABEL = _fh.read().strip() or "dev"
@@ -36,7 +37,7 @@ except OSError:
 
 # Essential environment variables
 NGINX_PORT = os.getenv("NGINX_PORT", "80")
-AUTO_START_SERVERS = os.getenv("AUTO_START_SERVERS", "true").lower() == "true"
+AUTO_START_SERVERS = to_bool(os.getenv("AUTO_START_SERVERS"), True)
 DEFAULT_MTU = int(os.getenv("DEFAULT_MTU", "1280"))
 DEFAULT_SUBNET = os.getenv("DEFAULT_SUBNET", "10.0.0.0/24")
 DEFAULT_PORT = int(os.getenv("DEFAULT_PORT", "51820"))
@@ -66,10 +67,6 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "web_config.json")
 SECRET_KEY_FILE = os.path.join(CONFIG_DIR, ".flask_secret_key")
 ENABLE_GEOIP = os.getenv("ENABLE_GEOIP", "1").strip().lower() not in ("0", "false", "no", "off")
 
-# API Token Auth (optional, for defense-in-depth)
-API_TOKEN = os.getenv("API_TOKEN", "").strip()
-
-
 # Socket.IO CORS origins (comma-separated list or '*' for all)
 # Empty/not set = same-origin only (recommended for production)
 ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "").strip()
@@ -92,12 +89,15 @@ logger.info(
     os.path.exists(STATIC_DIR),
 )
 logger.info(
-    "nginx_port=%s auto_start=%s api_token=%s allowed_origins=%s",
+    "nginx_port=%s auto_start=%s allowed_origins=%s",
     NGINX_PORT,
     AUTO_START_SERVERS,
-    "<set>" if API_TOKEN else "<not set>",
     ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>",
 )
+if os.getenv("API_TOKEN", "").strip():
+    # Removed in 2.4: Flask listens on 127.0.0.1 only, so nginx's Basic Auth always
+    # decides first and the token never admitted or refused anything.
+    logger.warning("API_TOKEN is set but no longer used (removed in 2.4); nginx Basic Auth is the only credential")
 logger.info(
     "defaults: mtu=%s subnet=%s port=%s dns=%s nat=%s block_lan=%s geoip=%s",
     DEFAULT_MTU,
@@ -113,9 +113,9 @@ logger.debug("template files: %s", os.listdir(TEMPLATE_DIR) if os.path.exists(TE
 logger.debug("static files: %s", os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
 
 app = create_flask_app(TEMPLATE_DIR, STATIC_DIR)
-# Persisted session secret + the /socket.io/ auth cookie, the anti-CSRF JSON check,
-# and the optional API token (see core/guards.py).
-require_token = install_guards(app, secret_key_path=SECRET_KEY_FILE, api_token=API_TOKEN)
+# Persisted session secret + the /socket.io/ auth cookie and the anti-CSRF JSON check
+# (see core/guards.py).
+install_guards(app, secret_key_path=SECRET_KEY_FILE)
 socketio = create_socketio(app, ALLOWED_ORIGINS)
 
 
@@ -136,7 +136,6 @@ amnezia_manager = AmneziaManager(
 
 register_system_routes(
     app,
-    require_token,
     amnezia_manager,
     awg_log_file=AWG_LOG_FILE,
     nginx_port=NGINX_PORT,
@@ -149,7 +148,6 @@ register_system_routes(
 
 register_server_routes(
     app,
-    require_token,
     amnezia_manager,
     to_bool=to_bool,
     default_enable_nat=DEFAULT_ENABLE_NAT,
@@ -164,14 +162,26 @@ register_socket_handlers(socketio, amnezia_manager, NGINX_PORT)
 def index():
     """Render the main single-page web UI."""
     logger.debug("Serving index.html")
-    # Cache-bust static assets so browsers pick up new JS/CSS immediately.
-    try:
-        assets = (("js", "app.js"), ("css", "style.css"), ("css", "tailwind.css"))
-        cache_bust = int(max(os.path.getmtime(os.path.join(STATIC_DIR, *asset)) for asset in assets))
-    except OSError:
-        cache_bust = int(time.time())
+    return render_template("index.html", cache_bust=cache_bust(), build_label=BUILD_LABEL)
 
-    return render_template("index.html", cache_bust=cache_bust, build_label=BUILD_LABEL)
+
+def cache_bust():
+    """The ?v= on every script and stylesheet, so a new image is never served stale JS.
+
+    An image built with a label gets it (the files cannot change under it); a plain
+    build or a bind-mounted source ("dev") uses the newest asset's mtime instead, so
+    an edit shows up on the next reload.
+    """
+    if BUILD_LABEL != "dev":
+        return quote(BUILD_LABEL, safe="")
+    newest = 0.0
+    for sub in ("js", "css"):
+        folder = os.path.join(STATIC_DIR, sub)
+        try:
+            newest = max([newest, *(os.path.getmtime(os.path.join(folder, name)) for name in os.listdir(folder))])
+        except OSError:
+            continue
+    return str(int(newest or time.time()))
 
 
 # Explicit static file route to ensure they're served
@@ -187,9 +197,5 @@ if __name__ == "__main__":
         app,
         web_ui_port=WEB_UI_PORT,
         nginx_port=NGINX_PORT,
-        auto_start_servers=AUTO_START_SERVERS,
-        default_mtu=DEFAULT_MTU,
-        default_subnet=DEFAULT_SUBNET,
-        default_port=DEFAULT_PORT,
         public_ip=amnezia_manager.public_ip,
     )

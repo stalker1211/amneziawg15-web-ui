@@ -15,7 +15,6 @@ logger = get_logger(__name__)
 
 def register_server_routes(
     app,
-    require_token,
     amnezia_manager,
     *,
     to_bool,
@@ -90,7 +89,6 @@ def register_server_routes(
             return None
 
     @server_bp.route("/api/validate", methods=["POST"])
-    @require_token
     def validate():
         """Check a form as it is being filled in, without changing anything, so the
         rules live only here. One body per form:
@@ -150,7 +148,6 @@ def register_server_routes(
     # --- servers ------------------------------------------------------------------
 
     @server_bp.route("/api/servers", methods=["GET"])
-    @require_token
     def get_servers():
         """List servers with live status and geo labels. Read-only: the display values
         are computed into the response, never written back to the stored config."""
@@ -172,7 +169,6 @@ def register_server_routes(
         return jsonify(payload)
 
     @server_bp.route("/api/servers", methods=["POST"])
-    @require_token
     def create_server():
         data = json_body()
         # Require an explicit name so an empty POST cannot silently create a
@@ -182,28 +178,24 @@ def register_server_routes(
         return jsonify(serialize_server(amnezia_manager.create_wireguard_server(data)))
 
     @server_bp.route("/api/servers/<server_id>", methods=["DELETE"])
-    @require_token
     def delete_server(server_id):
         server_or_404(server_id)
         amnezia_manager.delete_server(server_id)
         return jsonify({"status": "deleted", "server_id": server_id})
 
     @server_bp.route("/api/servers/<server_id>/start", methods=["POST"])
-    @require_token
     def start_server(server_id):
         if amnezia_manager.start_server(server_id):
             return jsonify({"status": "started"})
         return jsonify({"error": "Server not found or failed to start"}), 404
 
     @server_bp.route("/api/servers/<server_id>/stop", methods=["POST"])
-    @require_token
     def stop_server(server_id):
         if amnezia_manager.stop_server(server_id):
             return jsonify({"status": "stopped"})
         return jsonify({"error": "Server not found or failed to stop"}), 404
 
     @server_bp.route("/api/servers/<server_id>/rename", methods=["POST"])
-    @require_token
     def rename_server(server_id):
         server_or_404(server_id)
         new_name = str(json_body().get("name") or "").strip()
@@ -213,7 +205,6 @@ def register_server_routes(
         return jsonify({"status": "renamed", "server_id": server_id, "name": new_name})
 
     @server_bp.route("/api/servers/<server_id>/info")
-    @require_token
     def get_server_info(server_id):
         server = server_or_404(server_id)
         return jsonify(
@@ -241,7 +232,6 @@ def register_server_routes(
         )
 
     @server_bp.route("/api/servers/<server_id>/config")
-    @require_token
     def get_server_config(server_id):
         server = server_or_404(server_id)
         if not os.path.exists(server["config_path"]):
@@ -260,7 +250,6 @@ def register_server_routes(
         )
 
     @server_bp.route("/api/servers/<server_id>/config/download")
-    @require_token
     def download_server_config(server_id):
         server = server_or_404(server_id)
         if not os.path.exists(server["config_path"]):
@@ -268,13 +257,11 @@ def register_server_routes(
         return send_file(server["config_path"], as_attachment=True, download_name=f"{server['interface']}.conf")
 
     @server_bp.route("/api/servers/<server_id>/transport-params", methods=["POST"])
-    @require_token
     def update_server_transport_params(server_id):
         server_or_404(server_id)
         return jsonify(amnezia_manager.update_server_transport_params(server_id, json_body()))
 
     @server_bp.route("/api/servers/<server_id>/networking", methods=["POST"])
-    @require_token
     def update_server_networking(server_id):
         server = server_or_404(server_id)
         data = json_body()
@@ -297,7 +284,6 @@ def register_server_routes(
         )
 
     @server_bp.route("/api/servers/<server_id>/traffic")
-    @require_token
     def get_server_traffic(server_id):
         traffic = amnezia_manager.get_traffic_for_server(server_id)
         if traffic is None:
@@ -305,7 +291,6 @@ def register_server_routes(
         return jsonify(traffic)
 
     @server_bp.route("/api/servers/<server_id>/egress-ip", methods=["POST"])
-    @require_token
     def probe_server_egress_ip(server_id):
         server = server_or_404(server_id)
         probe = amnezia_manager.probe_server_egress_ip(server_id)
@@ -314,18 +299,15 @@ def register_server_routes(
     # --- clients ------------------------------------------------------------------
 
     @server_bp.route("/api/clients", methods=["GET"])
-    @require_token
     def get_all_clients():
         return jsonify([serialize_client(client) for client in amnezia_manager.get_client_configs()])
 
     @server_bp.route("/api/servers/<server_id>/clients", methods=["GET"])
-    @require_token
     def get_server_clients(server_id):
         # Lists by filter: an unknown server simply has no clients.
         return jsonify([serialize_client(client) for client in amnezia_manager.get_client_configs(server_id)])
 
     @server_bp.route("/api/servers/<server_id>/clients", methods=["POST"])
-    @require_token
     def add_client(server_id):
         server_or_404(server_id)
         data = json_body()
@@ -339,14 +321,12 @@ def register_server_routes(
         return jsonify({"client": serialize_client(client_config), "config": config_content})
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>", methods=["DELETE"])
-    @require_token
     def delete_client(server_id, client_id):
         client_or_404(server_id, client_id)
         amnezia_manager.delete_client(server_id, client_id)
         return jsonify({"status": "deleted", "client_id": client_id})
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/rename", methods=["POST"])
-    @require_token
     def rename_client(server_id, client_id):
         client_or_404(server_id, client_id)
         new_name = str(json_body().get("name") or "").strip()
@@ -356,7 +336,6 @@ def register_server_routes(
         return jsonify({"status": "renamed", "server_id": server_id, "client_id": client_id, "name": new_name})
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/suspend", methods=["POST"])
-    @require_token
     def toggle_client_suspend(server_id, client_id):
         client_or_404(server_id, client_id)
         client = amnezia_manager.toggle_client_suspend(server_id, client_id)
@@ -371,7 +350,6 @@ def register_server_routes(
         )
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/client-params", methods=["POST"])
-    @require_token
     def update_client_params(server_id, client_id):
         client_or_404(server_id, client_id)
         client_params = json_body().get("client_params")
@@ -389,7 +367,6 @@ def register_server_routes(
         )
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/issued", methods=["POST"])
-    @require_token
     def mark_client_config_issued(server_id, client_id):
         """The UI calls this after showing the QR or downloading the .conf. A POST, not a
         side effect of the GET config routes, so it stays behind the JSON-only guard."""
@@ -398,7 +375,6 @@ def register_server_routes(
         return jsonify({"status": "issued", "client": serialize_client(client, server)})
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/config")
-    @require_token
     def download_client_config(server_id, client_id):
         server, client = client_or_404(server_id, client_id)
         config_content = amnezia_manager.generate_wireguard_client_config(server, client, include_comments=True)
@@ -413,7 +389,6 @@ def register_server_routes(
         )
 
     @server_bp.route("/api/servers/<server_id>/clients/<client_id>/config-both")
-    @require_token
     def get_client_config_both(server_id, client_id):
         server, client = client_or_404(server_id, client_id)
         clean_config = amnezia_manager.generate_wireguard_client_config(server, client, include_comments=False)

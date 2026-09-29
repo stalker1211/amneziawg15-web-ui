@@ -5,7 +5,7 @@ servers — WireGuard with obfuscation that resists DPI-based blocking. Create s
 manage clients, hand out configs, and watch traffic live, all from one container.
 
 Almost everything is configurable in the UI. A handful of settings are startup-only
-environment variables: `NGINX_PORT`, `NGINX_USER`/`NGINX_PASSWORD`, `API_TOKEN`,
+environment variables: `NGINX_PORT`, `NGINX_USER`/`NGINX_PASSWORD`,
 `ENABLE_GEOIP`, `WAN_IF`, `ALLOWED_ORIGINS`, `LOG_LEVEL` (`ENABLE_NAT` and
 `BLOCK_LAN_CIDRS` are only *defaults* — override them per server in the UI).
 
@@ -37,7 +37,7 @@ Current version: **2.3**
 - **Dark theme** (the OS preference picks the first one), collapsible help, inline rename.
 - **Self-contained UI** — no CDN: the page loads nothing from other hosts, so it works
   without internet access and never tells a third party where your panel is.
-- Behind nginx HTTP Basic Auth, with an optional `API_TOKEN` for scripted access.
+- Behind nginx HTTP Basic Auth; the web UI itself listens on loopback only.
 
 ## 📝 Logging
 
@@ -80,7 +80,7 @@ web-ui/
               ui.js             toasts, dialogs, drawer, menus, inline rename
               server-ui.js      server card and client row rendering
               protocols.js      the protocol table
-              api.js            fetch/token plumbing
+              api.js            fetch plumbing
 ```
 
 State lives in `/etc/amnezia/web_config.json` — the source of truth. WireGuard
@@ -129,9 +129,10 @@ WireGuard configs can become too large to fit into a single QR code (especially 
 
 ## 🔧 API Endpoints
 
-All `/api/*` routes sit behind nginx HTTP Basic Auth (`NGINX_USER` / `NGINX_PASSWORD`).
-If `API_TOKEN` is set, they additionally require an `X-API-Token` header — useful for
-scripts; redundant in a browser, where Basic Auth already gates everything.
+All `/api/*` routes sit behind nginx HTTP Basic Auth (`NGINX_USER` / `NGINX_PASSWORD`),
+the only credential: the web UI listens on 127.0.0.1 inside the container, so nothing
+reaches it around nginx. Scripts send the same Basic Auth (`curl -u`). `API_TOKEN` was
+removed in 2.4; a container that still sets it logs a warning and ignores it.
 
 Live updates over Socket.IO (`/socket.io/`) are the one exception: nginx does not
 Basic-Auth-gate that path, because some browsers (notably iPadOS Safari) don't
@@ -207,7 +208,6 @@ Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg
 | `WAN_IF` | *(auto)* | Outbound/WAN interface used for NAT and forwarding rules. Auto-detected from the default route if unset (set explicitly if detection fails). |
 | `BLOCK_LAN_CIDRS` | `1` | Default LAN-blocking for new servers. Blocks private LAN ranges (192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12). Set `0` to allow LAN access. Per-server override is available in the UI. |
 | `ENABLE_GEOIP` | `1` | Enable GeoIP lookups for client endpoint IPs plus server public/egress IPs (adds country flag + location). Set `0` to disable external requests. |
-| `API_TOKEN` | *(empty)* | Optional API token for `/api/*` endpoints (defense-in-depth). If set, all API requests must include either `X-API-Token: <token>` (recommended when using Nginx Basic Auth) or `Authorization: Bearer <token>`. Generate with: `openssl rand -hex 32` |
 | `ALLOWED_ORIGINS` | *(empty)* | Socket.IO CORS allowed origins. Empty = same-origin only (recommended). Use `*` for development/all origins, or comma-separated list: `http://localhost:3000,https://vpn.example.com` |
 
 ## 🧪 Local build/run (dev)
@@ -245,7 +245,6 @@ services:
       - amnezia-data:/etc/amnezia
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
     devices:
       - /dev/net/tun
     sysctls:
@@ -262,7 +261,6 @@ volumes:
 docker run -d \
   --name amnezia-web-ui \
   --cap-add=NET_ADMIN \
-  --cap-add=SYS_MODULE \
   --sysctl net.ipv4.ip_forward=1 \
   --sysctl net.ipv4.conf.all.src_valid_mark=1 \
   --device /dev/net/tun \

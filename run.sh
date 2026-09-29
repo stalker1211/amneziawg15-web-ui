@@ -11,9 +11,6 @@ INTERACTIVE="${INTERACTIVE:-0}"
 ENTRYPOINT="${ENTRYPOINT:-}"
 CMD_ARGS=("$@")
 
-# Optional: set API_TOKEN on the host to enable app-layer token auth for /api/*
-# Example: API_TOKEN=$(openssl rand -hex 32) ./run.sh
-
 # Build image by default (set BUILD=0 to skip).
 BUILD="${BUILD:-1}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
@@ -48,7 +45,6 @@ docker run "${RUN_FLAGS[@]}" \
 	--name "${CONTAINER_NAME}" \
 	"${ENTRYPOINT_FLAGS[@]+"${ENTRYPOINT_FLAGS[@]}"}" \
 	--cap-add=NET_ADMIN \
-	--cap-add=SYS_MODULE \
 	--device /dev/net/tun \
 	--sysctl net.ipv4.ip_forward=1 \
 	--sysctl net.ipv4.conf.all.src_valid_mark=1 \
@@ -60,7 +56,6 @@ docker run "${RUN_FLAGS[@]}" \
 	-e NGINX_PASSWORD=changeme \
 	-e AWG_LOG_LEVEL="${AWG_LOG_LEVEL:-}" \
 	-e AWG_LOG_FILE="${AWG_LOG_FILE:-}" \
-	-e API_TOKEN="${API_TOKEN:-}" \
 	-v amnezia-data:/etc/amnezia \
 	"${IMAGE_NAME}" \
 	"${CMD_ARGS[@]+"${CMD_ARGS[@]}"}"

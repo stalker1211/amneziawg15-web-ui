@@ -136,17 +136,9 @@ class AmneziaApp {
         handler();
     }
 
-    // Estimate UTF-8 byte size for QR payload diagnostics
+    // UTF-8 byte size, for the QR payload diagnostics.
     getUtf8ByteLength(text) {
-        try {
-            if (typeof TextEncoder !== 'undefined') {
-                return new TextEncoder().encode(String(text)).length;
-            }
-        } catch (_) {
-            // fall through
-        }
-        // Fallback (older browsers)
-        return unescape(encodeURIComponent(String(text))).length;
+        return new TextEncoder().encode(String(text)).length;
     }
 
     generateQrIntoContainer(qrContainer, text, size = 300) {

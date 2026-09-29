@@ -48,6 +48,7 @@ def register_socket_handlers(socketio, amnezia_manager, nginx_port):
             return False
 
         logger.info("WebSocket connected from %s", request.remote_addr)
+        # Only to the tab that connected: every other tab already has its status.
         socketio.emit(
             "status",
             {
@@ -57,6 +58,7 @@ def register_socket_handlers(socketio, amnezia_manager, nginx_port):
                 "server_port": request.environ.get("SERVER_PORT", "unknown"),
                 "client_port": request.environ.get("HTTP_X_FORWARDED_PORT", "unknown"),
             },
+            to=request.sid,  # pyright: ignore[reportAttributeAccessIssue]  -- set by Flask-SocketIO
         )
 
     @socketio.on("disconnect")
@@ -64,19 +66,14 @@ def register_socket_handlers(socketio, amnezia_manager, nginx_port):
         logger.info("WebSocket disconnected from %s", request.remote_addr)
 
 
-# pylint: disable=too-many-arguments
-
-
-def run_web_ui(
-    socketio, app, *, web_ui_port, nginx_port, auto_start_servers, default_mtu, default_subnet, default_port, public_ip
-):
+def run_web_ui(socketio, app, *, web_ui_port, nginx_port, public_ip):
     """Log the startup summary and run the web UI server.
 
-    The full configuration is already logged by app.py at import time; this only
-    records what is specific to actually serving.
+    Loopback only: nginx's Basic Auth is the only gate, so nothing may reach Flask
+    around it (on a macvlan network the container's own address is on the LAN).
+    The full configuration is already logged by app.py at import time.
     """
     logger.info(
-        "AmneziaWG Web UI listening on 0.0.0.0:%s (behind nginx on port %s), public IP %s", web_ui_port, nginx_port, public_ip
+        "AmneziaWG Web UI listening on 127.0.0.1:%s (behind nginx on port %s), public IP %s", web_ui_port, nginx_port, public_ip
     )
-    del auto_start_servers, default_mtu, default_subnet, default_port  # logged in app.py
-    socketio.run(app, host="0.0.0.0", port=web_ui_port, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="127.0.0.1", port=web_ui_port, debug=False, allow_unsafe_werkzeug=True)

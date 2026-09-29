@@ -17,7 +17,6 @@ logger = get_logger(__name__)
 
 def register_system_routes(
     app,
-    require_token,
     amnezia_manager,
     *,
     awg_log_file,
@@ -32,7 +31,6 @@ def register_system_routes(
     system_bp = Blueprint("system_routes", __name__)
 
     @system_bp.route("/api/system/status")
-    @require_token
     def system_status():
         _, public_ip_geo_country_code = amnezia_manager.lookup_geoip(amnezia_manager.public_ip)
         status = {
@@ -72,7 +70,6 @@ def register_system_routes(
         return jsonify(status)
 
     @system_bp.route("/api/system/awg-log")
-    @require_token
     def get_awg_log():
         """Tail amneziawg-go log with optional interface filtering.
 
@@ -162,7 +159,6 @@ def register_system_routes(
             return jsonify({"error": str(e), "path": log_path}), 500
 
     @system_bp.route("/api/system/refresh-ip")
-    @require_token
     def refresh_ip():
         """Refresh public IP address"""
         new_ip = amnezia_manager.detect_public_ip()
@@ -181,7 +177,6 @@ def register_system_routes(
         )
 
     @system_bp.route("/api/system/iptables-test")
-    @require_token
     def iptables_test():
         """Test iptables setup for a specific server"""
         server_id = request.args.get("server_id")

@@ -255,7 +255,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="awg-demo-")
     web_ui = REPO / "web-ui"
     app = create_flask_app(str(web_ui / "templates"), str(web_ui / "static"))
-    require_token = install_guards(app, secret_key_path=os.path.join(tmp, ".flask_secret_key"), api_token="")
+    install_guards(app, secret_key_path=os.path.join(tmp, ".flask_secret_key"))
     socketio = create_socketio(app, None)
     defaults = {"default_mtu": 1420, "default_subnet": "10.10.0.0/24", "default_port": 51820}
     manager = DemoManager(
@@ -267,9 +267,9 @@ def main():
     log_file = os.path.join(tmp, "awg.log")
     write_log(log_file, manager)
 
-    register_system_routes(app, require_token, manager, awg_log_file=log_file, nginx_port=str(args.port),
+    register_system_routes(app, manager, awg_log_file=log_file, nginx_port=str(args.port),
                            auto_start_servers=False, default_dns="1.1.1.1, 9.9.9.9", **defaults)  # fmt: skip
-    register_server_routes(app, require_token, manager, to_bool=to_bool,
+    register_server_routes(app, manager, to_bool=to_bool,
                            default_enable_nat=True, default_block_lan_cidrs=True)  # fmt: skip
     register_socket_handlers(socketio, manager, str(args.port))
 

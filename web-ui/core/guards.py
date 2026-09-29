@@ -1,4 +1,4 @@
-"""Request guards: session secret, the socket.io auth cookie, anti-CSRF and API token.
+"""Request guards: session secret, the socket.io auth cookie and anti-CSRF.
 
 Kept out of app.py, which builds the whole app at import time (a real
 AmneziaManager, /etc/amnezia), so the tests can install these exact functions on
@@ -7,7 +7,6 @@ a bare Flask app instead of re-implementing them.
 
 import os
 from datetime import timedelta
-from functools import wraps
 
 from flask import jsonify, request, session
 
@@ -36,8 +35,11 @@ def load_or_create_secret_key(path):
     return key
 
 
-def install_guards(app, *, secret_key_path, api_token):
-    """Set up the session secret and before_request guards; return the require_token decorator.
+def install_guards(app, *, secret_key_path):
+    """Set up the session secret and the before_request guards.
+
+    There is no app-layer credential: Flask listens on 127.0.0.1 only, so every
+    request has already passed nginx's Basic Auth (DEVELOPMENT.md §6).
 
     The session cookie is permanent (a year): it is the only thing authorizing a
     WebSocket reconnect, so it must outlive browser restarts as Basic Auth does.
@@ -84,35 +86,3 @@ def install_guards(app, *, secret_key_path, api_token):
             ), 415
 
         return None
-
-    def require_token(f):
-        """Enforce API token auth if api_token is set (defense-in-depth with Nginx Basic Auth)."""
-
-        @wraps(f)
-        def decorated(*args, **kwargs):
-            # If no API token is configured, allow access (rely on Nginx Basic Auth)
-            if not api_token:
-                return f(*args, **kwargs)
-
-            # Support either:
-            # - X-API-Token: <token>          works alongside Nginx Basic Auth
-            # - Authorization: Bearer <token> ONLY when nginx Basic Auth is disabled or
-            #   bypassed, since otherwise the Authorization header carries the Basic
-            #   credentials and nginx rejects a Bearer value before Flask sees it.
-            token = (request.headers.get("X-API-Token") or "").strip()
-            if not token:
-                auth_header = request.headers.get("Authorization", "")
-                if auth_header.startswith("Bearer "):
-                    token = auth_header[7:].strip()  # Remove 'Bearer ' prefix
-
-            if not token:
-                return jsonify({"error": ("Missing API token (use X-API-Token header or Authorization: Bearer ...)")}), 401
-
-            if token != api_token:
-                return jsonify({"error": "Invalid API token"}), 401
-
-            return f(*args, **kwargs)
-
-        return decorated
-
-    return require_token

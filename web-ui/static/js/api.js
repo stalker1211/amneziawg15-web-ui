@@ -1,27 +1,8 @@
 // AmneziaWG Web UI - API helper
 class ApiClient {
-    getToken() {
-        try {
-            return String(localStorage.getItem('amnezia_api_token') || '').trim();
-        } catch (_) {
-            return '';
-        }
-    }
-
-    setToken(token) {
-        try {
-            const value = String(token || '').trim();
-            if (value) localStorage.setItem('amnezia_api_token', value);
-            else localStorage.removeItem('amnezia_api_token');
-        } catch (_) {
-            // ignore
-        }
-    }
-
+    // nginx's Basic Auth is the only credential, and the browser attaches it itself.
     buildHeaders(existingHeaders, method) {
         const headers = new Headers(existingHeaders || {});
-        const token = this.getToken();
-        if (token) headers.set('X-API-Token', token);
 
         // Mutating requests must declare JSON. The backend rejects anything else,
         // which is what stops a cross-site <form> from driving the API: a form can
@@ -35,47 +16,10 @@ class ApiClient {
         return headers;
     }
 
-    // True when the server is asking specifically for an API token, rather than for
-    // the reverse proxy's Basic Auth credentials. Nginx answers unauthenticated
-    // requests with its own 401 (WWW-Authenticate: Basic) long before Flask runs, so
-    // prompting for a token on every 401 asks for the wrong credential.
-    async isMissingApiToken(response) {
-        const authScheme = String(response.headers.get('WWW-Authenticate') || '');
-        if (/^\s*basic/i.test(authScheme)) return false;
-
-        try {
-            const data = await response.clone().json();
-            return /token/i.test(String(data?.error || ''));
-        } catch (_) {
-            return false;
-        }
-    }
-
     async fetch(input, init = {}) {
-        const method = (init || {}).method;
         const nextInit = { ...(init || {}) };
-        nextInit.headers = this.buildHeaders(nextInit.headers, method);
-
-        let response = await window.fetch(input, nextInit);
-
-        if (response.status === 401 && await this.isMissingApiToken(response)) {
-            const entered = await window.Ui.askText({
-                title: 'API token required',
-                body: 'This panel has API_TOKEN set. Paste its value; the browser keeps it for next time.',
-                label: 'API token',
-                value: this.getToken(),
-                confirmLabel: 'Use token',
-                type: 'password',
-            });
-            if (entered) {
-                this.setToken(entered);
-                const retryInit = { ...(init || {}) };
-                retryInit.headers = this.buildHeaders(retryInit.headers, method);
-                response = await window.fetch(input, retryInit);
-            }
-        }
-
-        return response;
+        nextInit.headers = this.buildHeaders(nextInit.headers, nextInit.method);
+        return window.fetch(input, nextInit);
     }
 
     filenameFromContentDisposition(contentDisposition, fallback) {
