@@ -143,6 +143,10 @@ class DemoManager(AmneziaManager):
     def lookup_geoip(self, ip):
         return GEO.get(ip, (None, None))
 
+    # The traffic loop's cache-only lookup would skip documentation-range addresses.
+    def lookup_geoip_cached(self, ip):
+        return self.lookup_geoip(ip)
+
     def get_route_for_source_ip(self, source_ip):
         return "demo"
 

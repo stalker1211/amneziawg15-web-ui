@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Version 2.4 (unreleased)
+## Version 2.4 (2026-09-30)
 
 Panel settings in the panel, one parameter generator on the server, and a round of
 fixes and hardening. Upgrading needs no action: the first boot copies today's
@@ -18,6 +18,11 @@ admin/changeme and says so in a banner.
   (copied in at every boot, read-only in the drawer); removing it keeps the last
   value, now editable. `NGINX_PASSWORD` doubles as recovery.
 - **Default password banner** until admin/changeme is changed.
+- **Changing the password keeps the tab working:** the tab that saves it stays signed
+  in; any other open tab reloads into the browser's sign-in prompt on its next
+  request. The page is served `no-store`.
+- **Firewall rules in ⚙ → About:** each server's tagged iptables rules as they are
+  now, against the number expected.
 - **A restart brings back what was running:** each server's last start/stop state
   decides, so a server stopped in the panel stays stopped. `AUTO_START_SERVERS` is
   retired (`false` still means "start nothing at boot" for now).
@@ -47,7 +52,11 @@ admin/changeme and says so in a banner.
   included, is refused); S1–S4, Jc, Jmin, Jmax at most 65535 and H at most 2³²−1;
   duplicate H refused on AWG 1.5 too; Jc 0 allowed (no junk). New warnings: two
   message types of the same length, H in WireGuard's own 1–4 without header
-  protection, AWG 3.x timers that fight each other, a signature packet above the MTU.
+  protection, AWG 3.x timers that fight each other, a signature packet above the MTU,
+  and AWG 3.x without a header protection key (it then works like 2.0; the warning
+  names the S values that would block one).
+- With a header protection key, H stays four custom ranges. docs.amnezia.org suggests
+  1–4 there (the cipher hides the message type); both work, verified on live tunnels.
 
 ### Fixes
 - **The API answered without a password on the container's own address.** Flask
@@ -65,6 +74,12 @@ admin/changeme and says so in a banner.
   each server's iptables rules carry its own tag now.
 - `is_valid_ip` accepted `+1.2.3.4` and `1_0.0.0.1`.
 - The Logs view read the whole daemon log every 10 s; it reads the end.
+
+### Look
+- More contrast: muted text, edges and field borders darker in the light theme and
+  lighter in the dark one; stopped and suspended rows dimmed less. Disabled fields
+  are dashed, env-pinned ones carry a lock. The dark theme draws native controls
+  (number spinners, select arrows) dark too.
 
 ### Live view
 - One request draws the page (it used to be 1 + 2 per server, on every focus), and

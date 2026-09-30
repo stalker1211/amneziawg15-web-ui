@@ -29,6 +29,10 @@ Current version: **2.4**
   marks a client **Re-import** when its config has changed since (new transport
   parameters, new client parameters, a new public IP). Server settings say how many
   devices a change affects before you save.
+- **Split tunnelling and a stable endpoint** — each client's AllowedIPs is editable
+  (all IPv4 by default; a narrower list for split tunnelling), and each server can
+  give its clients a DNS name to dial (e.g. dynamic DNS), so a new public IP needs no
+  re-import.
 - **Client suspend** — revoke access without deleting; keys are preserved.
 - **Automatic networking** — iptables NAT and optional private-LAN blocking per
   server; a container restart brings back exactly the servers that were running;
@@ -75,8 +79,8 @@ reverse proxy), the **Flask + Socket.IO web UI** (127.0.0.1:5000), and one
 ```
 web-ui/
 ├── app.py                      Flask entrypoint, env parsing
-├── core/                       request guards (auth, CSRF), runtime wiring, helpers, logging
-├── routes/                     servers.py + system.py (all /api routes)
+├── core/                       request guards (auth, CSRF), settings, runtime wiring, helpers, logging
+├── routes/                     servers.py, settings.py, system.py (all /api routes)
 ├── services/amnezia_manager.py all business logic
 ├── templates/index.html        page shell
 └── static/
@@ -137,8 +141,8 @@ WireGuard configs can become too large to fit into a single QR code (especially 
 
 ## 🔧 API Endpoints
 
-All `/api/*` routes sit behind nginx HTTP Basic Auth (`NGINX_USER` / `NGINX_PASSWORD`),
-the only credential: the web UI listens on 127.0.0.1 inside the container, so nothing
+All `/api/*` routes sit behind nginx HTTP Basic Auth (the panel's sign-in, see
+[Security](#security)), the only credential: the web UI listens on 127.0.0.1 inside the container, so nothing
 reaches it around nginx. Scripts send the same Basic Auth (`curl -u`). `API_TOKEN` was
 removed in 2.4; a container that still sets it logs a warning and ignores it.
 
@@ -156,7 +160,7 @@ Basic Auth credentials.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes, endpoint, handshake age) |
-| POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
+| POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `endpoint_host`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
 | DELETE | `/api/servers/<id>` | delete server and its clients |
 | POST | `/api/servers/<id>/start` \| `/stop` | bring the interface up/down |
 | GET | `/api/servers/<id>/info` | summary (status, keys, params, client count) |
@@ -177,11 +181,11 @@ Basic Auth credentials.
 | POST | `/api/settings` | `{"settings": {...}, "access": {"current_password", "user", "password"}}`; nothing applies unless all of it is valid |
 | POST | `/api/settings/restart-servers` | restart the running servers (a new daemon log level) |
 | POST | `/api/generate` | random parameters for a protocol: `{"protocol", "mtu"}` → `{"transport_params", "client_defaults"}`; saves nothing |
-| POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params"}` or `{"server_id", "client_params"}` → `{"errors", "warnings"}` |
+| POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params", "endpoint_host"}` or `{"server_id", "client_params", "allowed_ips"}` → `{"errors", "warnings"}` (a transport change also gets the re-import counts) |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
 | POST | `/api/system/refresh-ip` | re-detect the public IP (`502`, nothing changed, when detection fails) |
-| GET | `/api/system/iptables-test` | a server's firewall rules as they are now (`?server_id=`); also under **⚙ → About** |
+| GET | `/api/system/iptables-test` | a server's firewall rules as they are now (`?server_id=`); every server's under **⚙ → About → Firewall rules** |
 | GET | `/status` | container uptime, plain text (localhost only) |
 
 Example:
@@ -248,8 +252,8 @@ This repo includes a convenience script that builds and runs a local container:
 
 ### Image tags
 
-`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.3` and so on pin a
-release. The version under the page heading (e.g. `v2.3 build 20260928.1`) shows
+`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.4` and so on pin a
+release. The version under the page heading (e.g. `v2.4 build 20260930.1`) shows
 exactly which one is running.
 
 ### Docker Compose Example
@@ -326,15 +330,17 @@ Junk packets and signature packets camouflage the *handshake* only; S/H values a
 header protection affect the tunnel itself. The UI shows only the fields the selected
 protocol supports and validates the constraints above as you type: I1–I5 tags as
 the daemon parses them, uint16/uint32 bounds, and warnings for equal message sizes,
-H values in WireGuard's own 1–4 (without header protection) and AWG 3.x timers that
-fight each other.
+H values in WireGuard's own 1–4 (without header protection), AWG 3.x timers that
+fight each other, and AWG 3.x without a header protection key (it then works like
+2.0).
 
 Every new server gets its own random parameters, drawn by the server
 (`/api/generate`, ported from [AmneziaWG Architect](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT)):
 four disjoint H ranges under 2³¹−1, S sizes that never make two message types the
 same length, a small junk train (Jc 4–12, Jmax ≤ 160), and on AWG 3.x a header
-protection key, content padding and timers that keep WireGuard's timer rules.
-**Randomize** draws a fresh set.
+protection key, content padding and timers that keep WireGuard's timer rules. With a
+key, H stays four custom ranges: docs.amnezia.org suggests 1–4 there, since the cipher
+hides the message type, and both work. **Randomize** draws a fresh set.
 
 ## 🔍 Logs, backup and debugging
 
@@ -374,8 +380,8 @@ The app is exposed directly on 80 or custom port with basic authentication.
 A new volume signs in with `admin` / `changeme`, and the panel shows a **Default
 password** banner (and the log a warning) until it is changed. Change it in
 **⚙ → Access** (the current password is required); it is stored hashed (SHA-512 crypt)
-in `/etc/amnezia/.htpasswd`, so it survives image updates, and saving it signs every
-browser out. Setting `NGINX_PASSWORD` instead pins it (the field turns read-only),
+in `/etc/amnezia/.htpasswd`, so it survives image updates. The tab that saves it stays
+signed in; every other browser is asked for the new password. Setting `NGINX_PASSWORD` instead pins it (the field turns read-only),
 which also works as a recovery: set it, restart, sign in, remove it. Prefer the
 drawer for a compose file kept in git.
 
