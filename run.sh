@@ -56,7 +56,6 @@ docker run "${RUN_FLAGS[@]}" \
 	-p "${HOST_PORT}:8090/tcp" \
 	-p 51820-51830:51820-51830/udp \
 	-e NGINX_PORT=8090 \
-	-e NGINX_PASSWORD="changeme" \
 	-e AWG_LOG_LEVEL="${AWG_LOG_LEVEL:-}" \
 	-e AWG_LOG_FILE="${AWG_LOG_FILE:-}" \
 	-v amnezia-data:/etc/amnezia \
