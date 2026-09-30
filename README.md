@@ -319,7 +319,7 @@ Two kinds, and the distinction matters:
 | `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends |
 | `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
 | `MTU` | — | all | Interface MTU (1280–1440) |
-| `AllowedIPs` | client | all | What the device sends through the tunnel. New clients: `0.0.0.0/0, ::/0`, so IPv6 cannot bypass it (the server drops IPv6; apps fall back to IPv4). A Linux device with IPv6 switched off cannot bring up `::/0`: give it `0.0.0.0/0`. Narrower is split tunnelling |
+| `AllowedIPs` | client | all | What the device sends through the tunnel, set per client: `0.0.0.0/0` (the default) is all IPv4, a narrower list is split tunnelling. Adding `::/0` sends IPv6 in too, where the server drops it and apps fall back to IPv4; a Linux device with IPv6 switched off cannot bring `::/0` up |
 | `Endpoint` | server | all | The detected public IP, or the server's **endpoint host** (a DNS name or IPv4). With a dynamic DNS name, a new public IP needs no re-import |
 
 Junk packets and signature packets camouflage the *handshake* only; S/H values and

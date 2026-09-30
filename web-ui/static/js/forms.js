@@ -173,15 +173,14 @@ class FormUi {
             </div>` : ''}`;
     }
 
-    // What the device routes through the tunnel. The default claims IPv6 too, so an
-    // IPv6 network cannot carry traffic past the tunnel; narrower is split tunnelling.
+    // What the device routes through the tunnel: split tunnelling per client.
     allowedIpsFieldHtml(value) {
         return this.formField('c-allowed_ips', 'Allowed IPs', value, {
             mono: true,
-            hint: '<span class="font-mono">0.0.0.0/0, ::/0</span> sends everything through the tunnel, IPv6 included '
-                + '(the server drops IPv6, so apps use IPv4). A Linux device with IPv6 switched off cannot bring '
-                + 'up <span class="font-mono">::/0</span>: give it <span class="font-mono">0.0.0.0/0</span>. '
-                + 'A narrower list is split tunnelling.',
+            hint: 'What this device sends through the tunnel. <span class="font-mono">0.0.0.0/0</span> is all '
+                + 'IPv4; a narrower list (e.g. <span class="font-mono">192.168.1.0/24</span>) is split tunnelling. '
+                + 'Adding <span class="font-mono">::/0</span> sends IPv6 in too, where the server drops it '
+                + '(a Linux device with IPv6 switched off cannot bring that up).',
         });
     }
 
@@ -597,7 +596,7 @@ class FormUi {
                             ${clients.map((c) => `<option value="${safe(c.id)}">Copy ${safe(c.name)} (${safe(c.client_ip)})</option>`).join('')}
                         </select>
                     </div>`)}
-                ${this.formSection('Routing', this.allowedIpsFieldHtml('0.0.0.0/0, ::/0'))}
+                ${this.formSection('Routing', this.allowedIpsFieldHtml('0.0.0.0/0'))}
                 ${this.formSection('Client-side parameters', this.clientFieldsHtml(server, defaults))}`,
             primaryLabel: 'Create client',
             ctx: {

@@ -83,13 +83,12 @@ class AmneziaManager:
     # HeaderProtectionKey is set (device/noise-types.go: HeaderCipherNonceSize).
     HEADER_CIPHER_NONCE_SIZE = 12
 
-    # What a client routes through the tunnel. New clients claim IPv6 too: with only
-    # 0.0.0.0/0 a device on an IPv6 network reaches dual-stack sites outside the
-    # tunnel (no obfuscation, its real address visible). The server's peer entry
-    # stays the client's /32, so WireGuard's source check drops that IPv6 and apps
-    # fall back to IPv4. Clients from before 2.4 keep IPv4 only until edited.
-    NEW_CLIENT_ALLOWED_IPS = "0.0.0.0/0, ::/0"
-    LEGACY_ALLOWED_IPS = "0.0.0.0/0"
+    # What a client routes through the tunnel unless its Edit drawer says otherwise
+    # (a narrower list is split tunnelling). ::/0 is not the default: tested on iOS,
+    # IPv6 does not leak past a 0.0.0.0/0 tunnel, and a Linux device with IPv6 off
+    # cannot bring ::/0 up. Any IPv6 a client does send is dropped by the server's
+    # source check (its peer entry is the client's /32).
+    DEFAULT_ALLOWED_IPS = "0.0.0.0/0"
 
     # A client is online (and "active") after a handshake this recent; with keepalive
     # 25 a connected device handshakes about every 2 minutes.
@@ -937,7 +936,7 @@ class AmneziaManager:
                     client_params = client.get("obfuscation_params") or legacy_params
                 client["client_params"] = self.extract_client_params(client_params)
                 # IPv4 only, as issued before 2.4: the device's config still matches.
-                client.setdefault("allowed_ips", self.LEGACY_ALLOWED_IPS)
+                client.setdefault("allowed_ips", self.DEFAULT_ALLOWED_IPS)
                 client["server_id"] = server.get("id")
                 # Derived when serialized: the name and protocol from the server, the
                 # status from live telemetry. Until 2.4 the traffic monitor saved
@@ -1628,7 +1627,7 @@ AllowedIPs = {client["client_ip"]}/32
             "client_public_key": client_keys["public_key"],
             "preshared_key": preshared_key,
             "client_ip": client_ip,
-            "allowed_ips": self.validate_allowed_ips(allowed_ips or self.NEW_CLIENT_ALLOWED_IPS),
+            "allowed_ips": self.validate_allowed_ips(allowed_ips or self.DEFAULT_ALLOWED_IPS),
             "suspended": False,
             "client_params": dict(base_client_params),
             # Not handed out yet; set by mark_config_issued. None, not absent, so
@@ -1818,7 +1817,7 @@ H4 = {params.get("H4", 0)}
 PublicKey = {server["server_public_key"]}
 PresharedKey = {client_config["preshared_key"]}
 Endpoint = {self.endpoint_of(server)}:{server["port"]}
-AllowedIPs = {client_config.get("allowed_ips") or self.LEGACY_ALLOWED_IPS}
+AllowedIPs = {client_config.get("allowed_ips") or self.DEFAULT_ALLOWED_IPS}
 PersistentKeepalive = 25
 """
         return config

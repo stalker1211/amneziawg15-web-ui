@@ -160,12 +160,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             if client_params:
                 warnings += amnezia_manager.client_param_warnings(client_params, mtu)
             if "allowed_ips" in data:
-                allowed = collect(errors, amnezia_manager.validate_allowed_ips, data["allowed_ips"])
-                if allowed and "::/0" not in allowed.split(", ") and "0.0.0.0/0" in allowed.split(", "):
-                    warnings.append(
-                        "IPv6 is not routed: on an IPv6 network the device reaches dual-stack sites "
-                        "outside the tunnel. Add ::/0 to send it in (the server drops it, apps fall back to IPv4)."
-                    )
+                collect(errors, amnezia_manager.validate_allowed_ips, data["allowed_ips"])
             return jsonify({"errors": errors, "warnings": warnings})
 
         abort(400, description="Expected transport_params or client_params with server_id")

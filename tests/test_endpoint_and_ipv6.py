@@ -92,8 +92,8 @@ class FlagTests(unittest.TestCase):
     def config(self, client):
         return self.http.get(self._client_url(client, "config-both")).get_json()["clean_config"]
 
-    def test_new_clients_claim_ipv6_and_can_split_tunnel(self):
-        self.assertIn("AllowedIPs = 0.0.0.0/0, ::/0\n", self.config(self.phone))
+    def test_new_clients_route_ipv4_and_can_split_tunnel(self):
+        self.assertIn("AllowedIPs = 0.0.0.0/0\n", self.config(self.phone))
         split = self._add(self.home, "split", allowed_ips="192.168.1.0/24")
         self.assertIn("AllowedIPs = 192.168.1.0/24\n", self.config(split))
         response = self.http.post(f"/api/servers/{self.home['id']}/clients", json={"name": "bad", "allowed_ips": "nope"})
@@ -101,19 +101,19 @@ class FlagTests(unittest.TestCase):
 
     def test_editing_allowed_ips_flags_only_that_client(self):
         url = self._client_url(self.phone, "client-params")
-        body = {"client_params": {"Jc": 5}, "allowed_ips": "0.0.0.0/0"}
+        body = {"client_params": {"Jc": 5}, "allowed_ips": "0.0.0.0/0, ::/0"}
         self.assertEqual(self.http.post(url, json={**body, "allowed_ips": "x"}).status_code, 400)
         self.assertEqual(self.outdated(), set())
         self.assertEqual(self.http.post(url, json=body).status_code, 200)
         self.assertEqual(self.outdated(), {"phone"})
-        self.assertIn("AllowedIPs = 0.0.0.0/0\n", self.config(self.phone))
+        self.assertIn("AllowedIPs = 0.0.0.0/0, ::/0\n", self.config(self.phone))
 
-    def test_ipv4_only_is_a_warning(self):
+    def test_allowed_ips_are_never_a_warning(self):
         def warnings(allowed):
             body = {"server_id": self.home["id"], "client_params": {"Jc": 5}, "allowed_ips": allowed}
             return self.http.post("/api/validate", json=body).get_json()["warnings"]
 
-        self.assertEqual(len(warnings("0.0.0.0/0")), 1)
+        self.assertEqual(warnings("0.0.0.0/0"), [])
         self.assertEqual(warnings("0.0.0.0/0, ::/0"), [])
         self.assertEqual(warnings("192.168.1.0/24"), [])
 

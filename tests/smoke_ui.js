@@ -267,9 +267,9 @@ function check(label, condition, detail) {
         await page.evaluate(() => window.Ui.closeDrawer());
     }
 
-    // IPv6: a client routed IPv4-only gets a warning; an endpoint host counts every
+    // AllowedIPs edits arm Save without a warning; an endpoint host counts every
     // client config it changes, without the restart a transport change needs.
-    check('AllowedIPs IPv4-only is a warning, and Save arms', await page.evaluate(async () => {
+    check('AllowedIPs edit arms Save, no warning', await page.evaluate(async () => {
         const server = amneziaApp.lastServers.find((s) => (s.clients || []).length);
         const client = server.clients[0];
         amneziaApp.showClientParamsModal(server.id, client.id);
@@ -278,10 +278,10 @@ function check(label, condition, detail) {
         field.value = field.value.includes('::/0') ? '0.0.0.0/0' : '0.0.0.0/0, ::/0';
         field.dispatchEvent(new Event('input', { bubbles: true }));
         await new Promise((r) => setTimeout(r, 900));
-        const warned = /IPv6 is not routed/.test(document.getElementById('checks').textContent);
+        const warned = /IPv6/.test(document.getElementById('checks').textContent);
         const armed = !document.getElementById('drawerPrimary').disabled;
         window.Ui.closeDrawer();
-        return armed && (field.value === '0.0.0.0/0' ? warned : !warned);
+        return armed && !warned;
     }));
     check('switching the protocol re-checks the whole form', await page.evaluate(async () => {
         const server = amneziaApp.lastServers[0];
