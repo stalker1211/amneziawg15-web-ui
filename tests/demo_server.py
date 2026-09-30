@@ -30,10 +30,10 @@ from core.guards import install_guards, rotate_secret_key
 from core.helpers import to_bool
 from core.runtime import create_flask_app, create_socketio, register_socket_handlers
 from core.settings import Access, Settings
-from flask import render_template, send_from_directory
+from flask import send_from_directory
 from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
-from routes.system import page_config, register_system_routes
+from routes.system import register_system_routes, render_page
 from services.amnezia_manager import AmneziaManager
 
 PUBLIC_IPS = ("203.0.113.24", "203.0.113.57")  # refresh-ip flips between these
@@ -249,9 +249,8 @@ def main():
         encoding="utf-8",
     )
     settings = Settings({"DEFAULT_MTU": "1420"})
-    access = Access(os.path.join(tmp, ".htpasswd"), os.path.join(tmp, ".htpasswd.default"), environ={})
+    access = Access(os.path.join(tmp, ".htpasswd"), environ={})
     Path(access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
-    Path(access.marker).touch()
     manager = DemoManager(
         socketio_instance=socketio, auto_start_servers=False, dns_servers=["1.1.1.1", "9.9.9.9"],
         default_enable_nat=True, default_block_lan_cidrs=True, config_dir=tmp, enable_geoip=True,
@@ -270,9 +269,7 @@ def main():
 
     @app.route("/")
     def index():
-        return render_template(
-            "index.html", cache_bust=int(time.time()), build_label=args.label, app_config=page_config(manager, access)
-        )
+        return render_page(manager, access, cache_bust=int(time.time()), build_label=args.label)
 
     @app.route("/static/<path:filename>")
     def static_files(filename):

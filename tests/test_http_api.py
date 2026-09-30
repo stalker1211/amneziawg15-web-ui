@@ -210,6 +210,17 @@ class ProtocolTableTests(unittest.TestCase):
         self.assertEqual(config["defaults"]["mtu"], m.default_mtu)
         json.dumps(config)  # it is rendered as JSON
 
+    def test_the_page_is_never_cached(self):
+        # It carries live state; Safari brought back a stale copy (banner and all).
+        from routes.system import render_page
+
+        app = self.app
+        app.template_folder = os.path.join(WEB_UI_DIR, "templates")
+        with app.test_request_context("/"):
+            response = render_page(self.manager, None, cache_bust="1", build_label="test")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertIn('id="appConfig"', response.get_data(as_text=True))
+
     def test_the_ui_has_no_protocol_table_of_its_own(self):
         source = Path(os.path.join(STATIC_JS, "protocols.js")).read_text(encoding="utf-8")
         self.assertIn("document.getElementById('appConfig')", source)
@@ -757,22 +768,19 @@ class SystemRouteExtraTests(_RealSystemApp):
     def test_refresh_ip_is_not_a_get(self):
         self.assertEqual(self.client.get("/api/system/refresh-ip").status_code, 405)
 
-    def test_iptables_check_reports_found_missing_and_error(self):
-        iface, subnet = self.server["interface"], self.server["subnet"]
-
-        def fake_run(argv):
-            return {"INPUT": f"-A INPUT -i {iface} -j ACCEPT", "FORWARD": None}.get(argv[-1], "-A POSTROUTING -s 10.99.0.0/24")
-
-        with mock.patch.object(self.manager, "run_command", side_effect=fake_run):
+    def test_iptables_check_lists_the_servers_tagged_rules(self):
+        iface = self.server["interface"]
+        tables = {
+            "filter": f'-P INPUT ACCEPT\n-A INPUT -i {iface} -m comment --comment "awg:{iface}" -j ACCEPT\n'
+            '-A INPUT -i wg-other -m comment --comment "awg:wg-other" -j ACCEPT',
+            "nat": None,
+        }
+        with mock.patch.object(self.manager, "run_command", side_effect=lambda argv: tables[argv[2]]):
             payload = self.client.get(f"/api/system/iptables-test?server_id={self.server['id']}").get_json()
-        self.assertEqual(
-            payload["iptables_check"],
-            {
-                f"iptables -S INPUT | grep {iface}": "Found",
-                f"iptables -S FORWARD | grep {iface}": "Error",
-                f"iptables -t nat -S POSTROUTING | grep {subnet}": "Not found",
-            },
-        )
+        self.assertEqual(payload["rules"], [f'-A INPUT -i {iface} -m comment --comment "awg:{iface}" -j ACCEPT'])
+        self.assertEqual(payload["errors"], ["could not list the nat table"])
+        # 4 always, 3 LAN drops with LAN blocked, 1 with NAT (both on by default).
+        self.assertEqual((payload["expected"], payload["running"]), (8, False))
 
     def test_container_uptime(self):
         with mock.patch("routes.system.subprocess") as sp, mock.patch("routes.system.time") as clock:

@@ -19,7 +19,59 @@ class ApiClient {
     async fetch(input, init = {}) {
         const nextInit = { ...(init || {}) };
         nextInit.headers = this.buildHeaders(nextInit.headers, nextInit.method);
-        return window.fetch(input, nextInit);
+        let response;
+        try {
+            response = await window.fetch(input, nextInit);
+        } catch (error) {
+            // Safari reports a 401 on fetch as "access control checks", a TypeError,
+            // exactly like a network failure; a static file (no auth) tells them apart.
+            if (await this.serverAnswers()) this.signInAgain();
+            throw error;
+        }
+        if (response.status === 401) this.signInAgain();
+        return response;
+    }
+
+    async serverAnswers() {
+        try {
+            return (await window.fetch('/static/favicon.ico', { cache: 'no-store' })).ok;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    // The browser's saved sign-in no longer works (the password was changed, perhaps in
+    // another browser). fetch() never shows a sign-in prompt, and Safari not even an
+    // error, so the page would just stop updating: reload it, since loading the page
+    // itself is what makes every browser ask.
+    signInAgain() {
+        if (this.signingIn) return;
+        this.signingIn = true;
+        window.Ui?.toast?.('The panel\'s password has changed. Sign in again.', 'info');
+        setTimeout(() => window.location.reload(), 1500);
+    }
+
+    // After the panel's credential changed, give it to the browser: a request made with
+    // explicit credentials that succeeds replaces the ones the browser caches for this
+    // site. Without it the browser keeps sending the old password, every request is a
+    // 401, and a reload lands on nginx's error page. fetch() cannot carry them (Chrome
+    // refuses credentials in its URL); XMLHttpRequest.open takes them as arguments.
+    // Resolves true when the new credential works.
+    async rememberCredentials(user, password) {
+        const accepted = await new Promise((resolve) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/api/settings', true, user, password);
+            xhr.onloadend = () => resolve(xhr.status === 200);
+            xhr.send();
+        });
+        if (!accepted) return false;
+        // Did the browser keep them? A browser may accept them for that one request
+        // and still send the old ones afterwards; only a plain request tells.
+        try {
+            return (await window.fetch('/api/settings')).ok;
+        } catch (_) {
+            return false;
+        }
     }
 
     filenameFromContentDisposition(contentDisposition, fallback) {

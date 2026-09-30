@@ -9,6 +9,11 @@ body.dark {
     color: #e5e7eb;
 }
 
+/* Native parts of controls (number spinners, select arrows, scrollbars) are drawn by
+   the browser for the declared scheme: without this they stay light on the dark theme. */
+body { color-scheme: light; }
+body.dark { color-scheme: dark; }
+
 /* A visible focus ring for keyboard users on anything without its own. */
 input:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
     outline: 2px solid #a855f7;
@@ -20,7 +25,7 @@ input:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-
     display: inline-flex;
     align-items: center;
     line-height: 1;
-    color: #9CA3AF; /* gray-400 */
+    color: #6B7280; /* gray-500: legible on white and on the dark cards */
 }
 
 .traffic-flash {
@@ -37,7 +42,7 @@ input:focus-visible, button:focus-visible, select:focus-visible, textarea:focus-
         text-shadow: 0 0 8px rgba(34, 197, 94, 0.9);
     }
     100% {
-        color: #9CA3AF;
+        color: #6B7280;
         text-shadow: none;
     }
 }

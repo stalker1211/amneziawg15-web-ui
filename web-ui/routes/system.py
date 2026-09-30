@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from core.logging_setup import get_logger
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, make_response, render_template, request
 
 # pylint: disable=broad-exception-caught
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
@@ -70,9 +70,27 @@ def page_config(amnezia_manager, access=None):
             "enable_nat": m.default_enable_nat,
             "block_lan_cidrs": m.default_block_lan_cidrs,
         },
-        # Shows the "default password" banner from the first paint.
+        # The "default password" banner from the first paint, and which fix it offers.
         "passwordIsDefault": bool(access and access.is_default()),
+        "passwordPinned": bool(access and access.pinned("NGINX_PASSWORD")),
     }
+
+
+def render_page(amnezia_manager, access, *, cache_bust, build_label):
+    """index.html with the page config, never cached.
+
+    The page carries live state (#appConfig: the default-password banner, the
+    new-server defaults). Without Cache-Control Safari brought back an old copy from
+    its back/forward cache after the password changed, banner and all; no-store also
+    keeps the page out of that cache.
+    """
+    response = make_response(
+        render_template(
+            "index.html", cache_bust=cache_bust, build_label=build_label, app_config=page_config(amnezia_manager, access)
+        )
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
@@ -214,7 +232,9 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
 
     @system_bp.route("/api/system/iptables-test")
     def iptables_test():
-        """Test iptables setup for a specific server"""
+        """A server's firewall rules as they are now: every rule tagged `awg:<interface>`
+        (scripts/setup_iptables.sh), from the filter and nat tables, and how many its
+        NAT and LAN switches call for."""
         server_id = request.args.get("server_id")
         if not server_id:
             return jsonify({"error": "server_id parameter required"}), 400
@@ -223,37 +243,29 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
         if not server:
             return jsonify({"error": "Server not found"}), 404
 
-        try:
-            # Listed as (label, argv, needle): the chain is dumped with a plain argv
-            # call and matched in Python, so interface/subnet never reach a shell.
-            # Uses -S rather than -L because -L omits the interface column, which
-            # made the INPUT/FORWARD checks always report "Not found".
-            checks = [
-                ("iptables -S INPUT", ["iptables", "-S", "INPUT"], server["interface"]),
-                ("iptables -S FORWARD", ["iptables", "-S", "FORWARD"], server["interface"]),
-                ("iptables -t nat -S POSTROUTING", ["iptables", "-t", "nat", "-S", "POSTROUTING"], server["subnet"]),
-            ]
+        # Dumped with plain argv calls and matched in Python: no shell, no grep.
+        tag = f'"awg:{server["interface"]}"'
+        rules, errors = [], []
+        for table in ("filter", "nat"):
+            output = amnezia_manager.run_command(["iptables", "-t", table, "-S"])
+            if output is None:
+                errors.append(f"could not list the {table} table")
+                continue
+            rules += [line for line in output.splitlines() if tag in line]
 
-            results = {}
-            for label, argv, needle in checks:
-                output = amnezia_manager.run_command(argv)
-                if output is None:
-                    results[f"{label} | grep {needle}"] = "Error"
-                else:
-                    results[f"{label} | grep {needle}"] = "Found" if needle in output else "Not found"
-
-            return jsonify(
-                {
-                    "server_id": server_id,
-                    "server_name": server["name"],
-                    "interface": server["interface"],
-                    "subnet": server["subnet"],
-                    "iptables_check": results,
-                }
-            )
-
-        except Exception as e:
-            return jsonify({"error": f"iptables test failed: {e!s}"}), 500
+        # INPUT, OUTPUT, FORWARD from the VPN and ESTABLISHED,RELATED; 3 LAN drops; NAT.
+        expected = 4 + 3 * bool(server.get("block_lan_cidrs")) + bool(server.get("enable_nat"))
+        return jsonify(
+            {
+                "server_id": server_id,
+                "server_name": server["name"],
+                "interface": server["interface"],
+                "running": amnezia_manager.get_server_status(server_id) == "running",
+                "rules": rules,
+                "expected": expected,
+                "errors": errors,
+            }
+        )
 
     @system_bp.route("/status")
     def get_container_uptime():

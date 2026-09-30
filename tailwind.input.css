@@ -16,37 +16,45 @@
     .btn-sm { @apply h-8 px-2.5 text-xs; }
     .btn-primary { @apply bg-purple-600 text-white hover:bg-purple-700 dark:bg-[#7c3aed] dark:hover:bg-[#6d28d9]; }
     .btn-secondary {
-        @apply bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 hover:border-gray-400
+        @apply bg-white text-gray-800 border border-gray-400 hover:bg-gray-50 hover:border-gray-500
             dark:bg-[#1e293b] dark:text-[#e5e7eb] dark:border-[#3b4a60] dark:hover:bg-[#273449];
     }
-    .btn-ghost { @apply text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-[#cbd5e1] dark:hover:bg-[#273449] dark:hover:text-white; }
+    .btn-ghost { @apply text-gray-800 hover:bg-gray-100 hover:text-gray-900 dark:text-[#d7dee9] dark:hover:bg-[#273449] dark:hover:text-white; }
     .btn-danger { @apply bg-red-600 text-white hover:bg-red-700 dark:bg-[#dc2626] dark:hover:bg-[#b91c1c]; }
 
     .icon-btn {
-        @apply inline-flex items-center justify-center flex-none w-9 h-9 rounded-md text-gray-500 transition
+        @apply inline-flex items-center justify-center flex-none w-9 h-9 rounded-md text-gray-700 transition
             hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400
-            dark:text-[#94a3b8] dark:hover:bg-[#273449] dark:hover:text-white;
+            dark:text-[#bac5d4] dark:hover:bg-[#273449] dark:hover:text-white;
     }
     .icon-btn-sm { @apply w-8 h-8; }
 
     .field {
-        @apply block w-full h-9 px-3 rounded-md border border-gray-300 bg-white text-sm text-gray-900 placeholder-gray-400
+        @apply block w-full h-9 px-3 rounded-md border border-gray-500 bg-white text-sm text-gray-900 placeholder-gray-500
             focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200
-            dark:bg-[#111827] dark:border-[#3b4a60] dark:text-[#e5e7eb] dark:placeholder-[#64748b] dark:focus:ring-[#4c1d95];
+            dark:bg-[#111827] dark:border-[#3b4a60] dark:text-[#e5e7eb] dark:placeholder-[#98a6ba] dark:focus:ring-[#4c1d95];
     }
     .field-area { @apply h-auto py-1.5 font-mono text-xs leading-5; }
-    /* A setting pinned by an environment variable (the settings drawer). */
-    .field:disabled { @apply cursor-not-allowed bg-gray-100 text-gray-500 dark:bg-[#1f2937] dark:text-[#94a3b8]; }
-    .label { @apply block mb-1 text-xs font-medium text-gray-600 dark:text-[#cbd5e1]; }
-    .hint { @apply mt-1 text-xs text-gray-500 dark:text-[#94a3b8]; }
-    .section-title { @apply text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-[#94a3b8]; }
+    /* A field that cannot change here (pinned by an environment variable, or nothing to
+       change): dashed and muted, so it does not read as an empty input. */
+    .field:disabled {
+        @apply cursor-not-allowed border-dashed border-gray-400 bg-gray-200 text-gray-600
+            dark:border-[#475569] dark:bg-[#1f2937] dark:text-[#98a6ba];
+    }
+    .label { @apply block mb-1 text-xs font-medium text-gray-800 dark:text-[#d7dee9]; }
+    /* The title of a disabled field (the label comes right before it) is muted too. */
+    .label:has(+ .field:disabled) { @apply text-gray-500 dark:text-[#64748b]; }
+    .hint { @apply mt-1 text-xs text-gray-700 dark:text-[#bac5d4]; }
+    /* Under a field an environment variable pins: it must not read as an ordinary hint. */
+    .hint-pinned { @apply block font-medium text-rose-700 dark:text-[#fda4af]; }
+    .section-title { @apply text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-[#bac5d4]; }
 
     .pill { @apply inline-flex items-center gap-1 h-[1.375rem] px-2 rounded-full text-xs font-semibold whitespace-nowrap; }
 
     /* On/off switch: a real checkbox over a drawn track. */
     .switch { position: relative; display: inline-flex; flex: none; width: 2.25rem; height: 1.25rem; }
     .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
-    .switch .track { position: absolute; inset: 0; border-radius: 9999px; background: #d1d5db; transition: background-color .15s; }
+    .switch .track { position: absolute; inset: 0; border-radius: 9999px; background: #9ca3af; transition: background-color .15s; }
     .switch .track::after {
         content: ""; position: absolute; top: 2px; left: 2px; width: 1rem; height: 1rem; border-radius: 9999px;
         background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .15s;

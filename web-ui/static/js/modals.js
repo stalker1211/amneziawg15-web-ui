@@ -6,7 +6,7 @@
 class ModalUi {
     // The code box every view uses; it follows the theme like the rest of the page.
     codeBoxHtml(text, id) {
-        return `<pre id="${id}" class="max-h-[60vh] overflow-auto rounded-lg border border-gray-300 bg-gray-100 text-gray-900 dark:border-gray-900 dark:bg-gray-900 dark:text-gray-100 p-4 text-xs leading-5 font-mono whitespace-pre">${this.escapeHtml(text)}</pre>`;
+        return `<pre id="${id}" class="max-h-[60vh] overflow-auto rounded-lg border border-gray-400 bg-gray-100 text-gray-900 dark:border-gray-900 dark:bg-gray-900 dark:text-gray-100 p-4 text-xs leading-5 font-mono whitespace-pre">${this.escapeHtml(text)}</pre>`;
     }
 
     // Showing the QR hands the config out: the server records it (POST .../issued),
@@ -35,16 +35,16 @@ class ModalUi {
             ${window.Ui.dialogHeader(safe(config.client_name || client.name), `<span class="font-mono">${safe(client.client_ip)}</span> · ${safe(server.name)} · ${safe(server.protocol)}`)}
             <div id="qrModal" class="px-5 pb-5 flex flex-col items-center gap-4">
                 ${notice}
-                <div class="rounded-xl bg-white p-3 border border-gray-200 dark:border-[#475569]">
+                <div class="rounded-xl bg-white p-3 border border-gray-400 dark:border-[#475569]">
                     <div id="qrcode" class="flex items-center justify-center"></div>
                 </div>
-                <p class="text-xs text-center text-gray-500 dark:text-[#94a3b8]">Scan with the AmneziaVPN or AmneziaWG app. The code holds this client's private key.</p>
+                <p class="text-xs text-center text-gray-700 dark:text-[#bac5d4]">Scan with the AmneziaVPN or AmneziaWG app. The code holds this client's private key.</p>
                 <div class="flex flex-wrap justify-center gap-2">
                     <button type="button" class="btn btn-primary" data-qr="copy">${icon('copy')}Copy config</button>
                     <button type="button" class="btn btn-secondary" data-qr="download">${icon('download')}Download .conf</button>
                     <button type="button" class="btn btn-ghost" data-qr="image">${icon('image')}QR image</button>
                 </div>
-                <details class="help w-full text-sm text-gray-600 dark:text-[#cbd5e1]">
+                <details class="help w-full text-sm text-gray-800 dark:text-[#d7dee9]">
                     <summary class="font-medium">Config text</summary>
                     <div class="mt-2">${this.codeBoxHtml(config.clean_config, 'configText')}</div>
                 </details>

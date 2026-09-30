@@ -26,8 +26,8 @@ class FormUi {
         return `
             <label class="flex items-start justify-between gap-4 py-1.5 ${disabled ? 'opacity-60' : 'cursor-pointer'}" for="${id}">
                 <span>
-                    <span class="block text-sm font-medium text-gray-800 dark:text-[#e5e7eb]">${title}</span>
-                    <span class="block text-xs text-gray-500 dark:text-[#94a3b8]">${description}</span>
+                    <span class="block text-sm font-medium text-gray-900 dark:text-[#e5e7eb]">${title}</span>
+                    <span class="block text-xs text-gray-700 dark:text-[#bac5d4]">${description}</span>
                 </span>
                 <span class="switch mt-0.5"><input id="${id}" type="checkbox" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="track"></span></span>
             </label>`;
@@ -83,7 +83,7 @@ class FormUi {
             'Clients copy all of these from the server, so changing them means every client re-imports its config.',
         ].filter(Boolean);
         return `
-            <details class="help text-xs text-gray-600 dark:text-[#cbd5e1]">
+            <details class="help text-xs text-gray-800 dark:text-[#d7dee9]">
                 <summary class="font-medium">What these values do</summary>
                 <div class="mt-2 flex flex-col gap-1 leading-5">${lines.map((l) => `<p>${this.escapeHtml(l)}</p>`).join('')}</div>
             </details>`;
@@ -102,7 +102,7 @@ class FormUi {
                 ${['H1', 'H2', 'H3', 'H4'].map((k) => this.formField(`t-${k}`, k, t[k] ?? '', { mono: true })).join('')}
             </div>
             <div id="t-HeaderProtectionKeyRow">
-                <label class="label" for="t-HeaderProtectionKey">Header protection key <span class="font-normal text-gray-400 dark:text-[#64748b]">optional</span></label>
+                <label class="label" for="t-HeaderProtectionKey">Header protection key <span class="font-normal text-gray-600 dark:text-[#98a6ba]">optional</span></label>
                 <div class="flex gap-2">
                     <input id="t-HeaderProtectionKey" class="field font-mono text-xs" value="${this.escapeHtml(t.HeaderProtectionKey || '')}" placeholder="empty: header protection off">
                     <button type="button" class="btn btn-secondary" data-action="generate-key">Generate</button>
@@ -144,17 +144,17 @@ class FormUi {
         const safe = (v) => this.escapeHtml(v ?? '');
         const anySignature = AmneziaApp.I_PARAM_KEYS.some((k) => params[k]);
         return `
-            <p class="text-xs text-gray-500 dark:text-[#94a3b8]">From the server, the same for every client:
-                <span class="text-gray-700 dark:text-[#cbd5e1]">${safe(protocol)} · ${safe(this.formatTransportParamsSummary(protocol, server.transport_params || {}))}</span></p>
+            <p class="text-xs text-gray-700 dark:text-[#bac5d4]">From the server, the same for every client:
+                <span class="text-gray-800 dark:text-[#d7dee9]">${safe(protocol)} · ${safe(this.formatTransportParamsSummary(protocol, server.transport_params || {}))}</span></p>
             <div class="grid grid-cols-3 gap-3">
                 ${this.formField('c-Jc', 'Jc', params.Jc ?? 8, { type: 'number', mono: true, hint: 'junk packets' })}
                 ${this.formField('c-Jmin', 'Jmin', params.Jmin ?? 8, { type: 'number', mono: true, hint: 'bytes' })}
                 ${this.formField('c-Jmax', 'Jmax', params.Jmax ?? 80, { type: 'number', mono: true, hint: 'bytes' })}
             </div>
-            <details class="help text-sm text-gray-600 dark:text-[#cbd5e1]"${anySignature ? ' open' : ''}>
-                <summary class="font-medium">Signature packets I1-I5 <span class="font-normal text-gray-400 dark:text-[#64748b]">optional</span></summary>
+            <details class="help text-sm text-gray-800 dark:text-[#d7dee9]"${anySignature ? ' open' : ''}>
+                <summary class="font-medium">Signature packets I1-I5 <span class="font-normal text-gray-600 dark:text-[#98a6ba]">optional</span></summary>
                 <div class="mt-3 flex flex-col gap-3">
-                    <p class="text-xs text-gray-500 dark:text-[#94a3b8]">Tags: <span class="font-mono">&lt;b 0x…&gt; &lt;t&gt; &lt;r n&gt; &lt;rc n&gt; &lt;rd n&gt;</span>, checked as you type.
+                    <p class="text-xs text-gray-700 dark:text-[#bac5d4]">Tags: <span class="font-mono">&lt;b 0x…&gt; &lt;t&gt; &lt;r n&gt; &lt;rc n&gt; &lt;rd n&gt;</span>, checked as you type.
                         To build packets that look like QUIC, DNS or TLS, try
                         <a href="https://architect.vai-rice.space" target="_blank" rel="noopener noreferrer" class="text-purple-700 hover:underline dark:text-[#c084fc]">AmneziaWG Architect</a>
                         and paste its I1-I5 here.</p>
@@ -165,8 +165,8 @@ class FormUi {
             </details>
             ${P.supportsAwg3(protocol) ? `
             <div class="flex flex-col gap-3">
-                <p class="text-xs font-medium text-gray-600 dark:text-[#cbd5e1]">AWG 3.x timing and padding
-                    <span class="font-normal text-gray-400 dark:text-[#64748b]">a number or a range like 22-30; empty keeps the default</span></p>
+                <p class="text-xs font-medium text-gray-800 dark:text-[#d7dee9]">AWG 3.x timing and padding
+                    <span class="font-normal text-gray-600 dark:text-[#98a6ba]">a number or a range like 22-30; empty keeps the default</span></p>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     ${AmneziaApp.AWG3_CLIENT_PARAM_KEYS.map((k) => this.formField(`c-${k}`, k, params[k] || '', { mono: true, placeholder: 'default' })).join('')}
                 </div>
@@ -244,7 +244,7 @@ class FormUi {
 
     scheduleDrawerCheck() {
         const box = document.getElementById('checks');
-        if (box) box.innerHTML = '<p class="text-sm text-gray-400 dark:text-[#64748b]">Checking…</p>';
+        if (box) box.innerHTML = '<p class="text-sm text-gray-600 dark:text-[#98a6ba]">Checking…</p>';
         clearTimeout(this.drawerCheckTimer);
         this.drawerCheckTimer = setTimeout(() => this.runDrawerCheck(), 280);
     }
@@ -301,7 +301,7 @@ class FormUi {
         if (!html) {
             html = `<p class="flex items-center gap-1.5 text-sm text-green-700 dark:text-[#86efac]">${window.Ui.icon('check')}No problems found.</p>`;
         }
-        return `${html}<p class="text-xs text-gray-400 dark:text-[#64748b]">Checked by the server as you type.</p>`;
+        return `${html}<p class="text-xs text-gray-600 dark:text-[#98a6ba]">Checked by the server as you type.</p>`;
     }
 
     async submitDrawer() {
@@ -465,7 +465,7 @@ class FormUi {
         const clients = server.clients || [];
         const defaultImpact = 'Changing anything here rewrites every client config, and a running server restarts. '
             + 'Each client then has to re-import its QR code or .conf.';
-        const row = (k, v, mono = true) => `<dt class="text-gray-500 dark:text-[#94a3b8]">${k}</dt><dd class="${mono ? 'font-mono' : ''} text-gray-800 dark:text-[#e5e7eb] min-w-0 truncate">${v}</dd>`;
+        const row = (k, v, mono = true) => `<dt class="text-gray-700 dark:text-[#bac5d4]">${k}</dt><dd class="${mono ? 'font-mono' : ''} text-gray-900 dark:text-[#e5e7eb] min-w-0 truncate">${v}</dd>`;
         const endpointHost = () => (document.getElementById('s-endpoint_host')?.value || '').trim();
         const collect = () => ({
             nat: !!document.getElementById('s-nat')?.checked,
@@ -548,8 +548,8 @@ class FormUi {
                         ${row('Port', `${safe(info.port)}/udp`)}${row('Subnet', safe(info.subnet))}${row('Server IP', safe(info.server_ip))}
                         ${row('Public IP', safe(info.public_ip))}${row('DNS', safe((info.dns || []).join(', ')))}${row('MTU', safe(info.mtu))}
                         ${row('Clients', safe(info.clients_count), false)}
-                        <dt class="text-gray-500 dark:text-[#94a3b8]">Public key</dt>
-                        <dd class="flex items-center gap-1 min-w-0"><span id="s-publicKey" class="font-mono text-xs truncate text-gray-800 dark:text-[#e5e7eb]">${safe(info.public_key)}</span>
+                        <dt class="text-gray-700 dark:text-[#bac5d4]">Public key</dt>
+                        <dd class="flex items-center gap-1 min-w-0"><span id="s-publicKey" class="font-mono text-xs truncate text-gray-900 dark:text-[#e5e7eb]">${safe(info.public_key)}</span>
                             <button type="button" class="icon-btn icon-btn-sm" aria-label="Copy public key"
                                 data-action="copy-public-key">${window.Ui.icon('copy', 'w-3.5 h-3.5')}</button></dd>
                     </dl>`)}
@@ -693,17 +693,18 @@ class FormUi {
         }
         const values = data.values;
         const access = data.access;
+        const banner = document.getElementById('passwordBanner');
+        if (banner) banner.hidden = !access.password_is_default;
         const safe = (v) => this.escapeHtml(v ?? '');
         const pinned = (k) => data.sources[k] === 'env';
-        const hint = (k, text = '') => (pinned(k)
-            ? `Set by <span class="font-mono">${safe(data.env[k])}</span>; remove the variable to change it here.` : text);
+        const hint = (k, text = '') => (pinned(k) ? this.pinnedHint(data.env[k]) : text);
         const field = (k, label, opts = {}) => this.formField(`s-${k}`, label, values[k],
             { ...opts, hint: hint(k, opts.hint), attrs: `${opts.attrs || ''} ${pinned(k) ? 'disabled' : ''}` });
         const toggle = (k, title, text) => this.formSwitch(`s-${k}`, title, hint(k, text), values[k], pinned(k));
         const choose = (k, label, options, text) => this.formSelect(`s-${k}`, label, options, values[k], { hint: hint(k, text), disabled: pinned(k) });
         const userPinned = access.user_source === 'env';
         const passwordPinned = access.password_source === 'env';
-        const row = (k, v) => `<dt class="text-gray-500 dark:text-[#94a3b8]">${k}</dt><dd class="font-mono text-xs text-gray-800 dark:text-[#e5e7eb] min-w-0 break-all">${safe(v || '—')}</dd>`;
+        const row = (k, v) => `<dt class="text-gray-700 dark:text-[#bac5d4]">${k}</dt><dd class="font-mono text-xs text-gray-900 dark:text-[#e5e7eb] min-w-0 break-all">${safe(v || '—')}</dd>`;
 
         const collectSettings = () => {
             const out = {};
@@ -741,16 +742,23 @@ class FormUi {
             },
             submit: async () => {
                 const credential = collectAccess();
+                const current = document.getElementById('s-current')?.value || '';
                 const saved = await this.postJson('/api/settings', {
                     settings: collectSettings(),
-                    ...(Object.keys(credential).length
-                        ? { access: { ...credential, current_password: document.getElementById('s-current')?.value || '' } } : {}),
+                    ...(Object.keys(credential).length ? { access: { ...credential, current_password: current } } : {}),
                 });
                 window.Ui.closeDrawer();
                 this.applySettings(saved);
                 if (saved.access_changed) {
-                    this.showTempMessage('Sign-in changed. The browser now asks for the new one.', 'info');
-                    setTimeout(() => window.location.reload(), 1500);
+                    // Hand the new credential to this browser, so it keeps working
+                    // without a sign-in prompt; other browsers ask for it.
+                    if (await this.api.rememberCredentials(saved.access.user, credential.password ?? current)) {
+                        this.showTempMessage('Sign-in changed. This browser uses the new one; others will ask for it.', 'success');
+                        this.loadServers();
+                    } else {
+                        this.showTempMessage('Sign-in changed. Sign in again with the new one.', 'info');
+                        setTimeout(() => window.location.reload(), 1500);
+                    }
                     return;
                 }
                 this.showTempMessage(saved.changed.length ? 'Settings saved' : 'Nothing changed', 'success');
@@ -763,17 +771,20 @@ class FormUi {
             sub: 'Stored with the servers; a field set by an environment variable is read-only.',
             body: `
                 ${this.formSection('Access', `
-                    ${access.password_is_default ? this.formCallout('This panel still signs in with the default password <span class="font-mono">changeme</span>.') : ''}
+                    ${access.password_is_default ? this.formCallout(passwordPinned
+                        ? 'The password is still <span class="font-mono">changeme</span>, and <span class="font-mono">NGINX_PASSWORD</span> sets it. '
+                            + 'Give the variable a new value and restart the container, or remove it, restart, and change the password here.'
+                        : 'This panel still signs in with the default password <span class="font-mono">changeme</span>. Set a new one below.') : ''}
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${this.formField('s-user', 'User name', access.user, { attrs: `autocomplete="username" ${userPinned ? 'disabled' : ''}`,
-                            hint: userPinned ? 'Set by <span class="font-mono">NGINX_USER</span>.' : '' })}
-                        ${this.formField('s-current', 'Current password', '', { type: 'password', attrs: 'autocomplete="current-password"',
-                            hint: 'Needed to change the user name or password.' })}
+                            hint: userPinned ? this.pinnedHint('NGINX_USER') : '' })}
+                        ${this.formField('s-current', 'Current password', '', { type: 'password', attrs: `autocomplete="current-password" ${access.editable ? '' : 'disabled'}`,
+                            hint: access.editable ? 'Needed to change the user name or password.' : 'Nothing to change here: both are set by environment variables.' })}
                         ${this.formField('s-password', 'New password', '', { type: 'password', attrs: `autocomplete="new-password" ${passwordPinned ? 'disabled' : ''}`,
-                            hint: passwordPinned ? 'Set by <span class="font-mono">NGINX_PASSWORD</span>; remove the variable to change it here.' : 'At least 8 characters.' })}
+                            hint: passwordPinned ? this.pinnedHint('NGINX_PASSWORD') : 'At least 8 characters.' })}
                         ${this.formField('s-password2', 'Repeat new password', '', { type: 'password', attrs: `autocomplete="new-password" ${passwordPinned ? 'disabled' : ''}` })}
                     </div>
-                    <p class="hint">Saving a new one signs every browser out; this one asks for it again.</p>`)}
+                    <p class="hint">Saving a new one signs other browsers out; this one keeps working.</p>`)}
                 ${this.formSection('New servers', `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${field('default_mtu', 'MTU', { type: 'number', mono: true, hint: '1280-1440.' })}
@@ -801,12 +812,22 @@ class FormUi {
                         ${row('Panel', data.about.build_label)}${row('Daemon', data.about.daemon)}${row('Tools', data.about.tools)}
                     </dl>
                     <div class="flex flex-col gap-2">
-                        <button type="button" class="btn btn-secondary btn-sm self-start" data-action="iptables-check">Check iptables rules</button>
-                        <div id="s-iptables" class="flex flex-col gap-1 text-xs"></div>
+                        <div class="flex items-center justify-between gap-3">
+                            <span class="label mb-0">Firewall rules</span>
+                            <button type="button" class="btn btn-ghost btn-sm" data-action="iptables-check">${window.Ui.icon('refresh', 'w-3.5 h-3.5')}Reload</button>
+                        </div>
+                        <div id="s-iptables" class="flex flex-col gap-3 text-xs"></div>
                     </div>`)}`,
             primaryLabel: 'No changes',
             ctx,
         });
+        this.checkIptables();
+    }
+
+    // "Set by X": a field an environment variable pins, in a colour that stands out.
+    pinnedHint(variable) {
+        return `<span class="hint-pinned">${window.Ui.icon('lock', 'inline w-3 h-3 mr-1 -mt-0.5')}Set by <span class="font-mono">${this.escapeHtml(variable)}</span>; `
+            + 'remove the variable (and restart) to change it here.</span>';
     }
 
     // After a save: the defaults new servers get, and the banner.
@@ -841,28 +862,36 @@ class FormUi {
         this.loadServers();
     }
 
-    // About → Check iptables rules: the diagnostic for each running server.
+    // About → Firewall rules: each server's tagged iptables rules as they are now.
     async checkIptables() {
         const box = document.getElementById('s-iptables');
         if (!box) return;
-        const running = (this.lastServers || []).filter((s) => s.status === 'running');
-        if (!running.length) {
-            box.innerHTML = '<p class="text-gray-500 dark:text-[#94a3b8]">No server is running.</p>';
+        const servers = this.lastServers || [];
+        if (!servers.length) {
+            box.innerHTML = '<p class="text-gray-800 dark:text-[#d7dee9]">No servers yet.</p>';
             return;
         }
-        box.innerHTML = '<p class="text-gray-400 dark:text-[#64748b]">Checking…</p>';
-        const lines = await Promise.all(running.map(async (server) => {
+        box.innerHTML = '<p class="text-gray-700 dark:text-[#bac5d4]">Reading the rules…</p>';
+        const safe = (v) => this.escapeHtml(v ?? '');
+        const blocks = await Promise.all(servers.map(async (server) => {
             try {
                 const data = await this.getJson(`/api/system/iptables-test?server_id=${encodeURIComponent(server.id)}`);
-                const results = Object.values(data.iptables_check || {});
-                const ok = results.every((r) => r === 'Found' || r === 'Not found');
-                const found = results.filter((r) => r === 'Found').length;
-                return `<p class="${ok ? 'text-gray-700 dark:text-[#cbd5e1]' : 'text-red-700 dark:text-[#fca5a5]'}">${this.escapeHtml(server.name)}: ${found} of ${results.length} rule sets present</p>`;
+                const n = data.rules.length;
+                // A stopped server has none, by design; a running one should have them all.
+                const ok = data.running ? n === data.expected && !data.errors.length : n === 0;
+                const state = data.running ? `${n} of ${data.expected} rules` : (n ? `stopped, but ${n} rules left` : 'stopped, no rules');
+                const tone = ok ? 'text-green-800 dark:text-[#86efac]' : 'text-red-700 dark:text-[#fca5a5]';
+                return `<div class="flex flex-col gap-1">
+                    <p><span class="font-medium text-gray-900 dark:text-[#f1f5f9]">${safe(server.name)}</span>
+                        <span class="font-mono text-gray-700 dark:text-[#bac5d4]">${safe(data.interface)}</span>
+                        · <span class="${tone}">${safe(state)}</span>${data.errors.length ? ` · <span class="text-red-700 dark:text-[#fca5a5]">${safe(data.errors.join('; '))}</span>` : ''}</p>
+                    ${n ? this.codeBoxHtml(data.rules.map((r) => r.replace(/ -m comment --comment "awg:[^"]+"/, '')).join('\n'), `rules-${safe(server.id)}`) : ''}
+                </div>`;
             } catch (error) {
-                return `<p class="text-red-700 dark:text-[#fca5a5]">${this.escapeHtml(server.name)}: ${this.escapeHtml(error.message)}</p>`;
+                return `<p class="text-red-700 dark:text-[#fca5a5]">${safe(server.name)}: ${safe(error.message)}</p>`;
             }
         }));
-        box.innerHTML = lines.join('');
+        box.innerHTML = blocks.join('');
     }
 
     showServerConfig(serverId) {

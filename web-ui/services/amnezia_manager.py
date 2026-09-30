@@ -1421,6 +1421,21 @@ AllowedIPs = {client["client_ip"]}/32
             if s4 is not None and s4 > 32:
                 warnings.append(f"S4 ({s4}) is above a conservative 0-32 and may cause 'message too long' errors.")
 
+        # Header protection is opt-in, so AWG 3.x without a key is valid and behaves like
+        # 2.0; say so, and name the S values that would block turning it on.
+        if self.protocol_supports_awg3(protocol) and not transport.get("HeaderProtectionKey"):
+            low = [f"{k} ({transport[k]})" for k in ("S1", "S2", "S3", "S4")
+                   if transport.get(k) is not None and transport[k] < self.HEADER_CIPHER_NONCE_SIZE]  # fmt: skip
+            warnings.append(
+                f"{protocol} without a header protection key: header protection is off and this works like AWG 2.0. "
+                "Generate a key to turn it on"
+                + (
+                    f"; it needs S1-S4 each 12 or more, and {', '.join(low)} {'is' if len(low) == 1 else 'are'} below."
+                    if low
+                    else "."
+                )
+            )
+
         # 1-4 are WireGuard's own message types. With header protection the docs
         # recommend exactly that (the cipher hides the type); without, it is plain WireGuard.
         if not transport.get("HeaderProtectionKey"):

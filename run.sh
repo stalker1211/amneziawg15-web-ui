@@ -18,7 +18,12 @@ DOCKERFILE="${DOCKERFILE:-Dockerfile}"
 if [ "${BUILD}" = "1" ]; then
 	# Same version as publish_dockerhub.sh would use, marked local so a dev image is
 	# never mistaken for a published one.
-	LABEL="$(version_describe) (local)"
+	# The branch too, unless it is master or a detached HEAD: "v2.3-12-g13431fc dev-2.4 (local)".
+	BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+	case "${BRANCH}" in
+	"" | HEAD | master) LABEL="$(version_describe) (local)" ;;
+	*) LABEL="$(version_describe) ${BRANCH} (local)" ;;
+	esac
 	echo "Building image ${IMAGE_NAME}: ${LABEL} (dockerfile: ${DOCKERFILE})..."
 	docker build -f "${DOCKERFILE}" --build-arg "BUILD_LABEL=${LABEL}" -t "${IMAGE_NAME}" .
 fi
@@ -50,10 +55,8 @@ docker run "${RUN_FLAGS[@]}" \
 	--sysctl net.ipv4.conf.all.src_valid_mark=1 \
 	-p "${HOST_PORT}:8090/tcp" \
 	-p 51820-51830:51820-51830/udp \
-	-e ENABLE_NAT=1 \
 	-e NGINX_PORT=8090 \
-	-e NGINX_USER=admin \
-	-e NGINX_PASSWORD=changeme \
+	-e NGINX_PASSWORD="changeme" \
 	-e AWG_LOG_LEVEL="${AWG_LOG_LEVEL:-}" \
 	-e AWG_LOG_FILE="${AWG_LOG_FILE:-}" \
 	-v amnezia-data:/etc/amnezia \

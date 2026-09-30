@@ -15,10 +15,10 @@ from core.runtime import (
     run_web_ui,
 )
 from core.settings import Access, Settings
-from flask import render_template, send_from_directory
+from flask import send_from_directory
 from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
-from routes.system import page_config, register_system_routes
+from routes.system import register_system_routes, render_page
 from services.amnezia_manager import AmneziaManager
 
 configure_logging()
@@ -51,7 +51,6 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "web_config.json")
 SECRET_KEY_FILE = os.path.join(CONFIG_DIR, ".flask_secret_key")
 # Written by scripts/start.sh; nginx reads the credential from the volume.
 HTPASSWD_FILE = os.path.join(CONFIG_DIR, ".htpasswd")
-DEFAULT_PASSWORD_MARKER = os.path.join(CONFIG_DIR, ".htpasswd.default")
 
 # Socket.IO CORS origins (comma-separated list or '*' for all)
 # Empty/not set = same-origin only (recommended for production)
@@ -100,7 +99,7 @@ install_guards(app, secret_key_path=SECRET_KEY_FILE)
 socketio = create_socketio(app, ALLOWED_ORIGINS)
 
 settings = Settings()
-access = Access(HTPASSWD_FILE, DEFAULT_PASSWORD_MARKER)
+access = Access(HTPASSWD_FILE)
 
 # The defaults below are replaced by the resolved settings as the manager loads them.
 amnezia_manager = AmneziaManager(
@@ -140,9 +139,7 @@ register_socket_handlers(socketio, amnezia_manager, NGINX_PORT)
 def index():
     """Render the main single-page web UI."""
     logger.debug("Serving index.html")
-    return render_template(
-        "index.html", cache_bust=cache_bust(), build_label=BUILD_LABEL, app_config=page_config(amnezia_manager, access)
-    )
+    return render_page(amnezia_manager, access, cache_bust=cache_bust(), build_label=BUILD_LABEL)
 
 
 def cache_bust():

@@ -179,18 +179,18 @@ class Access:
     """The one Basic Auth credential: /etc/amnezia/.htpasswd, which nginx reads directly.
 
     scripts/start.sh writes it at boot: from NGINX_PASSWORD when set (and NGINX_USER
-    renames it), else it keeps the stored one, else admin/changeme plus the marker
-    file that shows the "default password" banner. The drawer changes it here, after
-    checking the current password. Hashes are SHA-512 crypt ($6$) from `openssl passwd`,
-    which reads the password on stdin, never argv.
+    renames it), else it keeps the stored one, else admin/changeme. The drawer changes
+    it here, after checking the current password. Hashes are SHA-512 crypt ($6$) from
+    `openssl passwd`, which reads the password on stdin, never argv.
     """
 
     DEFAULT_USER = "admin"
+    DEFAULT_PASSWORD = "changeme"
 
-    def __init__(self, htpasswd_path, default_marker_path, environ=None):
+    def __init__(self, htpasswd_path, environ=None):
         self.path = htpasswd_path
-        self.marker = default_marker_path
         self.environ = os.environ if environ is None else environ
+        self._default_checked = (None, False)  # (the file's mtime and size, the answer)
 
     def _entry(self):
         try:
@@ -207,7 +207,16 @@ class Access:
         return bool(str(self.environ.get(variable) or "").strip())
 
     def is_default(self):
-        return os.path.exists(self.marker)
+        """True while the password is still `changeme`, whoever set it (NGINX_PASSWORD
+        included). Checked by hashing, once per change of the file."""
+        try:
+            stat = os.stat(self.path)
+        except OSError:
+            return False
+        key = (stat.st_mtime_ns, stat.st_size)
+        if self._default_checked[0] != key:
+            self._default_checked = (key, self.verify(self.DEFAULT_PASSWORD))
+        return self._default_checked[1]
 
     def payload(self):
         stored = self._entry()[0] is not None
@@ -216,6 +225,8 @@ class Access:
             "user_source": "env" if self.pinned("NGINX_USER") else ("panel" if stored else "default"),
             "password_source": "env" if self.pinned("NGINX_PASSWORD") else ("default" if self.is_default() else "panel"),
             "password_is_default": self.is_default(),
+            # Nothing to change in the drawer when both come from the environment.
+            "editable": not (self.pinned("NGINX_USER") and self.pinned("NGINX_PASSWORD")),
         }
 
     @staticmethod
@@ -255,8 +266,6 @@ class Access:
         _old_user, old_hash = self._entry()
         new_hash = self.hash_password(password) if password is not None else old_hash
         self._write(user if user is not None else self.user(), new_hash)
-        if password is not None and os.path.exists(self.marker):
-            os.remove(self.marker)
 
     def _write(self, user, password_hash):
         """Atomically, root:nginx 640: nginx's workers run as nginx (a root-only file is a 500)."""

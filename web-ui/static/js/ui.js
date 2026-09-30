@@ -32,6 +32,7 @@
         check: '<polyline points="20 6 9 17 4 12"/>',
         alert: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
         userPlus: '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>',
+        lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
         key: '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
     };
     const icon = (name, cls = 'w-4 h-4') =>
@@ -97,7 +98,7 @@
         <div class="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
             <div class="min-w-0">
                 <h2 id="dialogTitle" class="text-lg font-semibold text-gray-900 dark:text-[#f1f5f9]">${title}</h2>
-                ${sub ? `<p class="text-sm text-gray-500 dark:text-[#94a3b8]">${sub}</p>` : ''}
+                ${sub ? `<p class="text-sm text-gray-700 dark:text-[#bac5d4]">${sub}</p>` : ''}
             </div>
             <button type="button" class="icon-btn -mr-2" data-close="dialog" aria-label="Close">${icon('x')}</button>
         </div>`;
@@ -113,10 +114,10 @@
                 ${badge}
                 <div class="flex flex-col gap-1.5 min-w-0">
                     <h2 id="dialogTitle" class="text-base font-semibold text-gray-900 dark:text-[#f1f5f9]">${title}</h2>
-                    <div class="text-sm text-gray-600 dark:text-[#cbd5e1]">${body}</div>
+                    <div class="text-sm text-gray-800 dark:text-[#d7dee9]">${body}</div>
                 </div>
             </div>
-            <div class="px-5 py-3 flex flex-wrap justify-end gap-2 border-t border-gray-200 dark:border-[#334155]">
+            <div class="px-5 py-3 flex flex-wrap justify-end gap-2 border-t border-gray-300 dark:border-[#334155]">
                 <button type="button" class="btn btn-secondary" data-close="dialog" data-autofocus>${esc(cancelLabel)}</button>
                 <button type="button" class="btn ${danger ? 'btn-danger' : 'btn-primary'}" data-confirm>${esc(confirmLabel)}</button>
             </div>`, { size: 'max-w-md' });
@@ -130,13 +131,13 @@
             <form class="flex flex-col" novalidate>
                 ${dialogHeader(title)}
                 <div class="px-5 pb-5 flex flex-col gap-3">
-                    ${body ? `<p class="text-sm text-gray-600 dark:text-[#cbd5e1]">${body}</p>` : ''}
+                    ${body ? `<p class="text-sm text-gray-800 dark:text-[#d7dee9]">${body}</p>` : ''}
                     <div>
                         <label class="label" for="askTextInput">${esc(label)}</label>
                         <input id="askTextInput" type="${type}" class="field font-mono" value="${esc(value)}" autocomplete="off" data-autofocus>
                     </div>
                 </div>
-                <div class="px-5 py-3 flex flex-wrap justify-end gap-2 border-t border-gray-200 dark:border-[#334155]">
+                <div class="px-5 py-3 flex flex-wrap justify-end gap-2 border-t border-gray-300 dark:border-[#334155]">
                     <button type="button" class="btn btn-secondary" data-close="dialog">Cancel</button>
                     <button type="submit" class="btn btn-primary">${esc(confirmLabel)}</button>
                 </div>
@@ -201,10 +202,10 @@
         if (!reopen) return; // a second click on the same button closes it
         const menu = $('#menu');
         menu.innerHTML = items.map((it, i) => (it === '-'
-            ? '<div class="my-1 border-t border-gray-200 dark:border-[#334155]" role="separator"></div>'
+            ? '<div class="my-1 border-t border-gray-300 dark:border-[#334155]" role="separator"></div>'
             : `<button type="button" role="menuitem" data-i="${i}" class="w-full flex items-center gap-2.5 px-3 py-2 text-sm text-left ${it.danger
                 ? 'text-red-600 hover:bg-red-50 dark:text-[#fca5a5] dark:hover:bg-[#3b1219]'
-                : 'text-gray-700 hover:bg-gray-100 dark:text-[#e5e7eb] dark:hover:bg-[#273449]'} focus:outline-none focus-visible:bg-gray-100 dark:focus-visible:bg-[#273449]">${icon(it.icon)}${esc(it.label)}</button>`)).join('');
+                : 'text-gray-800 hover:bg-gray-100 dark:text-[#e5e7eb] dark:hover:bg-[#273449]'} focus:outline-none focus-visible:bg-gray-100 dark:focus-visible:bg-[#273449]">${icon(it.icon)}${esc(it.label)}</button>`)).join('');
         menu.querySelectorAll('[data-i]').forEach((b) => b.addEventListener('click', () => {
             closeMenu();
             items[Number(b.dataset.i)].run();

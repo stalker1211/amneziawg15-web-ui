@@ -96,6 +96,22 @@ class ContentSecurityPolicyTests(unittest.TestCase):
         self.assertEqual(sorted(handled - used), [])
 
 
+class HiddenAttributeTests(unittest.TestCase):
+    def test_nothing_hidden_carries_a_display_utility(self):
+        # Tailwind's [hidden] rule and a utility such as .flex are equally specific and
+        # the utility comes later, so the element shows anyway: the default-password
+        # banner stayed visible after the password was changed.
+        display = re.compile(r"(?<![\w:-])(flex|inline-flex|grid|inline-grid|block|inline-block|inline|table)(?![\w-])")
+        for path in MARKUP:
+            for tag in re.findall(r"<[a-z]+\b[^>]*>", path.read_text(encoding="utf-8")):
+                if not re.search(r"\shidden(\s|>|\$|')", tag) and "' hidden'" not in tag:
+                    continue
+                classes = re.search(r'class="([^"]*)"', tag)
+                if classes:
+                    found = display.findall(re.sub(r"\$\{[^}]*\}", "", classes.group(1)))
+                    self.assertEqual(found, [], f"{path.name}: {tag[:80]}")
+
+
 class NativeDialogTests(unittest.TestCase):
     def test_no_alert_confirm_or_prompt(self):
         # They block the page and cannot follow the theme; ui.js has toasts, an in-app

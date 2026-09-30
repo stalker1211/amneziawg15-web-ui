@@ -61,7 +61,7 @@ class ServerUi {
 
     static renderServersHtml({ servers, escapeHtml, renderServerClients }) {
         if (!Array.isArray(servers) || servers.length === 0) {
-            return `<p class="rounded-xl border border-dashed border-gray-300 dark:border-[#334155] p-8 text-center text-sm text-gray-500 dark:text-[#94a3b8]">
+            return `<p class="rounded-xl border border-dashed border-gray-400 dark:border-[#334155] p-8 text-center text-sm text-gray-700 dark:text-[#bac5d4]">
                 No servers yet. Create one with New server.</p>`;
         }
         return servers.map((server) => ServerUi.serverCardHtml({ server, escapeHtml, renderServerClients })).join('');
@@ -72,9 +72,9 @@ class ServerUi {
         const icon = window.Ui.icon;
         const id = safe(server.id);
         const running = server.status === 'running';
-        const sep = '<span aria-hidden="true" class="text-gray-300 dark:text-[#475569]">·</span>';
+        const sep = '<span aria-hidden="true" class="text-gray-400 dark:text-[#475569]">·</span>';
         const facts = [
-            `<span class="font-medium text-gray-800 dark:text-[#e5e7eb]">${safe(server.protocol || window.Protocols.DEFAULT)}</span>`,
+            `<span class="font-medium text-gray-900 dark:text-[#e5e7eb]">${safe(server.protocol || window.Protocols.DEFAULT)}</span>`,
             `<span>UDP <span class="font-mono">${safe(server.port)}</span></span>`,
             `<span class="font-mono">${safe(server.subnet)}</span>`,
             `<span class="font-mono">${safe(server.interface)}</span>`,
@@ -86,28 +86,28 @@ class ServerUi {
         const probe = server.egress_probe && typeof server.egress_probe === 'object' ? server.egress_probe : null;
         let egress;
         if (!running) {
-            egress = '<span class="text-gray-500 dark:text-[#94a3b8]">Egress not checked while the server is stopped</span>';
+            egress = '<span class="text-gray-700 dark:text-[#bac5d4]">Egress not checked while the server is stopped</span>';
         } else if (probe && probe.external_ip) {
             const cc = String(probe.external_ip_geo_country_code || '').toUpperCase();
             const where = [cc, probe.external_ip_geo].filter(Boolean).join(' / ');
             const checked = ServerUi.ago(probe.checked_at);
             const via = probe.service_name || probe.service;
-            egress = `<span class="text-gray-500 dark:text-[#94a3b8]">Egress</span>
-                <span class="font-mono text-gray-800 dark:text-[#e5e7eb]">${safe(probe.external_ip)}</span>
+            egress = `<span class="text-gray-700 dark:text-[#bac5d4]">Egress</span>
+                <span class="font-mono text-gray-900 dark:text-[#e5e7eb]">${safe(probe.external_ip)}</span>
                 ${where ? `<span>${ServerUi.flag(cc)} ${safe(where)}</span>` : ''}
-                ${checked || via ? `<span class="text-gray-400 dark:text-[#64748b]">${checked ? `checked ${safe(checked)}` : ''}${via ? ` via ${safe(via)}` : ''}</span>` : ''}`;
+                ${checked || via ? `<span class="text-gray-600 dark:text-[#98a6ba]">${checked ? `checked ${safe(checked)}` : ''}${via ? ` via ${safe(via)}` : ''}</span>` : ''}`;
         } else if (probe) {
             egress = `<span class="text-red-600 dark:text-[#fca5a5]" title="${safe(probe.error || '')}">No external access</span>`;
         } else {
-            egress = '<span class="text-gray-500 dark:text-[#94a3b8]">Egress not checked yet</span>';
+            egress = '<span class="text-gray-700 dark:text-[#bac5d4]">Egress not checked yet</span>';
         }
 
         const status = running
             ? '<span class="pill bg-green-100 text-green-800 dark:bg-[#14532d] dark:text-[#86efac]">Running</span>'
-            : '<span class="pill bg-gray-200 text-gray-700 dark:bg-[#334155] dark:text-[#cbd5e1]">Stopped</span>';
+            : '<span class="pill bg-gray-200 text-gray-800 dark:bg-[#334155] dark:text-[#d7dee9]">Stopped</span>';
 
         return `
-        <article class="server-card rounded-xl border border-gray-300 bg-white shadow-sm dark:bg-[#1f2937] dark:border-[#334155]" aria-label="${safe(server.name)}" data-server-id="${id}">
+        <article class="server-card rounded-xl border border-gray-400 bg-white shadow-sm dark:bg-[#1f2937] dark:border-[#334155]" aria-label="${safe(server.name)}" data-server-id="${id}">
             <div class="p-4 sm:p-5 flex flex-col gap-2.5">
                 <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
                     <div class="flex items-center gap-3 min-w-0">
@@ -125,15 +125,15 @@ class ServerUi {
                         <button type="button" class="icon-btn" data-action="server-menu" data-server="${id}" aria-label="More actions for ${safe(server.name)}" aria-haspopup="menu" title="More">${icon('dots')}</button>
                     </div>
                 </div>
-                <div class="${running ? '' : 'opacity-60'} flex flex-col gap-1.5">
-                    <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-600 dark:text-[#cbd5e1]">${facts}</p>
-                    <p class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-gray-700 dark:text-[#cbd5e1]">
+                <div class="${running ? '' : 'opacity-75'} flex flex-col gap-1.5">
+                    <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-800 dark:text-[#d7dee9]">${facts}</p>
+                    <p class="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-gray-800 dark:text-[#d7dee9]">
                         ${egress}
                         <button type="button" class="icon-btn icon-btn-sm" data-action="probe-egress" data-server="${id}" aria-label="Check egress IP again" title="Check egress IP again">${icon('refresh', 'w-3.5 h-3.5')}</button>
                     </p>
                 </div>
             </div>
-            <div id="clients-${id}" class="border-t border-gray-200 dark:border-[#2b3647] ${running ? '' : 'opacity-60'}">
+            <div id="clients-${id}" class="border-t border-gray-300 dark:border-[#2b3647] ${running ? '' : 'opacity-75'}">
                 ${renderServerClients(server.id, server.clients || [])}
             </div>
         </article>`;
@@ -155,15 +155,15 @@ class ServerUi {
         const header = `
             <div class="px-4 sm:px-5 pt-3 pb-1 flex items-center gap-2">
                 <span class="section-title">Clients</span>
-                <span class="text-xs text-gray-500 dark:text-[#94a3b8] tabular-nums" data-cell="summary">${ServerUi.summaryHtml({ server, clients, traffic, isClientActiveFromTraffic })}</span>
+                <span class="text-xs text-gray-700 dark:text-[#bac5d4] tabular-nums" data-cell="summary">${ServerUi.summaryHtml({ server, clients, traffic, isClientActiveFromTraffic })}</span>
             </div>`;
         if (clients.length === 0) {
-            return `${header}<p class="px-4 sm:px-5 pb-4 text-sm text-gray-500 dark:text-[#94a3b8]">No clients yet. Add one with + Client.</p>`;
+            return `${header}<p class="px-4 sm:px-5 pb-4 text-sm text-gray-700 dark:text-[#bac5d4]">No clients yet. Add one with + Client.</p>`;
         }
         const rows = clients.map((client) => ServerUi.clientRowHtml({
             server, client, clientTraffic: traffic[client.id] || {}, safe, isClientActiveFromTraffic,
         })).join('');
-        return `${header}<ul class="divide-y divide-gray-200 dark:divide-[#2b3647]">${rows}</ul>`;
+        return `${header}<ul class="divide-y divide-gray-300 dark:divide-[#2b3647]">${rows}</ul>`;
     }
 
     // What the telemetry-driven cells of a row show; shared by the render and the patch.
@@ -179,8 +179,8 @@ class ServerUi {
                 : on ? 'bg-green-500' : 'ring-1 ring-inset ring-gray-400 dark:ring-[#64748b]'}`,
             dotTitle: suspended ? 'Suspended' : on ? 'Online: handshake in the last 5 minutes' : 'Offline',
             place: endpoint
-                ? `${ServerUi.flag(cc)} <span class="font-mono">${safe(endpoint)}</span>${where ? ` <span class="text-gray-500 dark:text-[#94a3b8]">${safe(where)}</span>` : ''}`
-                : '<span class="text-gray-400 dark:text-[#64748b]">Not connected</span>',
+                ? `${ServerUi.flag(cc)} <span class="font-mono">${safe(endpoint)}</span>${where ? ` <span class="text-gray-700 dark:text-[#bac5d4]">${safe(where)}</span>` : ''}`
+                : '<span class="text-gray-600 dark:text-[#98a6ba]">Not connected</span>',
             handshake: endpoint && age ? `handshake ${age}` : '',
             rx: ServerUi.bytes(clientTraffic.received_bytes),
             tx: ServerUi.bytes(clientTraffic.sent_bytes),
@@ -193,7 +193,7 @@ class ServerUi {
         const cid = safe(client.id);
         const suspended = !!client.suspended;
         const cells = ServerUi.liveCells({ server, client, clientTraffic, safe, isClientActiveFromTraffic });
-        const dim = suspended ? 'opacity-55' : '';
+        const dim = suspended ? 'opacity-70' : '';
 
         const suspendedPill = suspended
             ? '<span class="pill bg-amber-100 text-amber-800 dark:bg-[#451a03] dark:text-[#fcd34d]">Suspended</span>' : '';
@@ -209,13 +209,13 @@ class ServerUi {
             <div class="col-span-2 md:col-span-1 flex items-center gap-2 min-w-0 ${dim}">
                 <span data-cell="dot" class="${cells.dotClass}" title="${cells.dotTitle}"></span>
                 <span class="text-sm font-medium text-sky-700 dark:text-[#7dd3fc] truncate" data-name="${cid}">${safe(client.name)}</span>
-                <span class="font-mono text-xs text-gray-500 dark:text-[#94a3b8]">${safe(client.client_ip)}</span>
+                <span class="font-mono text-xs text-gray-700 dark:text-[#bac5d4]">${safe(client.client_ip)}</span>
             </div>
-            <div class="col-span-2 md:col-span-1 flex flex-col items-start gap-0.5 text-xs text-gray-600 dark:text-[#cbd5e1] min-w-0">
+            <div class="col-span-2 md:col-span-1 flex flex-col items-start gap-0.5 text-xs text-gray-800 dark:text-[#d7dee9] min-w-0">
                 <span class="flex items-center gap-2 min-w-0 max-w-full">${reimportPill}${suspendedPill}<span data-cell="place" class="min-w-0 truncate ${dim}">${cells.place}</span></span>
-                <span data-cell="handshake" class="text-gray-500 dark:text-[#94a3b8] ${dim}"${cells.handshake ? '' : ' hidden'}>${safe(cells.handshake)}</span>
+                <span data-cell="handshake" class="text-gray-700 dark:text-[#bac5d4] ${dim}"${cells.handshake ? '' : ' hidden'}>${safe(cells.handshake)}</span>
             </div>
-            <div class="flex flex-col whitespace-nowrap text-xs font-mono tabular-nums text-gray-600 dark:text-[#cbd5e1] md:text-right ${dim}">
+            <div class="flex flex-col whitespace-nowrap text-xs font-mono tabular-nums text-gray-800 dark:text-[#d7dee9] md:text-right ${dim}">
                 <span title="Received"><span class="traffic-arrow" data-cell="rx-arrow">↓</span> <span data-cell="rx">${safe(cells.rx)}</span></span>
                 <span title="Sent"><span class="traffic-arrow" data-cell="tx-arrow">↑</span> <span data-cell="tx">${safe(cells.tx)}</span></span>
             </div>

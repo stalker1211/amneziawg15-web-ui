@@ -13,10 +13,9 @@ fi
 # reads it and the panel's settings drawer changes it (core/settings.py Access). One
 # rule, as for every setting: NGINX_PASSWORD, when set, writes through at every boot
 # (and doubles as recovery: set it, restart, remove it); otherwise the stored one
-# stays; with neither it is admin/changeme, and the marker file shows the panel's
-# "default password" banner until it is changed. NGINX_USER renames the stored user.
+# stays; with neither it is admin/changeme, and the panel shows a "default password"
+# banner while it is (it checks the hash). NGINX_USER renames the stored user.
 HTPASSWD=/etc/amnezia/.htpasswd
-DEFAULT_MARK=/etc/amnezia/.htpasswd.default
 mkdir -p /etc/amnezia
 
 # SHA-512 crypt ($6$) with the password on stdin, never argv (ps would show it).
@@ -39,7 +38,6 @@ if [ -n "${NGINX_PASSWORD:-}" ]; then
         exit 1
     fi
     write_htpasswd "$user" "$hash"
-    rm -f "$DEFAULT_MARK"
     echo "Basic Auth: user '$user', password from NGINX_PASSWORD"
 elif [ -s "$HTPASSWD" ]; then
     if [ -n "${NGINX_USER:-}" ] && [ "$NGINX_USER" != "$stored_user" ]; then
@@ -51,7 +49,6 @@ elif [ -s "$HTPASSWD" ]; then
 else
     user="${NGINX_USER:-admin}"
     write_htpasswd "$user" "$(hash_password changeme)"
-    touch "$DEFAULT_MARK"
     echo "WARNING: Basic Auth is $user/changeme (no NGINX_PASSWORD, nothing stored): change it in Settings"
 fi
 

@@ -30,6 +30,11 @@ class AmneziaApp {
             this.applyTheme(this.getPreferredTheme(), false);
             const banner = document.getElementById('passwordBanner');
             if (banner) banner.hidden = !window.AppConfig.passwordIsDefault;
+            if (window.AppConfig.passwordPinned) {
+                // The drawer cannot change it; the variable has to.
+                document.getElementById('passwordBannerText').innerHTML = 'The panel signs in with <span class="font-mono">changeme</span>, '
+                    + 'set by <span class="font-mono">NGINX_PASSWORD</span>. Give the variable a new value and restart.';
+            }
             this.setupEventListeners();
             this.setupSocketLifecycleHandlers();
             this.setupSocketIO();

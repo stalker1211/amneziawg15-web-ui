@@ -15,37 +15,39 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ cache_bust }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}?v={{ cache_bust }}">
 </head>
-<body class="bg-[#e9ebef] text-gray-800 dark:bg-[#111827] dark:text-[#e5e7eb] antialiased">
+<body class="bg-[#e9ebef] text-gray-900 dark:bg-[#111827] dark:text-[#e5e7eb] antialiased">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 flex flex-col gap-5">
         <header class="flex flex-wrap items-start justify-between gap-4">
             <div>
                 <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-gray-900 dark:text-[#f1f5f9]">AmneziaWG Web UI</h1>
-                <p class="mt-1 text-xs font-mono text-gray-500 dark:text-[#94a3b8]">{{ build_label }}</p>
+                <p class="mt-1 text-xs font-mono text-gray-700 dark:text-[#bac5d4]">{{ build_label }}</p>
             </div>
             <div class="flex items-center gap-2">
                 <span id="statusFrame" data-state="connecting" title="Connecting"
-                      class="inline-flex items-center gap-2 h-9 px-3 rounded-full border border-gray-300 bg-white text-sm text-gray-700 dark:bg-[#1f2937] dark:border-[#334155] dark:text-[#cbd5e1]">
+                      class="inline-flex items-center gap-2 h-9 px-3 rounded-full border border-gray-400 bg-white text-sm text-gray-800 dark:bg-[#1f2937] dark:border-[#334155] dark:text-[#d7dee9]">
                     <span id="statusDot" class="w-2 h-2 rounded-full bg-gray-400"></span><span id="status">Connecting…</span>
                 </span>
                 <button id="settingsBtn" type="button" data-action="open-settings" aria-label="Panel settings" title="Panel settings"
-                        class="icon-btn border border-gray-300 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
+                        class="icon-btn border border-gray-400 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
                     <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 </button>
                 <button id="themeToggleBtn" type="button" aria-label="Switch theme"
-                        class="icon-btn border border-gray-300 bg-white dark:bg-[#1f2937] dark:border-[#334155]"></button>
+                        class="icon-btn border border-gray-400 bg-white dark:bg-[#1f2937] dark:border-[#334155]"></button>
             </div>
         </header>
 
         <!-- Shown while the credential is start.sh's admin/changeme (page_config's passwordIsDefault). -->
-        <div id="passwordBanner" role="alert" hidden
-             class="rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3 bg-amber-50 border-amber-200 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]">
-            <span><strong class="font-semibold">Default password.</strong> This panel still signs in with <span class="font-mono">changeme</span>.</span>
-            <button type="button" class="btn btn-secondary btn-sm" data-action="open-settings">Change it in Settings</button>
+        <!-- `hidden` sits on a wrapper with no display class: Tailwind's .flex would win over it. -->
+        <div id="passwordBanner" role="alert" hidden>
+            <div class="rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3 bg-amber-50 border-amber-200 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]">
+                <span><strong class="font-semibold">Default password.</strong> <span id="passwordBannerText">This panel still signs in with <span class="font-mono">changeme</span>.</span></span>
+                <button type="button" class="btn btn-secondary btn-sm" data-action="open-settings">Change it in Settings</button>
+            </div>
         </div>
 
         <!-- Status strip: public IP, servers running, clients online (handshake <= 5 min). -->
         <section aria-label="Status"
-                 class="grid grid-cols-1 sm:grid-cols-3 rounded-xl border border-gray-300 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
+                 class="grid grid-cols-1 sm:grid-cols-3 rounded-xl border border-gray-400 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
             <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0">
                 <span class="section-title">Public IP</span>
                 <span class="flex items-center gap-1">
@@ -55,11 +57,11 @@
                     </button>
                 </span>
             </div>
-            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t sm:border-t-0 sm:border-l border-gray-200 dark:border-[#334155]">
+            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t sm:border-t-0 sm:border-l border-gray-300 dark:border-[#334155]">
                 <span class="section-title">Servers</span>
                 <span class="text-sm"><strong id="stripServersRunning" class="font-semibold tabular-nums text-gray-900 dark:text-[#f1f5f9]">–</strong> of <span id="stripServersTotal">–</span> running</span>
             </div>
-            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t sm:border-t-0 sm:border-l border-gray-200 dark:border-[#334155]">
+            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t sm:border-t-0 sm:border-l border-gray-300 dark:border-[#334155]">
                 <span class="section-title">Clients</span>
                 <span class="text-sm"><strong id="stripClientsOnline" class="font-semibold tabular-nums text-gray-900 dark:text-[#f1f5f9]">–</strong> of <span id="stripClientsTotal">–</span> online</span>
             </div>
@@ -73,7 +75,7 @@
                 </button>
             </div>
             <div id="serversList" class="flex flex-col gap-4">
-                <p class="py-8 text-center text-sm text-gray-500 dark:text-[#94a3b8]">Loading servers…</p>
+                <p class="py-8 text-center text-sm text-gray-700 dark:text-[#bac5d4]">Loading servers…</p>
             </div>
         </section>
     </div>
@@ -83,11 +85,11 @@
     <div id="drawerRoot" hidden>
         <div class="drawer-overlay fixed inset-0 z-40 bg-gray-900/40 dark:bg-black/60" data-close="drawer"></div>
         <aside id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle"
-               class="drawer-panel fixed inset-y-0 right-0 z-40 w-full sm:w-[34rem] flex flex-col bg-white border-l border-gray-200 shadow-2xl dark:bg-[#1f2937] dark:border-[#334155]">
-            <header class="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 dark:border-[#334155]">
+               class="drawer-panel fixed inset-y-0 right-0 z-40 w-full sm:w-[34rem] flex flex-col bg-white border-l border-gray-300 shadow-2xl dark:bg-[#1f2937] dark:border-[#334155]">
+            <header class="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-300 dark:border-[#334155]">
                 <div class="min-w-0">
                     <h2 id="drawerTitle" class="text-lg font-semibold text-gray-900 dark:text-[#f1f5f9]"></h2>
-                    <p id="drawerSub" class="text-sm text-gray-500 dark:text-[#94a3b8]"></p>
+                    <p id="drawerSub" class="text-sm text-gray-700 dark:text-[#bac5d4]"></p>
                 </div>
                 <button type="button" class="icon-btn" data-close="drawer" aria-label="Close">
                     <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -95,7 +97,7 @@
             </header>
             <form id="drawerForm" class="flex-1 min-h-0 flex flex-col" novalidate>
                 <div id="drawerBody" class="flex-1 overflow-y-auto px-5 py-5 flex flex-col gap-6"></div>
-                <footer id="drawerFoot" class="px-5 py-3 border-t border-gray-200 dark:border-[#334155] flex flex-wrap items-center gap-2"></footer>
+                <footer id="drawerFoot" class="px-5 py-3 border-t border-gray-300 dark:border-[#334155] flex flex-wrap items-center gap-2"></footer>
             </form>
         </aside>
     </div>
@@ -105,13 +107,13 @@
         <div class="fixed inset-0 z-50 overflow-y-auto pointer-events-none">
             <div class="min-h-full flex items-center justify-center p-4">
                 <div id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"
-                     class="dialog-panel pointer-events-auto w-full max-w-lg rounded-xl bg-white shadow-2xl border border-gray-200 dark:bg-[#1f2937] dark:border-[#334155]"></div>
+                     class="dialog-panel pointer-events-auto w-full max-w-lg rounded-xl bg-white shadow-2xl border border-gray-400 dark:bg-[#1f2937] dark:border-[#334155]"></div>
             </div>
         </div>
     </div>
 
     <div id="menu" role="menu" hidden
-         class="fixed z-[55] min-w-[12rem] py-1 rounded-lg border border-gray-200 bg-white shadow-lg dark:bg-[#1f2937] dark:border-[#334155]"></div>
+         class="fixed z-[55] min-w-[12rem] py-1 rounded-lg border border-gray-400 bg-white shadow-lg dark:bg-[#1f2937] dark:border-[#334155]"></div>
 
     <div id="toasts" aria-live="polite"
          class="toast-root fixed z-[60] right-4 left-4 sm:left-auto flex flex-col items-stretch sm:items-end gap-2 pointer-events-none"></div>

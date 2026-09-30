@@ -283,6 +283,27 @@ function check(label, condition, detail) {
         window.Ui.closeDrawer();
         return armed && (field.value === '0.0.0.0/0' ? warned : !warned);
     }));
+    check('switching the protocol re-checks the whole form', await page.evaluate(async () => {
+        const server = amneziaApp.lastServers[0];
+        amneziaApp.showServerConfig(server.id);
+        await new Promise((r) => setTimeout(r, 900));
+        const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
+        const select = document.getElementById('t-protocol');
+        select.value = 'AWG 2.0';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        set('t-S4', '1');
+        await new Promise((r) => setTimeout(r, 900));
+        select.value = 'AWG 3.0';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 900));
+        const off = /header protection is off.*S4 \(1\) is below/.test(document.getElementById('checks').textContent);
+        await amneziaApp.fillHeaderProtectionKey('t-HeaderProtectionKey');
+        await new Promise((r) => setTimeout(r, 900));
+        const refused = /S4 must be at least 12/.test(document.getElementById('checks').textContent)
+            && document.getElementById('drawerPrimary').disabled;
+        window.Ui.closeDrawer();
+        return off && refused;
+    }));
     check('an endpoint host previews its re-imports without a restart', await page.evaluate(async () => {
         const server = amneziaApp.lastServers.find((s) => s.status === 'running' && (s.clients || []).length);
         amneziaApp.showServerConfig(server.id);

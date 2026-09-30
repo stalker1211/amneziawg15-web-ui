@@ -345,6 +345,17 @@ class ParamWarningTests(unittest.TestCase):
         protected = {**standard, "S1": 50, "S2": 60, "S3": 40, "S4": 20, "HeaderProtectionKey": HEADER_PROTECTION_KEY}
         self.assertEqual(self.transport_warnings(protocol="AWG 3.0", **protected), [])
 
+    def test_awg3_without_a_key_says_header_protection_is_off(self):
+        # Opt-in upstream, so valid; but switching 2.0 -> 3.0 must not look like it did anything.
+        warnings = self.transport_warnings(protocol="AWG 3.0", S4=1)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("header protection is off", warnings[0])
+        self.assertIn("S4 (1) is below", warnings[0])
+        self.assertNotIn("below", self.transport_warnings(protocol="AWG 3.1", S1=50, S2=60, S3=40, S4=20)[0])
+        self.assertEqual(self.transport_warnings(protocol="AWG 2.0", S4=1), [])
+        with self.assertRaisesRegex(ValueError, "S4 must be at least 12"):
+            self.transport_warnings(protocol="AWG 3.0", S4=1, HeaderProtectionKey=HEADER_PROTECTION_KEY)
+
     def test_timer_rules(self):
         def warnings(**timings):
             return self.m.timing_warnings(self.m.validate_client_params(timings))

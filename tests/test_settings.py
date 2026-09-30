@@ -83,16 +83,21 @@ class ResolveTests(unittest.TestCase):
 class AccessTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="awg-access-")
-        self.access = Access(os.path.join(self.dir, ".htpasswd"), os.path.join(self.dir, ".htpasswd.default"), environ={})
+        self.access = Access(os.path.join(self.dir, ".htpasswd"), environ={})
         Path(self.access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
-        Path(self.access.marker).touch()
 
     def test_the_default_credential(self):
         self.assertTrue(self.access.verify("changeme"))
         self.assertFalse(self.access.verify("wrong"))
         self.assertEqual(
             self.access.payload(),
-            {"user": "admin", "user_source": "panel", "password_source": "default", "password_is_default": True},
+            {
+                "user": "admin",
+                "user_source": "panel",
+                "password_source": "default",
+                "password_is_default": True,
+                "editable": True,
+            },
         )
 
     def test_a_change_needs_the_current_password_and_clears_the_banner(self):
@@ -117,12 +122,15 @@ class AccessTests(unittest.TestCase):
                 self.access.change("changeme", user=user, password=password)
 
     def test_an_env_pinned_credential_is_read_only(self):
-        pinned = Access(self.access.path, self.access.marker, environ={"NGINX_PASSWORD": "x", "NGINX_USER": "ops"})
+        pinned = Access(self.access.path, environ={"NGINX_PASSWORD": "x", "NGINX_USER": "ops"})
         with self.assertRaisesRegex(ValueError, "set by NGINX_PASSWORD"):
             pinned.change("changeme", password="whatever-long")
         with self.assertRaisesRegex(ValueError, "set by NGINX_USER"):
             pinned.change("changeme", user="other")
         self.assertEqual(pinned.payload()["password_source"], "env")
+        # Pinned to changeme it is still the default: the banner must not go away.
+        self.assertTrue(pinned.is_default())
+        self.assertFalse(pinned.payload()["editable"])
 
 
 class ManagerSettingsTests(unittest.TestCase):
@@ -140,11 +148,8 @@ class ManagerSettingsTests(unittest.TestCase):
 class SettingsRouteTests(unittest.TestCase):
     def setUp(self):
         manager = build_manager(settings=Settings({"DEFAULT_PORT": "51900"}))
-        self.access = Access(
-            os.path.join(manager.config_dir, ".htpasswd"), os.path.join(manager.config_dir, ".htpasswd.default"), environ={}
-        )
+        self.access = Access(os.path.join(manager.config_dir, ".htpasswd"), environ={})
         Path(self.access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
-        Path(self.access.marker).touch()
         self.app, self.manager = build_app(manager=manager, access=self.access)
         self.http = self.app.test_client()
 

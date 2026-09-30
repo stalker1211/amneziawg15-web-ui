@@ -181,7 +181,7 @@ Basic Auth credentials.
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
 | POST | `/api/system/refresh-ip` | re-detect the public IP (`502`, nothing changed, when detection fails) |
-| GET | `/api/system/iptables-test` | diagnostic (`?server_id=`) |
+| GET | `/api/system/iptables-test` | a server's firewall rules as they are now (`?server_id=`); also under **⚙ → About** |
 | GET | `/status` | container uptime, plain text (localhost only) |
 
 Example:
