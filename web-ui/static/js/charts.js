@@ -4,7 +4,7 @@
 // Pure, like ui.js: they take numbers and return SVG or text. Values are Mbit/s from
 // the device's side (↓ download = what the server sent, ↑ upload = what it received;
 // fromApi translates the API's daemon terms), times are epoch seconds, and null is
-// "no data", drawn as a gap, never as a zero. DEVELOPMENT.md §10 #18 step 13.
+// "no data", drawn as a gap, never as a zero. DEVELOPMENT.md §3 (the traffic history).
 (() => {
     // Every colour utility carries its dark: partner (tests/test_frontend.py). Download
     // and upload passed the dataviz validator on the panel's cards (worst colour-blind

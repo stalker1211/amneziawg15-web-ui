@@ -1,4 +1,4 @@
-"""Tests for scripts/api_status.py, the status viewer that check_awg.sh runs (§10 #13).
+"""Tests for scripts/api_status.py, the status viewer that check_awg.sh runs.
 
 It is a standalone uv script, not part of the app, so nothing else notices when the
 API changes under it. These run it against a recorded /api/servers payload
