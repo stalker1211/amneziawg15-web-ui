@@ -85,6 +85,9 @@ now asks for the password (on an iPad, a prompt).
   is left out of ruff.
 - **A map at the top** of `amnezia_manager.py` and `app.js`: what is in the file, in
   what order.
+- **The public IP, the egress probe and GeoIP** moved from `amnezia_manager.py` into
+  `services/netinfo.py` (no behaviour change), and their tests into
+  `tests/test_netinfo.py`.
 - Python pins checked on 2026-09-30: all at their latest release.
 
 ## Version 2.4 (2026-09-30)

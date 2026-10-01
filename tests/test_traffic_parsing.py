@@ -89,7 +89,7 @@ class TrafficTests(unittest.TestCase):
         return (self.manager.get_traffic_for_server(self.server["id"]) or {}).get(self.client["id"])
 
     def test_bytes_endpoint_and_handshake(self):
-        with mock.patch.object(self.manager, "lookup_geoip_cached", return_value=("Somewhere", "NL")) as geo:
+        with mock.patch.object(self.manager.netinfo, "lookup_geoip_cached", return_value=("Somewhere", "NL")) as geo:
             info = self.read({})
         geo.assert_called_with("198.51.100.7")
         self.assertEqual(

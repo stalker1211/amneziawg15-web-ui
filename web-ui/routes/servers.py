@@ -194,14 +194,16 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             item = serialize_server(server)
             item["status"] = amnezia_manager.get_server_status(server["id"])
             item["traffic"] = amnezia_manager.get_traffic_for_server(server["id"]) or {}
-            item["public_ip_geo"], item["public_ip_geo_country_code"] = amnezia_manager.lookup_geoip(server.get("public_ip"))
+            item["public_ip_geo"], item["public_ip_geo_country_code"] = amnezia_manager.netinfo.lookup_geoip(
+                server.get("public_ip")
+            )
 
             if isinstance(server.get("egress_probe"), dict):
                 probe = dict(server["egress_probe"])
-                probe["external_ip_geo"], probe["external_ip_geo_country_code"] = amnezia_manager.lookup_geoip(
+                probe["external_ip_geo"], probe["external_ip_geo_country_code"] = amnezia_manager.netinfo.lookup_geoip(
                     probe.get("external_ip")
                 )
-                probe["service_name"] = amnezia_manager.format_probe_service_name(probe.get("service"))
+                probe["service_name"] = amnezia_manager.netinfo.format_probe_service_name(probe.get("service"))
                 item["egress_probe"] = probe
 
             payload.append(item)

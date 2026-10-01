@@ -564,7 +564,7 @@ class ServerListTests(unittest.TestCase):
         before_file = Path(manager.config_file).read_bytes()
         before_state = json.dumps(manager.config, sort_keys=True)
 
-        with mock.patch.object(manager, "lookup_geoip", return_value=("Somewhere", "NL")):
+        with mock.patch.object(manager.netinfo, "lookup_geoip", return_value=("Somewhere", "NL")):
             self.assertEqual(client.get("/api/servers").status_code, 200)
             self.assertEqual(client.get(f"/api/servers/{manager.config['servers'][0]['id']}/info").status_code, 200)
 
@@ -595,7 +595,7 @@ class ServerListTests(unittest.TestCase):
         server = _create_server(client)
         manager.get_server(server["id"])["egress_probe"] = {"external_ip": "198.51.100.9", "service": "https://ident.me"}
 
-        with mock.patch.object(manager, "lookup_geoip", return_value=("Netherlands / Amsterdam", "NL")):
+        with mock.patch.object(manager.netinfo, "lookup_geoip", return_value=("Netherlands / Amsterdam", "NL")):
             listed = client.get("/api/servers").get_json()[0]
 
         self.assertEqual((listed["public_ip_geo"], listed["public_ip_geo_country_code"]), ("Netherlands / Amsterdam", "NL"))
@@ -757,7 +757,7 @@ class RouteErrorTests(unittest.TestCase):
 class SystemRouteExtraTests(_RealSystemApp):
     def test_refresh_ip_updates_every_server(self):
         with mock.patch.object(self.manager, "detect_public_ip", return_value="198.51.100.20"), \
-             mock.patch.object(self.manager, "lookup_geoip", return_value=("Somewhere", "NL")):  # fmt: skip
+             mock.patch.object(self.manager.netinfo, "lookup_geoip", return_value=("Somewhere", "NL")):  # fmt: skip
             payload = self.client.post("/api/system/refresh-ip", json={}).get_json()
         self.assertEqual(payload, {"public_ip": "198.51.100.20", "public_ip_geo_country_code": "NL"})
         self.assertEqual(self.manager.public_ip, "198.51.100.20")

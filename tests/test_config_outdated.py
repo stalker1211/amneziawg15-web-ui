@@ -68,7 +68,7 @@ class OutdatedFlagTests(unittest.TestCase):
 
     def _refresh_ip(self, address):
         with mock.patch.object(self.manager, "detect_public_ip", return_value=address), \
-             mock.patch.object(self.manager, "lookup_geoip", return_value=("Somewhere", "NL")):  # fmt: skip
+             mock.patch.object(self.manager.netinfo, "lookup_geoip", return_value=("Somewhere", "NL")):  # fmt: skip
             self.assertEqual(self.http.post("/api/system/refresh-ip", json={}).status_code, 200)
 
     def test_issued_clients_are_up_to_date(self):

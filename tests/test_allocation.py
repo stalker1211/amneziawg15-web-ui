@@ -154,37 +154,5 @@ class ServerConflictTests(unittest.TestCase):
         )
 
 
-class GeoipCacheTests(unittest.TestCase):
-    def setUp(self):
-        self.manager = build_manager()
-
-    def test_cache_is_bounded(self):
-        limit = self.manager.GEOIP_CACHE_MAX_ENTRIES
-        for n in range(limit + 50):
-            self.manager._cache_geoip(f"198.51.{n // 256}.{n % 256}", 1000.0, None, None, {})
-        self.assertLessEqual(len(self.manager._geoip_cache), limit)
-
-    def test_expired_entries_are_evicted_first(self):
-        limit = self.manager.GEOIP_CACHE_MAX_ENTRIES
-        ttl = self.manager.GEOIP_CACHE_TTL_SECONDS
-        now = 100000.0
-        # Fill with stale entries, then add one fresh entry past the limit.
-        for n in range(limit):
-            self.manager._cache_geoip(f"203.0.{n // 256}.{n % 256}", now - ttl - 1, None, None, {})
-        self.manager._cache_geoip("192.0.2.7", now, "Somewhere", "SE", {})
-        self.assertIn("192.0.2.7", self.manager._geoip_cache)
-        self.assertLess(len(self.manager._geoip_cache), limit)
-
-    def test_oldest_evicted_when_all_entries_are_fresh(self):
-        limit = self.manager.GEOIP_CACHE_MAX_ENTRIES
-        for n in range(limit):
-            self.manager._cache_geoip(f"203.1.{n // 256}.{n % 256}", 1000.0 + n, None, None, {})
-        oldest = "203.1.0.0"
-        self.assertIn(oldest, self.manager._geoip_cache)
-        self.manager._cache_geoip("192.0.2.9", 99999.0, None, None, {})
-        self.assertNotIn(oldest, self.manager._geoip_cache)
-        self.assertIn("192.0.2.9", self.manager._geoip_cache)
-
-
 if __name__ == "__main__":
     unittest.main()

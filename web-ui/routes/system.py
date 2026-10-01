@@ -193,7 +193,7 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
 
     @system_bp.route("/api/system/status")
     def system_status():
-        _, public_ip_geo_country_code = amnezia_manager.lookup_geoip(amnezia_manager.public_ip)
+        _, public_ip_geo_country_code = amnezia_manager.netinfo.lookup_geoip(amnezia_manager.public_ip)
         status = {
             "awg_available": (os.path.exists("/usr/bin/awg") and os.path.exists("/usr/bin/awg-quick")),
             "public_ip": amnezia_manager.public_ip,
@@ -311,7 +311,7 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
         if not new_ip:
             return jsonify({"error": "Could not detect the public IP; nothing was changed"}), 502
         amnezia_manager.public_ip = new_ip
-        _, public_ip_geo_country_code = amnezia_manager.lookup_geoip(new_ip)
+        _, public_ip_geo_country_code = amnezia_manager.netinfo.lookup_geoip(new_ip)
 
         for server in amnezia_manager.config["servers"]:
             server["public_ip"] = new_ip

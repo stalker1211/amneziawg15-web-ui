@@ -164,7 +164,7 @@ class AccessTests(unittest.TestCase):
 class ManagerSettingsTests(unittest.TestCase):
     def test_resolved_settings_reach_the_manager_and_are_saved(self):
         manager = build_manager(settings=Settings({"ENABLE_GEOIP": "0"}))
-        self.assertEqual((manager.enable_geoip, manager.awg_log_level), (False, "error"))  # error: the default
+        self.assertEqual((manager.netinfo.enable_geoip, manager.awg_log_level), (False, "error"))  # error: the default
         stored = json.loads(Path(manager.config_file).read_text(encoding="utf-8"))["settings"]
         self.assertEqual(stored, {"geoip": False})
 

@@ -135,7 +135,7 @@ class FlagTests(unittest.TestCase):
             self.http.post(self._client_url(client, "issued"), json={})
 
         with mock.patch.object(self.manager, "detect_public_ip", return_value="198.51.100.20"), \
-             mock.patch.object(self.manager, "lookup_geoip", return_value=(None, None)):  # fmt: skip
+             mock.patch.object(self.manager.netinfo, "lookup_geoip", return_value=(None, None)):  # fmt: skip
             self.assertEqual(self.http.post("/api/system/refresh-ip", json={}).status_code, 200)
         # A new WAN address reaches only the server that still dials it.
         self.assertEqual(self.outdated(), {"desk"})

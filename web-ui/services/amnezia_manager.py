@@ -4,8 +4,8 @@ One class, AmneziaManager; web_config.json is the source of truth (DEVELOPMENT.m
 What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
 
   protocol table, parameter keys, limits      DEFAULT_PROTOCOL ... DAEMON_LOG_LEVELS
-  construction and the public IP              __init__, detect_public_ip
-  egress probe and GeoIP                      probe_server_egress_ip, lookup_geoip(_cached)
+  construction and the public IP              __init__, detect_public_ip (services/netinfo.py)
+  the egress probe, recorded                  probe_server_egress_ip (its network side: netinfo.py)
   settings and the boot restore               apply_settings, auto_start_servers
   protocol logic and parameter validation     normalize_protocol ... validate_client_params
   config store                                migrate_config_schema, load_config, save_config
@@ -30,12 +30,12 @@ import threading
 import time
 import uuid
 from typing import ClassVar
-from urllib.parse import urlparse
 
-from core.helpers import https_get, is_valid_ip, sanitize_config_value, to_bool
+from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 
 from services import generator
+from services.netinfo import NetInfo
 
 logger = get_logger(__name__)
 
@@ -110,20 +110,6 @@ class AmneziaManager:
     # 25 a connected device handshakes about every 2 minutes.
     ACTIVE_WITHIN_SECONDS = 5 * 60
 
-    # GeoIP lookups are cached to avoid rate limits; bounded so the dict cannot grow
-    # without limit as new client endpoints appear.
-    GEOIP_CACHE_TTL_SECONDS = 24 * 3600
-    # A failed lookup (rate limit, timeout) is retried after this, not after a day.
-    GEOIP_FAILURE_TTL_SECONDS = 10 * 60
-    GEOIP_CACHE_MAX_ENTRIES = 512
-
-    EGRESS_PROBE_SERVICES = (
-        "https://api.ipify.org",
-        "https://ident.me",
-        "https://icanhazip.com",
-    )
-    PUBLIC_IP_SERVICES = EGRESS_PROBE_SERVICES
-
     # awg-quick runs amneziawg-go through this wrapper when the daemon logs, so its
     # output lands in AWG_LOG_FILE (scripts/amneziawg-go-logged.sh).
     LOGGED_DAEMON = "/usr/local/bin/amneziawg-go-logged"
@@ -165,7 +151,14 @@ class AmneziaManager:
         self.wireguard_config_dir = wireguard_config_dir or os.path.join(config_dir, "amneziawg")
         self.config_file = config_file or os.path.join(config_dir, "web_config.json")
 
-        self.enable_geoip = enable_geoip
+        # The public IP, the egress probe and GeoIP (services/netinfo.py). Late-bound, so
+        # a subclass or a test that replaces run_command or start_background_task here
+        # reaches it too.
+        self.netinfo = NetInfo(
+            run_command=lambda args: self.run_command(args),
+            start_background_task=lambda target: self.start_background_task(target),
+            enable_geoip=enable_geoip,
+        )
         self.awg_log_level = awg_log_level if awg_log_level in self.DAEMON_LOG_LEVELS else "off"
 
         self.config = self.load_config()
@@ -186,12 +179,6 @@ class AmneziaManager:
         # monitor never writes the config.
         self._telemetry = {"at": 0.0, "interfaces": {}}
 
-        # Cache GeoIP lookups to avoid rate limits and latency
-        # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
-        self._geoip_cache = {}
-        # Addresses a background task is looking up now (lookup_geoip_cached).
-        self._geoip_pending = set()
-
         # Bring back the servers that were running (see auto_start_servers).
         if self.auto_start_servers_enabled:
             self.auto_start_servers()
@@ -205,24 +192,9 @@ class AmneziaManager:
         os.makedirs("/var/log/amnezia", exist_ok=True)
 
     def detect_public_ip(self):
-        """The host's public IPv4 address, or None when no service answered.
-
-        None rather than a guess: the answer goes into every client config's Endpoint.
-        The old fallbacks -- the `ip route get` source (the LAN address on macvlan) or
-        "YOUR_SERVER_IP" -- sent every device to the wrong place after a refresh
-        during an outage. HTTPS only, so nobody on the path can supply the answer.
-        """
-        for service in self.PUBLIC_IP_SERVICES:
-            try:
-                response = https_get(service, timeout=5)
-            except Exception:  # pylint: disable=broad-exception-caught  -- try the next one
-                continue
-            ip = response.text.strip() if response.status == 200 else ""
-            if is_valid_ip(ip):
-                logger.info("Detected public IP: %s", ip)
-                return ip
-        logger.warning("Could not detect the public IP: none of %s answered", ", ".join(self.PUBLIC_IP_SERVICES))
-        return None
+        """The host's public IPv4 address, or None (services/netinfo.py). A method of its
+        own, so the tests' managers can answer it without the network."""
+        return self.netinfo.detect_public_ip()
 
     def last_known_public_ip(self):
         """The address the servers were last given, for a boot without internet."""
@@ -285,78 +257,6 @@ class AmneziaManager:
         except ValueError:
             return False
 
-    def detect_public_ip_from_source(self, source_ip, service):
-        """Detect external IP for traffic originating from a specific source IP."""
-        if not is_valid_ip(source_ip):
-            raise ValueError(f"Invalid source IP: {source_ip}")
-
-        if service not in self.EGRESS_PROBE_SERVICES:
-            raise ValueError(f"Unsupported egress probe service: {service}")
-
-        # Bound to the tunnel's address, so the answer is where that tunnel's traffic exits.
-        try:
-            response = https_get(service, timeout=8, source_ip=source_ip)
-        except Exception as e:
-            raise RuntimeError(f"{service}: {e}") from e
-        if response.status != 200:
-            raise RuntimeError(f"{service}: HTTP {response.status}")
-        body = response.text.strip()
-        if body and is_valid_ip(body):
-            return body, service
-        raise RuntimeError(f"{service}: invalid IP response '{body[:120]}'")
-
-    def get_next_egress_probe_service(self, server):
-        """Rotate egress probe services for a server across refreshes."""
-        previous_service = None
-        probe = server.get("egress_probe") if isinstance(server, dict) else None
-        if isinstance(probe, dict):
-            previous_service = probe.get("service")
-
-        services = list(self.EGRESS_PROBE_SERVICES)
-        if previous_service in services:
-            previous_index = services.index(previous_service)
-            return services[(previous_index + 1) % len(services)]
-
-        return services[0]
-
-    def format_probe_service_name(self, service):
-        """Return a short host label for a probe service URL."""
-        if not service or not isinstance(service, str):
-            return None
-
-        try:
-            parsed = urlparse(service)
-            host = (parsed.hostname or "").strip().lower()
-            return host or service.strip()
-        except Exception:
-            return service.strip()
-
-    def get_route_for_source_ip(self, source_ip, destination="1.1.1.1"):
-        """Return Linux route decision for destination when source IP is forced."""
-        result = {
-            "destination": destination,
-            "source_ip": source_ip,
-            "raw": "",
-            "dev": None,
-            "via": None,
-            "src": None,
-        }
-
-        if not is_valid_ip(source_ip):
-            return result
-
-        output = self.run_command(["ip", "route", "get", destination, "from", source_ip])
-        if output is None:
-            result["raw"] = "route lookup failed"
-            return result
-
-        line = (output.splitlines() or [""])[0]
-        result["raw"] = line
-        for key in ("dev", "via", "src"):
-            match = re.search(rf"\b{key}\s+(\S+)", line)
-            result[key] = match.group(1) if match else None
-        return result
-
     def probe_server_egress_ip(self, server_id):
         """Probe external egress IP for a specific server from inside the container."""
         server = self.get_server(server_id)
@@ -364,8 +264,8 @@ class AmneziaManager:
             return None
 
         source_ip = server.get("server_ip")
-        route = self.get_route_for_source_ip(source_ip)
-        service = self.get_next_egress_probe_service(server)
+        route = self.netinfo.get_route_for_source_ip(source_ip)
+        service = self.netinfo.get_next_egress_probe_service(server)
 
         probe = {
             "source_ip": source_ip,
@@ -377,10 +277,10 @@ class AmneziaManager:
         }
 
         try:
-            external_ip, service = self.detect_public_ip_from_source(source_ip, service)
+            external_ip, service = self.netinfo.detect_public_ip_from_source(source_ip, service)
             probe["external_ip"] = external_ip
             probe["service"] = service
-            geo_label, geo_country_code = self.lookup_geoip(external_ip)
+            geo_label, geo_country_code = self.netinfo.lookup_geoip(external_ip)
             probe["external_ip_geo"] = geo_label
             probe["external_ip_geo_country_code"] = geo_country_code
         except Exception as e:
@@ -390,146 +290,10 @@ class AmneziaManager:
         self.save_config()
         return probe
 
-    def _cache_geoip(self, ip, now, label, country_code, raw, failed=False):
-        """Store a GeoIP result, evicting expired and then oldest entries.
-
-        Unbounded growth was slow but real: one entry per distinct client endpoint IP,
-        never removed.
-        """
-        self._geoip_cache[ip] = {
-            "ts": now,
-            "label": label,
-            "country_code": country_code,
-            "raw": raw,
-            "failed": failed,
-        }
-
-        if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
-            return
-
-        for key, entry in list(self._geoip_cache.items()):
-            if (now - entry.get("ts", 0)) >= self.GEOIP_CACHE_TTL_SECONDS:
-                del self._geoip_cache[key]
-
-        # Still over budget (many fresh entries): drop the oldest.
-        if len(self._geoip_cache) > self.GEOIP_CACHE_MAX_ENTRIES:
-            for key, _ in sorted(self._geoip_cache.items(), key=lambda kv: kv[1].get("ts", 0)):
-                if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
-                    break
-                del self._geoip_cache[key]
-
-    def _geoip_candidate(self, ip):
-        """The stripped address when GeoIP is on and it is public, else None."""
-        if not self.enable_geoip or not ip or not isinstance(ip, str):
-            return None
-        ip = ip.strip()
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return None
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_multicast
-            or addr.is_reserved
-            or addr.is_unspecified
-        ):
-            return None
-        return ip
-
-    def _geoip_fresh(self, ip, now):
-        """The cached (label, country code), or None when absent or expired."""
-        cached = self._geoip_cache.get(ip)
-        if not isinstance(cached, dict):
-            return None
-        ttl = self.GEOIP_FAILURE_TTL_SECONDS if cached.get("failed") else self.GEOIP_CACHE_TTL_SECONDS
-        if (now - cached.get("ts", 0)) >= ttl:
-            return None
-        return (cached.get("label"), cached.get("country_code"))
-
-    def lookup_geoip_cached(self, ip):
-        """(label, country code) from the cache only; a miss is looked up in the background.
-
-        For the traffic loop, which must not wait on ipapi.co (up to 2 s per new
-        client endpoint): the label appears on the next tick.
-        """
-        ip = self._geoip_candidate(ip)
-        if not ip:
-            return (None, None)
-        fresh = self._geoip_fresh(ip, time.time())
-        if fresh is not None:
-            return fresh
-        if ip not in self._geoip_pending:
-            self._geoip_pending.add(ip)
-
-            def resolve():
-                try:
-                    self.lookup_geoip(ip)
-                finally:
-                    self._geoip_pending.discard(ip)
-
-            self.start_background_task(resolve)
-        return (None, None)
-
-    def lookup_geoip(self, ip):
-        """Return (geo label, country code) for a public IP with caching."""
-        ip = self._geoip_candidate(ip)
-        if not ip:
-            return (None, None)
-
-        now = time.time()
-        fresh = self._geoip_fresh(ip, now)
-        if fresh is not None:
-            return fresh
-
-        def format_geo_label(raw):
-            if not isinstance(raw, dict):
-                return None
-            country = raw.get("country_name") or raw.get("country") or raw.get("countryCode")
-            city = raw.get("city")
-            region = raw.get("region") or raw.get("regionName")
-
-            loc_parts = [p for p in [city, region] if p]
-            loc = ", ".join(loc_parts).strip()
-
-            if country and loc:
-                return f"{country} / {loc}"
-            if country:
-                return str(country)
-            if loc:
-                return loc
-            return None
-
-        def extract_country_code(raw):
-            if not isinstance(raw, dict):
-                return None
-            cc = raw.get("country_code") or raw.get("countryCode") or raw.get("country")
-            if isinstance(cc, str):
-                cc = cc.strip().upper()
-                if re.fullmatch(r"[A-Z]{2}", cc):
-                    return cc
-            return None
-
-        try:
-            resp = https_get(f"https://ipapi.co/{ip}/json/", timeout=2)
-            if resp.status != 200:
-                self._cache_geoip(ip, now, None, None, {"status": resp.status}, failed=True)
-                return (None, None)
-
-            data = json.loads(resp.text) if resp.content_type.startswith("application/json") else {}
-            label = format_geo_label(data)
-            country_code = extract_country_code(data)
-            self._cache_geoip(ip, now, label, country_code, data)
-            return (label, country_code)
-        except Exception:
-            self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"}, failed=True)
-            return (None, None)
-
     def apply_settings(self):
         """Take GeoIP and the daemon's log level from the settings."""
         values = self.settings.values
-        self.enable_geoip = values["geoip"]
+        self.netinfo.enable_geoip = values["geoip"]
         self.awg_log_level = values["awg_log_level"]
 
     def auto_start_servers(self):
@@ -2096,7 +1860,7 @@ PersistentKeepalive = 25
         traffic = {}
         for client in server.get("clients", []):
             info, seconds = self._peer_telemetry(server, client)
-            geo_label, geo_country_code = self.lookup_geoip_cached(self.endpoint_ip(info.get("endpoint")))
+            geo_label, geo_country_code = self.netinfo.lookup_geoip_cached(self.endpoint_ip(info.get("endpoint")))
             traffic[client.get("id")] = {
                 "received_bytes": info.get("rx", 0),
                 "sent_bytes": info.get("tx", 0),

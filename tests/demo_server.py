@@ -37,6 +37,7 @@ from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
 from routes.system import register_system_routes, render_page
 from services.amnezia_manager import AmneziaManager
+from services.netinfo import NetInfo
 
 PUBLIC_IPS = ("203.0.113.24", "203.0.113.57")  # refresh-ip flips between these
 GEO = {
@@ -55,15 +56,43 @@ def random_key():
     return base64.b64encode(os.urandom(32)).decode()
 
 
+class DemoNetInfo(NetInfo):
+    """GeoIP and the egress probe answered from the tables above, not the network."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.egress = {}  # server_ip -> external IP
+
+    def lookup_geoip(self, ip):
+        return GEO.get(ip, (None, None))
+
+    # The traffic loop's cache-only lookup would skip documentation-range addresses.
+    def lookup_geoip_cached(self, ip):
+        return self.lookup_geoip(ip)
+
+    def get_route_for_source_ip(self, source_ip, destination="1.1.1.1"):
+        return "demo"
+
+    def detect_public_ip_from_source(self, source_ip, service):
+        if source_ip not in self.egress:
+            raise RuntimeError(f"no route to the internet from {source_ip}")
+        return self.egress[source_ip], service
+
+
 class DemoManager(AmneziaManager):
     """The real manager with its system edges answered in memory."""
 
     def __init__(self, **kwargs):
         self.running = set()  # interfaces that are "up"
         self.peers = {}  # client public key -> {endpoint, handshake_at, rx, tx}
-        self.egress = {}  # server_ip -> external IP
         self._public_ip_calls = 0
         super().__init__(**kwargs)
+        # Replaced before the seed: until then the traffic loop has no server to look up.
+        self.netinfo = DemoNetInfo(
+            run_command=self.run_command,
+            start_background_task=self.start_background_task,
+            enable_geoip=self.netinfo.enable_geoip,
+        )
 
     # --- keys -----------------------------------------------------------------
     def generate_wireguard_keys(self):
@@ -142,21 +171,6 @@ class DemoManager(AmneziaManager):
         self._public_ip_calls += 1
         return ip
 
-    def lookup_geoip(self, ip):
-        return GEO.get(ip, (None, None))
-
-    # The traffic loop's cache-only lookup would skip documentation-range addresses.
-    def lookup_geoip_cached(self, ip):
-        return self.lookup_geoip(ip)
-
-    def get_route_for_source_ip(self, source_ip):
-        return "demo"
-
-    def detect_public_ip_from_source(self, source_ip, service):
-        if source_ip not in self.egress:
-            raise RuntimeError(f"no route to the internet from {source_ip}")
-        return self.egress[source_ip], service
-
 
 def seed(manager):
     """The mockup's example: two running servers, one stopped, one outdated client."""
@@ -208,7 +222,7 @@ def seed(manager):
     manager.update_client_params(home["id"], clients["MacBook"]["id"], {**clients["MacBook"]["client_params"], "Jc": 10})
     manager.toggle_client_suspend(home["id"], clients["Router"]["id"])
 
-    manager.egress = {home["server_ip"]: "198.51.100.17", travel["server_ip"]: "198.51.100.61"}
+    manager.netinfo.egress = {home["server_ip"]: "198.51.100.17", travel["server_ip"]: "198.51.100.61"}
     for srv in (home, travel):
         manager.start_server(srv["id"])
         manager.probe_server_egress_ip(srv["id"])
