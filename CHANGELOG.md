@@ -12,12 +12,25 @@
   rows, more so for upload (mostly small packets). In the API: `totals` on each server
   in `/api/servers` and in each `traffic_update`, `null` for a stopped server.
 
+### Signature packets
+- **Generate I1–I5 from a profile:** the client drawer's I1–I5 section has a shape
+  (QUIC Initial, DNS query, Random), a host for DNS, and **Generate**, which fills the
+  fields; Save keeps them. QUIC: two client Initials of 1200–1252 bytes (RFC 9000's
+  floor, which servers enforce, and what browsers send), then three short-header
+  packets. DNS: an A and an AAAA query for the host, with EDNS0 and a client cookie.
+  Connection ids, transaction ids, cookies and payload are random tags, redrawn before
+  every handshake, rather than static bytes that would repeat from one handshake to
+  the next. A note says when the server's port does not match the protocol (443 for
+  QUIC, 53 for DNS). New and existing clients are left as they are. In the API:
+  `POST /api/generate` with `signature_profile`, `server_id` and `host` answers
+  `signature_packets`, `signature_host` and `signature_notes`.
+
 ### Tooling
 - **The release checker, `tests/release_check.py`**: the image from the tree, checked
   end to end in one command (about 3 minutes). It builds the image, checks it carries the tree, boots it with no
   bind mount, and checks the sign-in, a server per protocol, a restart, a real client
-  tunnel to every server (its `.conf` as issued, in a second container) and the smoke
-  tests. It reports and publishes nothing.
+  tunnel to every server (its `.conf` as issued, in a second container, with I1–I5 from
+  Generate) and the smoke tests. It reports and publishes nothing.
 - **Local Docker only:** `run.sh`, `publish_dockerhub.sh` (when it builds) and the
   release checker say which Docker they use and stop unless it is a local socket, so a
   Docker context or `DOCKER_HOST` pointing at another host cannot build or run there.

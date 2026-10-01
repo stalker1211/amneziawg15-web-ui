@@ -36,7 +36,7 @@ from typing import ClassVar
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 
-from services import generator
+from services import generator, signatures
 from services.history import TrafficHistory
 from services.netinfo import NetInfo
 
@@ -811,6 +811,16 @@ class AmneziaManager:
     def generate_client_defaults(self, protocol=None):
         """Random client-side defaults: a small junk train and, on AWG 3.x, padding and timers."""
         return generator.client_defaults(awg3=self.protocol_supports_awg3(protocol))
+
+    def generate_signature_packets(self, server, profile, host=None):
+        """I1-I5 shaped like a protocol for a client of `server` (services/signatures.py):
+        {packets, host, notes}, sized to the server's MTU, the port hint from its port."""
+        return signatures.signature_packets(
+            profile,
+            mtu=int(server.get("mtu", self.default_mtu)),
+            port=int(server.get("port", self.default_port)),
+            host=host,
+        )
 
     def create_wireguard_server(self, server_data):
         """Create a new WireGuard server configuration with environment defaults"""

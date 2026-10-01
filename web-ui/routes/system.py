@@ -7,6 +7,7 @@ import time
 
 from core.logging_setup import get_logger
 from flask import Blueprint, Response, jsonify, make_response, render_template, request
+from services import signatures
 
 # pylint: disable=broad-exception-caught
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
@@ -145,6 +146,8 @@ def page_config(amnezia_manager, access=None):
             "signature": [key for key in m.CLIENT_ONLY_PARAM_KEYS if key.startswith("I")],
             "awg3Client": list(m.CLIENT_AWG3_PARAM_KEYS),
         },
+        # The client drawer's Generate for I1-I5 (services/signatures.py).
+        "signatureProfiles": [dict(profile) for profile in signatures.PROFILES],
         "defaults": {
             "mtu": m.default_mtu,
             "subnet": m.default_subnet,

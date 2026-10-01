@@ -154,10 +154,12 @@ class FormUi {
             <details class="help text-sm text-gray-800 dark:text-[#d7dee9]"${anySignature ? ' open' : ''}>
                 <summary class="font-medium">Signature packets I1-I5 <span class="font-normal text-gray-600 dark:text-[#98a6ba]">optional</span></summary>
                 <div class="mt-3 flex flex-col gap-3">
-                    <p class="text-xs text-gray-700 dark:text-[#bac5d4]">Tags: <span class="font-mono">&lt;b 0x…&gt; &lt;t&gt; &lt;r n&gt; &lt;rc n&gt; &lt;rd n&gt;</span>, checked as you type.
-                        To build packets that look like QUIC, DNS or TLS, try
+                    <p class="text-xs text-gray-700 dark:text-[#bac5d4]">Sent before every handshake. Generate fills them with packets shaped like
+                        QUIC or DNS, or random ones; Save keeps them. Tags: <span class="font-mono">&lt;b 0x…&gt; &lt;t&gt; &lt;r n&gt; &lt;rc n&gt; &lt;rd n&gt;</span>, checked as you type.
+                        For other shapes (TLS, DTLS, SIP) try
                         <a href="https://architect.vai-rice.space" target="_blank" rel="noopener noreferrer" class="text-purple-700 hover:underline dark:text-[#c084fc]">AmneziaWG Architect</a>
                         and paste its I1-I5 here.</p>
+                    ${this.signatureGeneratorHtml()}
                     ${AmneziaApp.I_PARAM_KEYS.map((k) => `
                         <div><label class="label" for="c-${k}">${k}</label>
                         <textarea id="c-${k}" rows="1" class="field field-area" placeholder="e.g. &lt;b 0xc6000000010843&gt;&lt;r 16&gt;">${safe(params[k] || '')}</textarea></div>`).join('')}
@@ -171,6 +173,63 @@ class FormUi {
                     ${AmneziaApp.AWG3_CLIENT_PARAM_KEYS.map((k) => this.formField(`c-${k}`, k, params[k] || '', { mono: true, placeholder: 'default' })).join('')}
                 </div>
             </div>` : ''}`;
+    }
+
+    // Generate for I1-I5: a profile (page_config's signatureProfiles), a host for the
+    // ones that ask for it, and the server's answer (POST /api/generate).
+    signatureGeneratorHtml() {
+        const profiles = window.AppConfig.signatureProfiles || [];
+        const safe = (v) => this.escapeHtml(v ?? '');
+        return `
+            <div class="flex flex-wrap items-end gap-2">
+                <div><label class="label" for="c-iProfile">Shape</label>
+                    <select id="c-iProfile" class="field">${profiles.map((p) => `<option value="${safe(p.id)}">${safe(p.label)}</option>`).join('')}</select></div>
+                <div id="c-iHostBox" class="min-w-0 flex-1"${profiles[0]?.host ? '' : ' hidden'}><label class="label" for="c-iHost">Host</label>
+                    <input id="c-iHost" type="text" class="field font-mono" placeholder="empty: a common name"></div>
+                <button type="button" class="btn btn-secondary" data-action="generate-signatures">Generate</button>
+            </div>
+            <p id="c-iNote" class="hint" hidden></p>`;
+    }
+
+    // The profile picked: show the host field if it asks for one.
+    onSignatureProfileChange(profileId) {
+        const profile = (window.AppConfig.signatureProfiles || []).find((p) => p.id === profileId);
+        const box = document.getElementById('c-iHostBox');
+        if (box) box.hidden = !profile?.host;
+        const note = document.getElementById('c-iNote');
+        if (note) note.hidden = true;
+    }
+
+    // Generate: I1-I5 from the server, shaped like the profile, into the fields. Nothing
+    // is saved; the drawer checks them like any edit and Save keeps them.
+    async generateSignaturePackets() {
+        const ctx = this.drawerCtx;
+        const profile = document.getElementById('c-iProfile')?.value;
+        if (!ctx?.serverId || !profile) return;
+        const host = document.getElementById('c-iHost');
+        try {
+            const data = await this.postJson('/api/generate', {
+                server_id: ctx.serverId,
+                signature_profile: profile,
+                host: (host?.value || '').trim(),
+            });
+            if (ctx !== this.drawerCtx) return;
+            Object.entries(data.signature_packets || {}).forEach(([k, v]) => {
+                const el = document.getElementById(`c-${k}`);
+                if (!el) return;
+                el.value = v;
+                this.autosizeTextarea(el, 200);
+            });
+            if (host && data.signature_host) host.value = data.signature_host;
+            const note = document.getElementById('c-iNote');
+            if (note) {
+                note.textContent = (data.signature_notes || []).join(' ');
+                note.hidden = !note.textContent;
+            }
+            this.scheduleDrawerCheck();
+        } catch (error) {
+            this.showTempMessage(`Could not generate packets: ${error.message}`, 'error');
+        }
     }
 
     // What the device routes through the tunnel: split tunnelling per client.
@@ -228,6 +287,7 @@ class FormUi {
             if (!ctx) return;
             if (e.target.tagName === 'TEXTAREA') this.autosizeTextarea(e.target, 200);
             if (e.target.id === 'c-copyFrom') this.fillClientFromCopy(e.target.value);
+            if (e.type === 'change' && e.target.id === 'c-iProfile') this.onSignatureProfileChange(e.target.value);
             // Typing marks the transport fields as the user's own; values filled in by
             // the generator fire no input event.
             if (e.type === 'input' && e.target.id.startsWith('t-')) ctx.transportEdited = true;
@@ -659,6 +719,7 @@ class FormUi {
         const seen = traffic.endpoint && age ? `handshake ${safe(age)}` : 'not connected';
         const params = { ...(server.client_defaults || {}), ...(client.client_params || {}) };
         const ctx = {
+            serverId,
             snapshot: null,
             saveLabel: 'Save changes',
             collect: () => ({ allowed_ips: this.allowedIps(), ...this.collectClientForm() }),

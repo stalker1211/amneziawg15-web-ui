@@ -214,6 +214,7 @@ class ProtocolTableTests(unittest.TestCase):
             ],
         )  # fmt: skip
         self.assertEqual(config["params"]["signature"], ["I1", "I2", "I3", "I4", "I5"])
+        self.assertEqual([p["id"] for p in config["signatureProfiles"]], ["quic", "dns", "random"])
         self.assertEqual(config["params"]["awg3Client"], list(m.CLIENT_AWG3_PARAM_KEYS))
         self.assertEqual(config["defaults"]["mtu"], m.default_mtu)
         json.dumps(config)  # it is rendered as JSON

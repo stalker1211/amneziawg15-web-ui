@@ -35,6 +35,9 @@ Current version: **2.5**
 - **Server totals** — beside the graph, what a running server has carried since it
   started (and since when): the kernel's counters for its interface, so a client
   suspended or deleted since still counts. A stop and start begins them again.
+- **Signature packets from a profile** — in a client's drawer, **Generate** fills
+  I1–I5 with packets shaped like a QUIC connection opening or a DNS lookup (or random
+  ones), so a handshake is preceded by traffic that looks like something else.
 - **Health check** — Docker marks the container `unhealthy` when a server that should
   run is down, or has drifted from the panel: a device the panel suspended or deleted
   still let in, or firewall rules that are not what its switches call for.
@@ -149,6 +152,30 @@ In the UI:
 - **+ Client**: set I1–I5 for a new client, starting from the server's defaults or
   copying another client.
 - **Client row → Edit**: change I1–I5 for that client.
+
+### Generate: packets shaped like a protocol
+
+In the client drawer's I1–I5 section, pick a shape and press **Generate**; the fields
+fill in and **Save** keeps them (then re-import the client's config on the device).
+Nothing is generated for a client by itself: new clients start with no I1–I5.
+
+| Shape | I1 | I2 | I3–I5 |
+|---|---|---|---|
+| **QUIC Initial** | a QUIC client Initial, 1200–1252 bytes as browsers send it | a second Initial | short packets, as a QUIC connection carries next |
+| **DNS query** | an A query for the host (a common name when left empty) | the AAAA query | — |
+| **Random** | random bytes and tags | the same | the same |
+
+Everything a real client picks per connection (connection ids, a DNS transaction id
+and cookie, the encrypted payload) is a random tag, so it changes on every handshake;
+only the protocol's fixed fields are static bytes. A note says when the server's port
+is not where the protocol normally goes (UDP 443 for QUIC, 53 for DNS), since a QUIC
+packet to port 51820 is less convincing.
+
+The disguise is the packets' shape: Wireshark reads them as QUIC and DNS. It is not a
+full imitation: a real QUIC Initial can be decrypted by anyone who sees it, and these
+carry random bytes, so a DPI that decrypts Initials finds them broken. The junk packets
+(Jc) and the handshake still follow them. For other shapes (TLS, DTLS, SIP), the drawer
+links to [AmneziaWG Architect](https://architect.vai-rice.space).
 
 ## 📷 QR code notes
 

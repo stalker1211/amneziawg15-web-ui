@@ -253,6 +253,30 @@ function check(label, condition, detail) {
                 const b = document.getElementById('drawerPrimary');
                 return !b.disabled && /Save changes/.test(b.textContent);
             }));
+            // Generate for I1-I5: QUIC first (no host), then DNS for a host.
+            check(`${protocol} I1-I5 generator starts on QUIC without a host`, await page.evaluate(() =>
+                document.getElementById('c-iProfile')?.value === 'quic' && document.getElementById('c-iHostBox').hidden));
+            await page.evaluate(() => document.querySelector('[data-action="generate-signatures"]').click());
+            await new Promise((r) => setTimeout(r, 1200));
+            check(`${protocol} Generate fills I1-I5 with QUIC packets`, await page.evaluate(() =>
+                /^<b 0xc[0-3]00000001/.test(document.getElementById('c-I1').value)
+                && /^<b 0x[4-7]/.test(document.getElementById('c-I5').value)));
+            await page.evaluate(() => {
+                const select = document.getElementById('c-iProfile');
+                select.value = 'dns';
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                document.getElementById('c-iHost').value = 'ya.ru';
+                document.querySelector('[data-action="generate-signatures"]').click();
+            });
+            await new Promise((r) => setTimeout(r, 1200));
+            check(`${protocol} DNS shows the host and asks for it`, await page.evaluate(() =>
+                !document.getElementById('c-iHostBox').hidden
+                && document.getElementById('c-I1').value.includes('02796102727500')  // ya.ru as labels
+                && document.getElementById('c-I3').value === ''));
+            check(`${protocol} the port hint shows off port 53`, await page.evaluate(() =>
+                !document.getElementById('c-iNote').hidden && /UDP 53/.test(document.getElementById('c-iNote').textContent)));
+            check(`${protocol} generated packets pass the check and can be saved`, await page.evaluate(() =>
+                !document.getElementById('drawerPrimary').disabled));
             await page.evaluate(() => window.Ui.closeDrawer());
 
             await page.evaluate((s, c) => amneziaApp.showClientQRCode(s, c), id, clientId);

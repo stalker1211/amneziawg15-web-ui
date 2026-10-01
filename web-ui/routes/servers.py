@@ -169,17 +169,30 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
     def generate():
         """Random parameters for a form, the one generator the UI uses: {protocol, mtu}
         -> {protocol, transport_params, client_defaults}. A dry run like /api/validate;
-        nothing is saved. Everything drawn passes the validators without a warning."""
+        nothing is saved. Everything drawn passes the validators without a warning.
+
+        With {signature_profile, server_id, host?} it also answers I1-I5 shaped like that
+        profile for a client of that server (services/signatures.py): signature_packets,
+        signature_host (the name the DNS profile asked for) and signature_notes."""
         data = json_body()
         protocol = amnezia_manager.normalize_protocol(data.get("protocol"))
         mtu = amnezia_manager.validate_mtu(data.get("mtu", amnezia_manager.default_mtu))
-        return jsonify(
-            {
-                "protocol": protocol,
-                "transport_params": amnezia_manager.generate_transport_params(protocol, mtu),
-                "client_defaults": amnezia_manager.generate_client_defaults(protocol),
-            }
-        )
+        answer = {
+            "protocol": protocol,
+            "transport_params": amnezia_manager.generate_transport_params(protocol, mtu),
+            "client_defaults": amnezia_manager.generate_client_defaults(protocol),
+        }
+        if data.get("signature_profile"):
+            if not data.get("server_id"):
+                raise ValueError("signature_profile needs the server_id of the client's server")
+            server = server_or_404(data["server_id"])
+            generated = amnezia_manager.generate_signature_packets(server, data["signature_profile"], data.get("host"))
+            answer.update(
+                signature_packets=generated["packets"],
+                signature_host=generated["host"],
+                signature_notes=generated["notes"],
+            )
+        return jsonify(answer)
 
     # --- servers ------------------------------------------------------------------
 

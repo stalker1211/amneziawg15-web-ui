@@ -11,8 +11,9 @@
 3. Boot it without a bind mount, with the default admin/changeme sign-in: / gives
    200 with the password, 401 without and 401 with a wrong one; every script loads; a
    form POST gets 415; .htpasswd is root:nginx 640.
-4. A server per protocol (from #appConfig), each with a client: running, the .conf's
-   peers equal `awg show`'s, mode 600; /status healthy.
+4. A server per protocol (from #appConfig), each with a client whose I1-I5 come from
+   Generate (the profiles in turn): running, the .conf's peers equal `awg show`'s,
+   mode 600; /status healthy.
 5. Stop one, `docker restart`: the same servers come back, the stopped one stays so.
 6. A real client on each server: its .conf as the panel issues it, brought up with
    awg-quick in a second container from the same image, handshakes and pings.
@@ -160,7 +161,14 @@ def main():
             sid, iface = server["id"], server["interface"]
             # Only its own subnet through the tunnel, so the client container holds all four.
             client = api("POST", f"/api/servers/{sid}/clients", {"name": "phone", "allowed_ips": subnet})
-            configs[iface] = (protocol, subnet, client["config"])
+            # I1-I5 from Generate, a profile per server in turn: step 6's handshake shows
+            # the daemon takes them.
+            profile = config["signatureProfiles"][i % len(config["signatureProfiles"])]["id"]
+            packets = api("POST", "/api/generate", {"server_id": sid, "signature_profile": profile})["signature_packets"]
+            cid = client["client"]["id"]
+            api("POST", f"/api/servers/{sid}/clients/{cid}/client-params", {"client_params": packets})
+            issued = api("GET", f"/api/servers/{sid}/clients/{cid}/config-both")["clean_config"]
+            configs[iface] = (f"{protocol}, {profile} I1-I5", subnet, issued)
             running = wait(lambda sid=sid: servers()[sid]["status"] == "running")
             peers = api("GET", f"/api/servers/{sid}/config")["config_content"].count("[Peer]")
             live = len(in_container("awg", "show", iface, "peers").stdout.split())
