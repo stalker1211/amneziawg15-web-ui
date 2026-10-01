@@ -94,8 +94,9 @@ class TrafficTests(unittest.TestCase):
         geo.assert_called_with("198.51.100.7")
         self.assertEqual(
             info,
-            {"received_bytes": 1_457_520, "sent_bytes": 6_909_870, "endpoint": "198.51.100.7:60848", "geo": "Somewhere",
-             "geo_country_code": "NL", "latest_handshake_at": NOW - 62, "latest_handshake_seconds": 62, "active": True},
+            {"received_bytes": 1_457_520, "sent_bytes": 6_909_870, "received_bps": 0, "sent_bps": 0,
+             "endpoint": "198.51.100.7:60848", "geo": "Somewhere", "geo_country_code": "NL",
+             "latest_handshake_at": NOW - 62, "latest_handshake_seconds": 62, "active": True},
         )  # fmt: skip
 
     def test_active_boundary_is_five_minutes(self):

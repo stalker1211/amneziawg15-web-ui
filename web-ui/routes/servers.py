@@ -273,6 +273,20 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             }
         )
 
+    @server_bp.route("/api/servers/<server_id>/traffic")
+    def get_server_traffic(server_id):
+        """The server's traffic history (services/history.py) for ?range=1h|6h|24h, per
+        client, in the daemon's terms: 1h every tick, 6h and 24h per minute; a point
+        with no data is null. Kept in memory since the panel started (`since`)."""
+        server = server_or_404(server_id)
+        range_name = request.args.get("range", "1h")
+        if range_name not in amnezia_manager.history.RANGES:
+            raise ValueError(f"Unknown range {range_name!r}: use 1h, 6h or 24h")
+        client_ids = [client.get("id") for client in server.get("clients", [])]
+        return jsonify(
+            {"server_id": server_id, "range": range_name, **amnezia_manager.history.series(server_id, range_name, client_ids)}
+        )
+
     @server_bp.route("/api/servers/<server_id>/config")
     def get_server_config(server_id):
         server = server_or_404(server_id)

@@ -453,6 +453,12 @@ CLIENT_KEYS = {
     "allowed_ips", "client_ip", "client_params", "client_public_key", "config_issued_at", "config_outdated", "created_at", "id",
     "name", "protocol", "server_id", "server_name", "status", "suspended",
 }  # fmt: skip
+# A client's telemetry in `traffic` (and in each traffic_update): the daemon's counters,
+# and since 2.5 its rates over the last tick (bit/s), so the page never differences them.
+TRAFFIC_KEYS = {
+    "received_bytes", "sent_bytes", "received_bps", "sent_bps", "endpoint", "geo", "geo_country_code",
+    "latest_handshake_at", "latest_handshake_seconds", "active",
+}  # fmt: skip
 
 
 class ApiContractTests(unittest.TestCase):
@@ -515,6 +521,15 @@ class ApiContractTests(unittest.TestCase):
         server_conf = self.client.get(f"/api/servers/{self.server['id']}/config").get_json()["config_content"]
         self.assertIn(self.manager.get_server(self.server["id"])["server_private_key"], server_conf)
 
+    def test_traffic_payload(self):
+        # A running interface (in the dump) with no peer yet: every client still gets
+        # its entry, with zero rates.
+        self.manager._telemetry = {"at": 1.0, "interfaces": {self.server["interface"]: {}}, "read": True}
+        traffic = self.client.get("/api/servers").get_json()[0]["traffic"]
+        entry = traffic[self.added["client"]["id"]]
+        self.assertEqual(set(entry), TRAFFIC_KEYS)
+        self.assertEqual((entry["received_bps"], entry["sent_bps"]), (0, 0))
+
     def test_info_payload(self):
         info = self.client.get(f"/api/servers/{self.server['id']}/info").get_json()
         self.assertEqual(
@@ -526,6 +541,54 @@ class ApiContractTests(unittest.TestCase):
             },
         )  # fmt: skip
         self.assertEqual((info["clients_count"], info["status"], info["protocol"]), (1, "stopped", "AWG 3.1"))
+
+
+class TrafficHistoryRouteTests(unittest.TestCase):
+    """GET /api/servers/<sid>/traffic: the history the Traffic dialog and the charts draw."""
+
+    def setUp(self):
+        from services.history import TrafficHistory
+
+        self.app, self.manager = build_app()
+        self.client = self.app.test_client()
+        self.server = _create_server(self.client)
+        self.phone = self.client.post(f"/api/servers/{self.server['id']}/clients", json={"name": "phone"}).get_json()
+        self.cid = self.phone["client"]["id"]
+        t0 = 1_790_718_000
+        self.manager.history = TrafficHistory(clock=lambda: t0 + 14)
+        for k, rx in enumerate((0, 7_000_000, 14_000_000)):
+            self.manager.history.record(t0 + 7 * k, {self.server["id"]: {self.cid: ("o", rx, 0)}})
+
+    def get(self, query=""):
+        return self.client.get(f"/api/servers/{self.server['id']}/traffic{query}")
+
+    def test_the_last_hour_by_default(self):
+        body = self.get().get_json()
+        self.assertEqual(set(body), {"server_id", "range", "since", "now", "t", "clients", "totals"})
+        self.assertEqual((body["server_id"], body["range"], len(body["t"])), (self.server["id"], "1h", 3))
+        self.assertEqual(body["clients"][self.cid], {"received_bps": [0, 8_000_000, 8_000_000], "sent_bps": [0, 0, 0],
+                                                     "state": "ooo"})  # fmt: skip
+        self.assertEqual(body["totals"][self.cid], {"received_bytes": 14_000_000, "sent_bytes": 0})
+
+    def test_minute_ranges(self):
+        for name, points in (("6h", 360), ("24h", 1440)):
+            body = self.get(f"?range={name}").get_json()
+            self.assertEqual((body["range"], len(body["t"]), len(body["clients"][self.cid]["state"])), (name, points, points))
+            self.assertIsNone(body["clients"][self.cid]["received_bps"][0])  # no data: null, not 0
+
+    def test_an_unknown_range_is_a_400(self):
+        response = self.get("?range=2h")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("2h", response.get_json()["error"])
+
+    def test_only_the_servers_current_clients(self):
+        self.assertEqual(self.client.delete(f"/api/servers/{self.server['id']}/clients/{self.cid}", json={}).status_code, 200)
+        self.assertEqual(self.get().get_json()["clients"], {})
+
+    def test_read_only(self):
+        with mock.patch.object(self.manager, "save_config") as save:
+            self.assertEqual(self.get("?range=24h").status_code, 200)
+        save.assert_not_called()
 
 
 class ServerListTests(unittest.TestCase):
@@ -683,7 +746,8 @@ class ServerRouteTests(_RealSystemApp):
             self.assertEqual(self.client.get("/api/servers").get_json()[0]["traffic"], {})
 
     def test_the_per_server_list_routes_are_gone(self):
-        for url in ("/api/clients", self._url("clients"), self._url("traffic")):
+        # .../traffic came back in 2.5 as the traffic history (TrafficHistoryRouteTests).
+        for url in ("/api/clients", self._url("clients")):
             # 405 for .../clients, which still takes a POST (add a client).
             self.assertIn(self.client.get(url).status_code, (404, 405), url)
 

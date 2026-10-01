@@ -352,7 +352,14 @@ class BackgroundTaskTests(_Base):
 
         events = self.manager.events = FakeEvents()
         self.manager.sleep = mock.Mock(side_effect=StopLoop)
-        with mock.patch.object(self.manager, "save_config") as save, self.assertRaises(StopLoop):
+        record = self.manager.record_history
+        recorded_with = []  # what had been published when the history was recorded
+        self.manager.record_history = lambda: (recorded_with.append(list(events.published)), record())
+        with (
+            mock.patch("services.amnezia_manager.time.time", return_value=1_790_718_000.5),
+            mock.patch.object(self.manager, "save_config") as save,
+            self.assertRaises(StopLoop),
+        ):
             AmneziaManager.start_traffic_monitoring(self.manager)
 
         # One subprocess per tick, whatever the number of servers; never a config write.
@@ -361,6 +368,11 @@ class BackgroundTaskTests(_Base):
         self.assertEqual([(event, data["server_id"]) for event, data in events.published], [("traffic_update", up["id"])])
         self.assertEqual(events.published[0][1]["traffic"][client["id"]]["received_bytes"], 0)
         self.manager.sleep.assert_called_once_with(7)
+        # The history is recorded before anything is published, and the event carries
+        # the tick's time, which the page appends to its last hour.
+        self.assertEqual(recorded_with, [[]])
+        self.assertEqual(events.published[0][1]["at"], 1_790_718_000.5)
+        self.assertEqual(self.manager.history.since, 1_790_718_000.5)
 
     def test_background_work_runs_on_a_daemon_thread(self):
         # The real hook (the test managers replace it): a plain thread that never

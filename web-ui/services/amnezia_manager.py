@@ -16,6 +16,7 @@ What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
   client .conf and the outdated-config flag   generate_wireguard_client_config, config_fingerprint
   iptables, start/stop, live status           setup_iptables, start_server, get_server_status
   telemetry                                   start_traffic_monitoring, read_telemetry, get_traffic_for_server
+  traffic history, recorded                   record_history (the rings: services/history.py)
 """
 
 import base64
@@ -35,6 +36,7 @@ from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 
 from services import generator
+from services.history import TrafficHistory
 from services.netinfo import NetInfo
 
 logger = get_logger(__name__)
@@ -175,9 +177,11 @@ class AmneziaManager:
             self.save_config()
         self.public_ip = self.detect_public_ip() or self.last_known_public_ip()
 
-        # The last `awg show all dump`, parsed (read_telemetry). Memory only: the
-        # monitor never writes the config.
-        self._telemetry = {"at": 0.0, "interfaces": {}}
+        # The last `awg show all dump`, parsed (read_telemetry), and what the loop has
+        # recorded from it (services/history.py). Memory only: the monitor never writes
+        # the config.
+        self._telemetry = {"at": 0.0, "interfaces": {}, "read": False}
+        self.history = TrafficHistory()
 
         # Bring back the servers that were running (see auto_start_servers).
         if self.auto_start_servers_enabled:
@@ -1784,16 +1788,18 @@ PersistentKeepalive = 25
         self.start_background_task(probe_later)
 
     def start_traffic_monitoring(self):
-        """Read telemetry every 7 s and push each running server's to the page."""
+        """Read telemetry every 7 s, record it in the history, and push each running
+        server's to the page, with the tick's time."""
 
         def monitor_traffic():
             while True:
                 try:
-                    self.read_telemetry()
+                    at = self.read_telemetry()["at"]
+                    self.record_history()
                     for server in self.config["servers"]:
                         traffic = self.get_traffic_for_server(server["id"])
                         if traffic is not None:
-                            self.events.publish("traffic_update", {"server_id": server["id"], "traffic": traffic})
+                            self.events.publish("traffic_update", {"server_id": server["id"], "at": at, "traffic": traffic})
                     self.sleep(7)
                 except Exception as e:
                     logger.error("Error in traffic monitoring: %s", e)
@@ -1849,8 +1855,34 @@ PersistentKeepalive = 25
         interfaces appear in it.
         """
         output = self.run_command(["/usr/bin/awg", "show", "all", "dump"])
-        self._telemetry = {"at": time.time(), "interfaces": self.parse_dump(output or "")}
+        # `read` is False when awg failed: no interface then means no reading, not
+        # every server stopped.
+        self._telemetry = {"at": time.time(), "interfaces": self.parse_dump(output or ""), "read": output is not None}
         return self._telemetry
+
+    def record_history(self):
+        """The last snapshot into the traffic history (services/history.py): each
+        client's counters and state on each running server. A failed read records
+        nothing, so the next tick's deltas span both."""
+        if not self._telemetry["read"]:
+            return
+        samples = {}
+        for server in self.config["servers"]:
+            if server.get("interface") not in self._telemetry["interfaces"]:
+                samples[server["id"]] = None  # stopped: a gap
+                continue
+            clients = {}
+            for client in server.get("clients", []):
+                info, seconds = self._peer_telemetry(server, client)
+                if client.get("suspended"):
+                    state = TrafficHistory.SUSPENDED
+                elif seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS:
+                    state = TrafficHistory.ONLINE
+                else:
+                    state = TrafficHistory.OFFLINE
+                clients[client.get("id")] = (state, info.get("rx"), info.get("tx"))
+            samples[server["id"]] = clients
+        self.history.record(self._telemetry["at"], samples)
 
     @staticmethod
     def endpoint_ip(endpoint):
@@ -1867,19 +1899,23 @@ PersistentKeepalive = 25
         return info, seconds
 
     def get_traffic_for_server(self, server_id):
-        """Per-client traffic of a running server from the last snapshot, or None when
-        the server is unknown or its interface is not running."""
+        """Per-client traffic of a running server from the last snapshot, with the rates
+        over the last recorded tick, or None when the server is unknown or its interface
+        is not running."""
         server = self.get_server(server_id)
         if not server or server["interface"] not in self._telemetry["interfaces"]:
             return None
 
-        traffic = {}
+        traffic, rates = {}, self.history.rates(server_id)
         for client in server.get("clients", []):
             info, seconds = self._peer_telemetry(server, client)
             geo_label, geo_country_code = self.netinfo.lookup_geoip_cached(self.endpoint_ip(info.get("endpoint")))
+            received_bps, sent_bps = rates.get(client.get("id"), (0, 0))
             traffic[client.get("id")] = {
                 "received_bytes": info.get("rx", 0),
                 "sent_bytes": info.get("tx", 0),
+                "received_bps": received_bps,
+                "sent_bps": sent_bps,
                 "endpoint": info.get("endpoint"),
                 "geo": geo_label,
                 "geo_country_code": geo_country_code,
