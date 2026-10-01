@@ -32,6 +32,13 @@
   `POST /api/generate` with `signature_profile`, `server_id` and `host` answers
   `signature_packets`, `signature_host` and `signature_notes`.
 
+### Client parameters
+- **Generate per group:** the client drawer's junk row (Jc, Jmin, Jmax) and, on AWG 3.x,
+  its timers and content padding each have a **Generate**, beside the one for I1–I5. Each
+  redraws its own group only, from the server's generator (timers that keep WireGuard's
+  rules, Jmax at least 64 above Jmin); nothing is saved until Save. A server switched to
+  AWG 3.x keeps no 3.x client defaults of its own, so its new clients get timers this way.
+
 ### Tooling
 - **The release checker, `tests/release_check.py`**: the image from the tree, checked
   end to end in one command (about 3 minutes). It builds the image, checks it carries the tree, boots it with no

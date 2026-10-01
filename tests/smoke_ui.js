@@ -282,6 +282,34 @@ function check(label, condition, detail) {
                 !document.getElementById('c-iNote').hidden && /UDP 53/.test(document.getElementById('c-iNote').textContent)));
             check(`${protocol} generated packets pass the check and can be saved`, await page.evaluate(() =>
                 !document.getElementById('drawerPrimary').disabled));
+            // Generate per group: the junk row, and on AWG 3.x the timers and padding;
+            // each fills its own fields only.
+            const groups = await page.evaluate(async (want3) => {
+                const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+                const val = (k) => document.getElementById(`c-${k}`)?.value ?? null;
+                const button = (g) => document.querySelector(`[data-action="generate-client-group"][data-group="${g}"]`);
+                const i1 = val('I1');
+                const timers = val('RekeyAfterTime');
+                button('junk').click();
+                await wait(1200);
+                const [jc, jmin, jmax] = ['Jc', 'Jmin', 'Jmax'].map((k) => Number(val(k)));
+                const out = {
+                    junk: jc >= 4 && jc <= 12 && jmax - jmin >= 64 && jmax <= 160,
+                    junkOnly: val('I1') === i1 && val('RekeyAfterTime') === timers,
+                    awg3Button: !!button('awg3') === want3,
+                };
+                if (want3) {
+                    button('awg3').click();
+                    await wait(1200);
+                    out.awg3 = /^\d+-\d+$/.test(val('RejectAfterTime')) && /^\d+-\d+$/.test(val('ContentPaddingAddition'))
+                        && Number(val('RekeyAfterTime').split('-')[1]) < Number(val('RejectAfterTime').split('-')[0]);
+                    out.awg3Only = Number(val('Jc')) === jc && val('I1') === i1;
+                }
+                out.saveable = !document.getElementById('drawerPrimary').disabled;
+                return out;
+            }, awg3);
+            check(`${protocol} Generate per group fills its own fields, and they pass the check`,
+                Object.values(groups).every(Boolean), groups);
             await page.evaluate(() => window.Ui.closeDrawer());
 
             await page.evaluate((s, c) => amneziaApp.showClientQRCode(s, c), id, clientId);

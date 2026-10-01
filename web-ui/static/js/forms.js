@@ -146,6 +146,11 @@ class FormUi {
         return `
             <p class="text-xs text-gray-700 dark:text-[#bac5d4]">From the server, the same for every client:
                 <span class="text-gray-800 dark:text-[#d7dee9]">${safe(protocol)} · ${safe(this.formatTransportParamsSummary(protocol, server.transport_params || {}))}</span></p>
+            <div class="flex items-center justify-between gap-3">
+                <p class="text-xs font-medium text-gray-800 dark:text-[#d7dee9]">Junk packets
+                    <span class="font-normal text-gray-600 dark:text-[#98a6ba]">random, before every handshake</span></p>
+                ${this.clientGroupButton('junk')}
+            </div>
             <div class="grid grid-cols-3 gap-3">
                 ${this.formField('c-Jc', 'Jc', params.Jc ?? 8, { type: 'number', mono: true, hint: 'junk packets' })}
                 ${this.formField('c-Jmin', 'Jmin', params.Jmin ?? 8, { type: 'number', mono: true, hint: 'bytes' })}
@@ -167,12 +172,43 @@ class FormUi {
             </details>
             ${P.supportsAwg3(protocol) ? `
             <div class="flex flex-col gap-3">
-                <p class="text-xs font-medium text-gray-800 dark:text-[#d7dee9]">AWG 3.x timing and padding
-                    <span class="font-normal text-gray-600 dark:text-[#98a6ba]">a number or a range like 22-30; empty keeps the default</span></p>
+                <div class="flex items-center justify-between gap-3">
+                    <p class="text-xs font-medium text-gray-800 dark:text-[#d7dee9]">AWG 3.x timing and padding
+                        <span class="font-normal text-gray-600 dark:text-[#98a6ba]">a number or a range like 22-30; empty keeps the default</span></p>
+                    ${this.clientGroupButton('awg3')}
+                </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     ${AmneziaApp.AWG3_CLIENT_PARAM_KEYS.map((k) => this.formField(`c-${k}`, k, params[k] || '', { mono: true, placeholder: 'default' })).join('')}
                 </div>
             </div>` : ''}`;
+    }
+
+    // Generate for one group of client-side fields: the junk row, or the AWG 3.x timers
+    // and padding. A group is drawn together (Jmin <= Jmax; the timers keep each other's
+    // rules), groups apart, so redrawing one leaves the others as they are.
+    clientGroupButton(group) {
+        return `<button type="button" class="btn btn-secondary btn-sm flex-none" data-action="generate-client-group" data-group="${group}">Generate</button>`;
+    }
+
+    // Fills the group's fields from the server's generator (POST /api/generate, the
+    // client_defaults it draws for the server's protocol). Nothing is saved; the drawer
+    // checks them like any edit and Save keeps them.
+    async generateClientGroup(group) {
+        const ctx = this.drawerCtx;
+        const server = (this.lastServers || []).find((s) => s.id === ctx?.serverId);
+        if (!server) return;
+        const keys = group === 'awg3' ? AmneziaApp.AWG3_CLIENT_PARAM_KEYS : ['Jc', 'Jmin', 'Jmax'];
+        try {
+            const data = await this.fetchGenerated(server.protocol, server.mtu);
+            if (ctx !== this.drawerCtx) return;
+            keys.forEach((k) => {
+                const el = document.getElementById(`c-${k}`);
+                if (el && data.client_defaults?.[k] !== undefined) el.value = data.client_defaults[k];
+            });
+            this.scheduleDrawerCheck();
+        } catch (error) {
+            this.showTempMessage(`Could not generate parameters: ${error.message}`, 'error');
+        }
     }
 
     // Generate for I1-I5: a profile (page_config's signatureProfiles), a host for the

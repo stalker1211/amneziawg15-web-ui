@@ -386,7 +386,11 @@ four disjoint H ranges under 2³¹−1, S sizes that never make two message type
 same length, a small junk train (Jc 4–12, Jmax ≤ 160), and on AWG 3.x a header
 protection key, content padding and timers that keep WireGuard's timer rules. With a
 key, H stays four custom ranges: docs.amnezia.org suggests 1–4 there, since the cipher
-hides the message type, and both work. **Randomize** draws a fresh set.
+hides the message type, and both work. **Randomize** draws a fresh set. In a client's
+drawer, each group of client-side parameters has its own **Generate**: the junk packets
+(Jc, Jmin, Jmax), I1–I5 (below), and on AWG 3.x the timers and content padding. One
+group is redrawn without touching the others; Save keeps the values. All of them are
+drawn by the server, and nothing is generated for a client unless you press Generate.
 
 ## 🔍 Logs, backup and debugging
 

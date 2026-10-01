@@ -211,6 +211,7 @@ class AmneziaApp {
             'randomize': () => this.generateRandomParams(),
             'generate-key': () => this.fillHeaderProtectionKey('t-HeaderProtectionKey'),
             'generate-signatures': () => this.generateSignaturePackets(),
+            'generate-client-group': (el) => this.generateClientGroup(el.dataset.group),
             'copy-public-key': () => this.copyText(document.getElementById('s-publicKey')?.textContent, 'Public key'),
             'show-checks': () => document.getElementById('checks')?.scrollIntoView({ block: 'nearest' }),
             'open-settings': () => this.openSettings(),
