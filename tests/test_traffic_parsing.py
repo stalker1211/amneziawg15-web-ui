@@ -32,7 +32,7 @@ def interface_line(iface):
     )  # fmt: skip
 
 
-def peer_line(iface, key, endpoint="198.51.100.7:60848", handshake=NOW - 62, rx=1_457_520, tx=6_909_870):
+def peer_line(iface, key, endpoint="198.51.100.7:60848", handshake=NOW - 62, rx: int | str = 1_457_520, tx=6_909_870):
     return "\t".join([iface, key, "cHNr", endpoint, "10.64.0.2/32", str(handshake), str(rx), str(tx), "off"])
 
 
@@ -179,7 +179,9 @@ class TrafficTests(unittest.TestCase):
     def test_client_status_is_derived_and_never_stored(self):
         self.read({})
         self.assertEqual(self.manager.client_status(self.client), "active")
-        self.assertNotIn("status", self.manager.get_client(self.client["id"]))
+        client = self.manager.get_client(self.client["id"])
+        assert client is not None
+        self.assertNotIn("status", client)
         self.read({"handshake": NOW - 600})
         self.assertEqual(self.manager.client_status(self.client), "inactive")
         # The monitor reads telemetry every 7 s; it must never write the config.

@@ -144,7 +144,7 @@ class ThroughTheValidatorsTests(unittest.TestCase):
         self.assertTrue(all("-" not in str(awg15[k]) for k in ("H1", "H2", "H3", "H4")))
         awg20 = self.m.generate_transport_params("AWG 2.0", 1420)
         self.assertEqual(set(awg20), {"S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4"})
-        self.assertTrue(all("-" in awg20[k] for k in ("H1", "H2", "H3", "H4")))
+        self.assertTrue(all("-" in str(awg20[k]) for k in ("H1", "H2", "H3", "H4")))
         for protocol in ("AWG 3.0", "AWG 3.1"):
             params = self.m.generate_transport_params(protocol, 1420)
             self.assertTrue(self.m.is_valid_wireguard_key(params["HeaderProtectionKey"]), protocol)

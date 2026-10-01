@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Version 2.6 (unreleased)
+## Version 2.6 (2026-10-01)
 
 ### Traffic
 - **Server totals:** beside a running server's traffic graph, a box with what it has

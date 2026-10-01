@@ -59,8 +59,9 @@ def register_settings_routes(app, amnezia_manager, access, *, build_label):
         """Nothing is applied unless all of it is valid, the current password included."""
         data = request.get_json(silent=True)
         data = data if isinstance(data, dict) else {}
-        changes = data.get("settings") if isinstance(data.get("settings"), dict) else {}
-        credential = data.get("access") if isinstance(data.get("access"), dict) else {}
+        changes, credential = data.get("settings"), data.get("access")
+        changes = changes if isinstance(changes, dict) else {}
+        credential = credential if isinstance(credential, dict) else {}
 
         _values, errors = settings.check(changes)
         if errors:

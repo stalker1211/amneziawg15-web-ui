@@ -9,6 +9,7 @@ tests/test_system_edges.py.
 
 import json
 import unittest
+from typing import Any
 from unittest import mock
 
 # pylint: disable=missing-function-docstring,missing-class-docstring,protected-access,wrong-import-order
@@ -145,7 +146,7 @@ class EgressProbeTests(_Base):
         self.assertEqual(get.call_args.kwargs["source_ip"], "10.0.0.1")
 
     def test_bad_answers_raise_with_the_service_named_once(self):
-        cases = (
+        cases: tuple[tuple[dict[str, Any], str], ...] = (
             ({"return_value": _Response(503)}, r"^https://ident\.me: HTTP 503$"),
             ({"return_value": _Response(text="nope")}, r"^https://ident\.me: invalid IP response 'nope'$"),
             ({"side_effect": OSError("x")}, r"^https://ident\.me: x$"),

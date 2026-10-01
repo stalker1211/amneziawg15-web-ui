@@ -31,7 +31,7 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
@@ -297,6 +297,8 @@ class AmneziaManager:
 
     def apply_settings(self):
         """Take GeoIP and the daemon's log level from the settings."""
+        if self.settings is None:
+            return
         values = self.settings.values
         self.netinfo.enable_geoip = values["geoip"]
         self.awg_log_level = values["awg_log_level"]
@@ -707,7 +709,7 @@ class AmneziaManager:
 
         return config
 
-    def load_config(self):
+    def load_config(self) -> dict[str, Any]:
         if os.path.exists(self.config_file):
             with open(self.config_file, "r", encoding="utf-8") as f:
                 return self.migrate_config_schema(json.load(f))

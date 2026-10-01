@@ -10,6 +10,7 @@ import ast
 import base64
 import contextlib
 import copy
+import email.message
 import importlib.util
 import io
 import json
@@ -34,6 +35,7 @@ PROBE = {
 
 def _load_script():
     spec = importlib.util.spec_from_file_location("api_status", SCRIPT)
+    assert spec is not None and spec.loader is not None, SCRIPT
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -114,7 +116,12 @@ class ApiStatusTests(unittest.TestCase):
 
     def test_errors_are_reported(self):
         cases = (
-            (urllib.error.HTTPError("http://panel.test:8080/api/servers", 401, "Unauthorized", {}, None), "HTTP 401"),
+            (
+                urllib.error.HTTPError(
+                    "http://panel.test:8080/api/servers", 401, "Unauthorized", email.message.Message(), None
+                ),
+                "HTTP 401",
+            ),
             (urllib.error.URLError("refused"), "invalid response: <urlopen error refused>"),
         )
         for error, message in cases:

@@ -171,7 +171,8 @@ def padding_sizes(*, with_s34, header_protection, mtu):
 
 def transport_params(*, with_s34, header_ranges, awg3, mtu, header_protection_key=None):
     """Server-side parameters: S1-S4, H1-H4 and, on AWG 3.x, a HeaderProtectionKey."""
-    params = padding_sizes(with_s34=with_s34, header_protection=awg3, mtu=mtu)
+    # S values are ints; H ranges and the key are strings.
+    params: dict[str, int | str] = {**padding_sizes(with_s34=with_s34, header_protection=awg3, mtu=mtu)}
     for key in ("H1", "H2", "H3", "H4"):
         params[key] = header_range(key) if header_ranges else str(header_single(key))
     if awg3 and header_protection_key:

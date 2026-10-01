@@ -410,7 +410,7 @@ class RouteNotFoundTests(_RealSystemApp):
     def _routes(self, needs):
         for rule in self.app.url_map.iter_rules():
             if needs in rule.arguments:
-                for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+                for method in sorted((rule.methods or set()) - {"HEAD", "OPTIONS"}):
                     yield rule, method
 
     def _call(self, rule, method, server_id, client_id="nope"):

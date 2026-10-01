@@ -61,8 +61,9 @@ class LegacyConfigMigrationTests(unittest.TestCase):
         self.config_file = os.path.join(self.tmp, "web_config.json")
         Path(self.config_file).write_text(json.dumps(config), encoding="utf-8")
         self.manager = build_manager(config_dir=self.tmp, wireguard_config_dir=self.tmp, config_file=self.config_file)
-        self.server = self.manager.get_server("leg151")
-        self.client = self.manager.get_client("cli151")
+        server, client = self.manager.get_server("leg151"), self.manager.get_client("cli151")
+        assert server is not None and client is not None  # the fixture's ids
+        self.server, self.client = server, client
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -168,7 +169,9 @@ class TwoStoreMigrationTests(unittest.TestCase):
         self.assertNotIn("clients", manager.config)
         self.assertEqual([c["id"] for c in manager.get_client_configs()], [self.phone["id"]])
         self.assertIs(manager.get_client(self.phone["id"]), manager.get_server(self.home["id"])["clients"][0])
-        self.assertNotIn("server_name", manager.get_client(self.phone["id"]))
+        client = manager.get_client(self.phone["id"])
+        assert client is not None
+        self.assertNotIn("server_name", client)
 
     def test_a_client_only_in_the_map_joins_its_servers_list(self):
         def orphan_from_list(data):

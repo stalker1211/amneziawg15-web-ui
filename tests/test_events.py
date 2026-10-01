@@ -10,6 +10,7 @@ browser need.
 import json
 import threading
 import unittest
+from typing import cast
 
 from core.events import PING, EventBroadcaster, format_event
 
@@ -102,7 +103,7 @@ class EventsRouteTests(unittest.TestCase):
             self.assertEqual(response.headers["X-Accel-Buffering"], "no")  # nginx passes it through
             self.assertEqual(response.headers["Cache-Control"], "no-cache")
             body = iter(response.response)
-            self.assertTrue(next(body).startswith(b"retry: "))
+            self.assertTrue(cast(bytes, next(body)).startswith(b"retry: "))
             manager.events.publish("server_status", {"server_id": "a1", "status": "stopped"})
             self.assertEqual(parse(next(body)), ("server_status", {"server_id": "a1", "status": "stopped"}))
         finally:

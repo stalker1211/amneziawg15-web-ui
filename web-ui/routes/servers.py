@@ -128,7 +128,8 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
             if settings is None:
                 abort(400, description="This panel has no settings")
             values, errors = settings.check(data.get("settings") or {})
-            credential = data.get("access") if isinstance(data.get("access"), dict) else {}
+            access = data.get("access")
+            credential = access if isinstance(access, dict) else {}
             errors += Access.check_new(credential.get("user"), credential.get("password"))
             if values.get("awg_log_level") == "debug":
                 warnings.append(

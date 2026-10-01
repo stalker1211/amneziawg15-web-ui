@@ -8,7 +8,7 @@ Everything is configurable in the panel, including its own settings (⚙ in the
 header: sign-in, logging, GeoIP). An environment variable can
 pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
 
-Current version: **2.5**
+Current version: **2.6**
 
 > Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, the
 > state model, protocol/parameter details, conventions and open items.
@@ -293,8 +293,8 @@ This repo includes a convenience script that builds and runs a local container:
 
 ### Image tags
 
-`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.5` and so on pin a
-release. The version under the page heading (e.g. `v2.5 build 20261001.1`) shows
+`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.6` and so on pin a
+release. The version under the page heading (e.g. `v2.6 build 20261001.1`) shows
 exactly which one is running.
 
 ### Docker Compose Example
