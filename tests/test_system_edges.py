@@ -9,6 +9,7 @@ each operation produces, and what it does when a command fails, are pinned down.
 import ast
 import json
 import os
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -19,7 +20,7 @@ from tests.support import (
     SERVER_PRIVATE_KEY,
     SERVER_PUBLIC_KEY,
     WEB_UI_DIR,
-    FakeSocketIO,
+    FakeEvents,
     SystemPaths,
     build_real_manager,
 )
@@ -116,7 +117,7 @@ class StartStopTests(_Base):
         self.assertEqual((setup["env"]["ENABLE_NAT"], setup["env"]["BLOCK_LAN_CIDRS"]), ("0", "1"))
 
         self.assertEqual(self._saved()["servers"][0]["status"], "running")
-        self.assertIn(("server_status", {"server_id": server["id"], "status": "running"}), self.manager.socketio.emitted)
+        self.assertIn(("server_status", {"server_id": server["id"], "status": "running"}), self.manager.events.published)
 
     def test_the_panels_log_level_never_reaches_the_daemon(self):
         # With any LOG_LEVEL the daemon keeps run_command's stdout pipe open and
@@ -302,23 +303,37 @@ class BackgroundTaskTests(_Base):
         dump += "\t".join([iface, key, "psk", "(none)", "10.55.0.2/32", "0", "0", "0", "off"]) + "\n"  # noqa: FLY002
         self.fake.respond(["/usr/bin/awg", "show", "all", "dump"], dump)
 
-        socketio = FakeSocketIO(run_tasks=True)
-        socketio.sleep = mock.Mock(side_effect=StopLoop)
-        self.manager.socketio = socketio
+        events = self.manager.events = FakeEvents()
+        self.manager.sleep = mock.Mock(side_effect=StopLoop)
         with mock.patch.object(self.manager, "save_config") as save, self.assertRaises(StopLoop):
             AmneziaManager.start_traffic_monitoring(self.manager)
 
         # One subprocess per tick, whatever the number of servers; never a config write.
         self.assertEqual(self.fake.argvs(), [["/usr/bin/awg", "show", "all", "dump"]])
         save.assert_not_called()
-        self.assertEqual([(event, data["server_id"]) for event, data in socketio.emitted], [("traffic_update", up["id"])])
-        self.assertEqual(socketio.emitted[0][1]["traffic"][client["id"]]["received_bytes"], 0)
-        socketio.sleep.assert_called_once_with(7)
+        self.assertEqual([(event, data["server_id"]) for event, data in events.published], [("traffic_update", up["id"])])
+        self.assertEqual(events.published[0][1]["traffic"][client["id"]]["received_bytes"], 0)
+        self.manager.sleep.assert_called_once_with(7)
+
+    def test_background_work_runs_on_a_daemon_thread(self):
+        # The real hook (the test managers replace it): a plain thread that never
+        # keeps the process alive.
+        from services.amnezia_manager import AmneziaManager
+
+        ran, seen = threading.Event(), {}
+
+        def target():
+            seen["daemon"] = threading.current_thread().daemon
+            ran.set()
+
+        AmneziaManager.start_background_task(target)
+        self.assertTrue(ran.wait(2))
+        self.assertTrue(seen["daemon"])
 
     def test_status_is_emitted_after_the_delay(self):
         self.manager.emit_status_after_delay("abc", "running", delay_seconds=3)
-        self.assertEqual(self.manager.socketio.slept[-1], 3)
-        self.assertEqual(self.manager.socketio.emitted[-1], ("server_status", {"server_id": "abc", "status": "running"}))
+        self.assertEqual(self.manager.slept[-1], 3)
+        self.assertEqual(self.manager.events.published[-1], ("server_status", {"server_id": "abc", "status": "running"}))
 
 
 class _Response:
@@ -432,7 +447,7 @@ class GeoIpTests(_Base):
     def test_the_cached_lookup_never_waits_and_resolves_in_the_background(self):
         # The traffic loop reads the cache only; a miss is looked up in a background task.
         tasks = []
-        self.manager.socketio.start_background_task = lambda target: tasks.append(target)
+        self.manager.start_background_task = lambda target: tasks.append(target)
         with mock.patch(f"{MODULE}.requests.get") as get:
             self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), (None, None))
             self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), (None, None))

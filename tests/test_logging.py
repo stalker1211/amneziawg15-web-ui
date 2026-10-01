@@ -58,7 +58,7 @@ class LoggingSetupTests(unittest.TestCase):
 
     def test_noisy_third_party_loggers_are_quietened(self):
         self.configure_logging("DEBUG")
-        for name in ("werkzeug", "engineio", "socketio", "urllib3"):
+        for name in ("werkzeug", "urllib3"):
             self.assertEqual(logging.getLogger(name).level, logging.WARNING, name)
 
     def test_records_include_timestamp_level_and_module(self):

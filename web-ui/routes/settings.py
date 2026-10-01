@@ -16,9 +16,7 @@ from werkzeug.exceptions import HTTPException
 logger = get_logger(__name__)
 
 
-def register_settings_routes(app, amnezia_manager, access, *, build_label, rotate_secret_key):
-    """`rotate_secret_key()` replaces the Flask secret key (core/guards.py) after a
-    credential change, so a tab holding the old /socket.io/ cookie has to sign in again."""
+def register_settings_routes(app, amnezia_manager, access, *, build_label):
     settings_bp = Blueprint("settings_routes", __name__)
     settings = amnezia_manager.settings
 
@@ -71,7 +69,6 @@ def register_settings_routes(app, amnezia_manager, access, *, build_label, rotat
         access_changed = bool(credential.get("user") is not None or credential.get("password") is not None)
         if access_changed:
             access.change(credential.get("current_password"), user=credential.get("user"), password=credential.get("password"))
-            rotate_secret_key()
             logger.info("The panel's credential was changed in Settings")
 
         changed = settings.update(amnezia_manager.config.setdefault("settings", {}), changes)

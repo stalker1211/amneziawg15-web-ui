@@ -9,8 +9,8 @@ One rule for every setting (DEVELOPMENT.md §11, "Settings: one rule"):
 
 Removing a variable therefore keeps its last value, now editable, and the first 2.4
 boot copies today's environment, so upgrading changes nothing. An invalid value is
-logged and ignored. Deployment-only variables (NGINX_PORT, ALLOWED_ORIGINS,
-AWG_LOG_FILE) are not settings and stay in app.py.
+logged and ignored. Deployment-only variables (NGINX_PORT, AWG_LOG_FILE) are not
+settings and stay in app.py; retired ones are listed in RETIRED.
 
 The Basic Auth credential is not stored here but in /etc/amnezia/.htpasswd, which
 nginx reads directly (see Access).
@@ -103,6 +103,7 @@ FIELDS = {
 RETIRED = {
     "API_TOKEN": "removed in 2.4; nginx Basic Auth is the only credential",
     "AUTO_START_SERVERS": "removed in 2.5; each server comes back as it was last left",
+    "ALLOWED_ORIGINS": "removed in 2.5 with Socket.IO; live updates are an ordinary request behind Basic Auth",
 }
 
 

@@ -1,8 +1,8 @@
 """Serve the real panel with invented example data: for trying the UI, the smoke
 tests and screenshots, with no container and no AmneziaWG.
 
-Everything is the production code (routes, guards, Socket.IO, the traffic loop and
-its `awg show all dump` parser) except the system edges of the manager: keys, awg-quick, ip,
+Everything is the production code (routes, guards, the event stream, the traffic loop
+and its `awg show all dump` parser) except the system edges of the manager: keys, awg-quick, ip,
 iptables, GeoIP and the egress probe are answered here. Addresses come from the
 documentation ranges and keys are random, so nothing real can leak into a screenshot.
 
@@ -17,6 +17,7 @@ import argparse
 import base64
 import hashlib
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -26,9 +27,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "web-ui"))
 
-from core.guards import install_guards, rotate_secret_key
+from core.events import EventBroadcaster
+from core.guards import install_guards
 from core.helpers import to_bool
-from core.runtime import create_flask_app, create_socketio, register_socket_handlers
+from core.runtime import create_flask_app
 from core.settings import Access, Settings
 from flask import send_from_directory
 from routes.servers import register_server_routes
@@ -242,9 +244,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="awg-demo-")
     web_ui = REPO / "web-ui"
     app = create_flask_app(str(web_ui / "templates"), str(web_ui / "static"))
-    secret_key = os.path.join(tmp, ".flask_secret_key")
-    install_guards(app, secret_key_path=secret_key)
-    socketio = create_socketio(app, None)
+    install_guards(app)
     # Settings as a deployment would have them: DEFAULT_MTU pinned by its variable (the
     # drawer shows it read-only), the rest stored; and the default admin/changeme
     # credential with its banner, as start.sh leaves a fresh volume.
@@ -256,7 +256,7 @@ def main():
     access = Access(os.path.join(tmp, ".htpasswd"), environ={})
     Path(access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
     manager = DemoManager(
-        socketio_instance=socketio, auto_start_servers=False, dns_servers=["1.1.1.1", "9.9.9.9"],
+        events=EventBroadcaster(), auto_start_servers=False, dns_servers=["1.1.1.1", "9.9.9.9"],
         default_enable_nat=True, default_block_lan_cidrs=True, config_dir=tmp, enable_geoip=True,
         default_mtu=1420, default_subnet="10.10.0.0/24", default_port=51820, settings=settings,
     )  # fmt: skip
@@ -267,9 +267,7 @@ def main():
 
     register_system_routes(app, manager, awg_log_file=log_file, nginx_port=str(args.port))
     register_server_routes(app, manager, to_bool=to_bool)
-    register_settings_routes(app, manager, access, build_label=args.label,
-                             rotate_secret_key=lambda: rotate_secret_key(app, secret_key))  # fmt: skip
-    register_socket_handlers(socketio, manager, str(args.port))
+    register_settings_routes(app, manager, access, build_label=args.label)
 
     @app.route("/")
     def index():
@@ -280,7 +278,8 @@ def main():
         return send_from_directory(str(web_ui / "static"), filename)
 
     print(f"Demo panel on http://127.0.0.1:{args.port}/ (state in {tmp})", flush=True)
-    socketio.run(app, host="127.0.0.1", port=args.port, allow_unsafe_werkzeug=True, log_output=False)
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)  # no line per request
+    app.run(host="127.0.0.1", port=args.port, threaded=True)
 
 
 if __name__ == "__main__":

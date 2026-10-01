@@ -9,18 +9,18 @@
 //   the data-action dispatcher     setupActions, setupEventListeners
 //   theme                          getPreferredTheme ... updateThemeButton
 //   protocol field gating          toggleProtocolFields
-//   live updates over Socket.IO    setupSocketLifecycleHandlers ... setupSocketIO, updateStatus
+//   live updates (/api/events)     setupLiveUpdates, openEvents, recoverEvents, updateStatus
 //   public IP and egress probe     updatePublicIp, refreshPublicIp, probeServerEgressIp
 //   loading and rendering          loadServers (the one request), renderServers, updateServerTraffic
 //   page actions                   deleteServer ... toggleServer, getJson/postJson, showTempMessage
 class AmneziaApp {
     constructor() {
         this.api = new window.ApiClient();
-        this.socket = null;
-        this.socketHealthTimer = null;
-        this.socketReconnectFailures = 0;
-        this.socketLastRebuildAt = 0;
-        this.socketLifecycleHandlersInstalled = false;
+        // Live updates (openEvents): the EventSource while one is open, the retry
+        // after the browser gave one up, and when the last message arrived.
+        this.events = null;
+        this.eventsRetryTimer = null;
+        this.lastEventAt = 0;
         // The only page state: GET /api/servers, each server with its clients and
         // its last telemetry snapshot (`traffic`), kept current by traffic_update.
         this.lastServers = [];
@@ -50,8 +50,7 @@ class AmneziaApp {
                     + 'set by <span class="font-mono">NGINX_PASSWORD</span>. Give the variable a new value and restart.';
             }
             this.setupEventListeners();
-            this.setupSocketLifecycleHandlers();
-            this.setupSocketIO();
+            this.setupLiveUpdates();
             this.loadInitialData();
         });
     }
@@ -326,72 +325,93 @@ class AmneziaApp {
         this.updateTransportDescription(protocol, prefix);
     }
 
-    setupSocketLifecycleHandlers() {
-        if (this.socketLifecycleHandlersInstalled) return;
-        this.socketLifecycleHandlersInstalled = true;
-
-        window.addEventListener('pageshow', () => {
-            this.handleSocketResume('pageshow');
-        });
-
-        window.addEventListener('focus', () => {
-            this.handleSocketResume('focus');
-        });
-
-        window.addEventListener('online', () => {
-            this.handleSocketResume('online');
-        });
-
+    // Live updates: one EventSource on /api/events (core/events.py) carrying
+    // server_status and traffic_update. It is an ordinary request, so the browser sends
+    // its cached password with it, reconnects a dropped stream by itself, and every
+    // (re)open resyncs. The browser gives a stream up only on an answer that is not a
+    // stream -- a 401 after the password changed elsewhere, a 502 while the panel
+    // restarts -- and then recoverEvents decides what to do.
+    //
+    // A hidden tab closes its stream and opens a new one when shown, which also keeps
+    // the browser's six connections per host (plain HTTP) from running out across tabs.
+    setupLiveUpdates() {
         document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-                this.handleSocketResume('visibilitychange');
-            }
+            if (document.visibilityState === 'visible') this.openEvents();
+            else this.closeEvents();
+        });
+        // Back from the back/forward cache, which closed the stream.
+        window.addEventListener('pageshow', (event) => {
+            if (event.persisted && document.visibilityState === 'visible') this.openEvents();
+        });
+        window.addEventListener('online', () => {
+            if (document.visibilityState === 'visible' && this.events?.readyState !== EventSource.OPEN) this.openEvents();
+        });
+        // EventSource has no timeout: a connection that died without a word (a network
+        // change while the tab stayed visible) would just go quiet. The server sends
+        // something at least every 15 s (a ping when idle), so 45 s of silence means
+        // the stream is gone.
+        setInterval(() => {
+            if (this.events && Date.now() - this.lastEventAt > 45000) this.openEvents();
+        }, 15000);
+        if (document.visibilityState === 'visible') this.openEvents();
+    }
+
+    openEvents() {
+        this.closeEvents();
+        const source = new EventSource('/api/events');
+        this.events = source;
+        this.lastEventAt = Date.now();
+        // Each handler ignores a replaced stream: a late event from it must not touch
+        // the page.
+        const on = (type, handler) => source.addEventListener(type, (event) => {
+            if (source !== this.events) return;
+            this.lastEventAt = Date.now();
+            handler(event);
+        });
+        on('open', () => {
+            this.updateStatus('Connected to AmneziaWG Web UI', true);
+            this.resyncAppState();
+        });
+        on('error', () => {
+            this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
+            if (source.readyState === EventSource.CLOSED) this.recoverEvents();
+        });
+        on('ping', () => {});
+        on('server_status', () => this.loadServers());
+        on('traffic_update', (event) => {
+            const data = JSON.parse(event.data);
+            this.updateServerTraffic(data.server_id, data.traffic);
         });
     }
 
-    clearSocketHealthTimer() {
-        if (this.socketHealthTimer) {
-            clearTimeout(this.socketHealthTimer);
-            this.socketHealthTimer = null;
+    closeEvents() {
+        clearTimeout(this.eventsRetryTimer);
+        this.eventsRetryTimer = null;
+        if (this.events) {
+            this.events.close();
+            this.events = null;
         }
     }
 
-    teardownSocket() {
-        this.clearSocketHealthTimer();
-
-        if (!this.socket) return;
-
+    // The browser gave the stream up. One request through apiFetch tells why: a 401
+    // takes ApiClient's usual way to the sign-in (a reload, where the browser asks);
+    // anything else means the panel is restarting or out of reach, so try again.
+    async recoverEvents() {
+        this.closeEvents();
         try {
-            this.socket.off();
+            const response = await this.apiFetch('/api/system/status');
+            if (response.status === 401) return;
         } catch (_) {
-            // ignore
+            // Out of reach: the retry below covers it. (Safari reports a 401 this
+            // way too; ApiClient tells them apart and is then signing in.)
         }
-
-        try {
-            this.socket.disconnect();
-        } catch (_) {
-            // ignore
-        }
-
-        this.socket = null;
+        // A hidden tab opens its stream when it is shown again.
+        if (this.api.signingIn || document.visibilityState !== 'visible' || this.events) return;
+        this.eventsRetryTimer = setTimeout(() => this.openEvents(), 3000);
     }
 
-    createSocket() {
-        const socketUrl = window.location.origin;
-        return io(socketUrl, {
-            path: '/socket.io',
-            transports: ['websocket'],
-            forceNew: true,
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            timeout: 5000,
-        });
-    }
-
-    // pageshow, focus and visibilitychange tend to fire together, and a reconnect right
-    // after them; one reload serves them all.
+    // pageshow, visibilitychange and a stream opening tend to come together; one
+    // reload serves them all.
     resyncAppState() {
         const now = Date.now();
         if (now - this.lastResyncAt < 2000) return;
@@ -400,121 +420,7 @@ class AmneziaApp {
         this.loadPublicIp();
     }
 
-    scheduleSocketHealthCheck(reason, delayMs = 3000) {
-        this.clearSocketHealthTimer();
-        this.socketHealthTimer = setTimeout(() => {
-            if (!this.socket || this.socket.connected) {
-                return;
-            }
-
-            console.warn(`Socket health check failed after ${reason}, rebuilding connection`);
-            this.rebuildSocket(`health-check:${reason}`);
-        }, delayMs);
-    }
-
-    bindSocketHandlers(socket) {
-        socket.on('connect', () => {
-            if (socket !== this.socket) return;
-
-            this.socketReconnectFailures = 0;
-            this.clearSocketHealthTimer();
-            console.log("✅ Connected to server via WebSocket");
-            this.updateStatus('Connected to AmneziaWG Web UI', true);
-            this.resyncAppState();
-        });
-
-        socket.on('disconnect', (reason) => {
-            if (socket !== this.socket) return;
-
-            console.log("❌ Disconnected from server", reason ? `(${reason})` : '');
-            this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
-
-            if (reason !== 'io client disconnect') {
-                this.scheduleSocketHealthCheck(`disconnect:${reason || 'unknown'}`);
-            }
-        });
-
-        socket.on('connect_error', (error) => {
-            if (socket !== this.socket) return;
-
-            this.socketReconnectFailures += 1;
-            console.error("❌ WebSocket connection error:", error);
-            this.updateStatus('Connection error - retrying...', false);
-
-            if (document.visibilityState === 'visible' && this.socketReconnectFailures >= 2) {
-                this.rebuildSocket(`connect-error:${error?.message || 'unknown'}`);
-                return;
-            }
-
-            this.scheduleSocketHealthCheck(`connect-error:${error?.message || 'unknown'}`, 2500);
-        });
-
-        socket.on('status', (data) => {
-            if (socket !== this.socket) return;
-
-            console.log("Status update:", data);
-            if (data.public_ip) {
-                this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
-            }
-        });
-
-        socket.on('server_status', (data) => {
-            if (socket !== this.socket) return;
-
-            console.log("Server status update:", data);
-            this.loadServers();
-        });
-
-        socket.on('traffic_update', (data) => {
-            if (socket !== this.socket) return;
-            this.updateServerTraffic(data.server_id, data.traffic);
-        });
-    }
-
-    rebuildSocket(reason = 'manual') {
-        const now = Date.now();
-        if ((now - this.socketLastRebuildAt) < 1500) {
-            return;
-        }
-
-        this.socketLastRebuildAt = now;
-        this.teardownSocket();
-        this.socket = this.createSocket();
-        this.bindSocketHandlers(this.socket);
-
-        console.log(`Rebuilt Socket.IO connection (${reason})`);
-        this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
-    }
-
-    handleSocketResume(trigger) {
-        if (this.socket && this.socket.connected) {
-            this.resyncAppState();
-            return;
-        }
-
-        if (!this.socket) {
-            this.rebuildSocket(`resume:${trigger}`);
-            return;
-        }
-
-        console.log(`Socket resume check triggered by ${trigger}`);
-        this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
-
-        try {
-            this.socket.connect();
-        } catch (_) {
-            this.rebuildSocket(`resume-connect:${trigger}`);
-            return;
-        }
-
-        this.scheduleSocketHealthCheck(`resume:${trigger}`, 2500);
-    }
-
-    setupSocketIO() {
-        this.rebuildSocket('initial');
-    }
-
-    // The header pill: "Live" while the socket is up (traffic arrives every 7 s),
+    // The header pill: "Live" while the stream is open (traffic arrives every 7 s),
     // "Reconnecting…" otherwise; the full message is its tooltip.
     updateStatus(message, isConnected = null) {
         const frame = this.getElement('statusFrame');
@@ -625,7 +531,7 @@ class AmneziaApp {
         });
     }
 
-    // Through the throttle: the socket connects a moment later and would load it all again.
+    // Through the throttle: the stream opens a moment later and would load it all again.
     loadInitialData() {
         this.resyncAppState();
     }

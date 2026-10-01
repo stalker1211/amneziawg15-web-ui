@@ -6,8 +6,7 @@ manage clients, hand out configs, and watch traffic live, all from one container
 
 Everything is configurable in the panel, including its own settings (⚙ in the
 header: sign-in, logging, GeoIP, new-server defaults). An environment variable can
-pin a setting; only `NGINX_PORT`, `ALLOWED_ORIGINS`, `WAN_IF` and `AWG_LOG_FILE` are
-deployment-only. See [Environment variables](#environment-variables).
+pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
 
 Current version: **2.4**
 
@@ -23,8 +22,9 @@ Current version: **2.4**
 - **AWG 1.5 / 2.0 / 3.0 / 3.1**, with only the relevant fields shown per protocol.
   AWG 3.0 adds header protection, content padding and tunable timings; 3.1 adds
   random packet trailers and optional cookie-reply suppression.
-- **Live monitoring** — per-client traffic, endpoint and handshake age over WebSocket,
-  with country flags for endpoint / server / egress IPs.
+- **Live monitoring** — per-client traffic, endpoint and handshake age, pushed to the
+  page as it changes (Server-Sent Events), with country flags for endpoint / server /
+  egress IPs.
 - **Re-import marks** — the panel remembers which config each device received and
   marks a client **Re-import** when its config has changed since (new transport
   parameters, new client parameters, a new public IP). Server settings say how many
@@ -73,20 +73,20 @@ Variable: `LOG_LEVEL`.
 ## 🏗️ Architecture
 
 One container, three processes under supervisord: **nginx** (port 80, Basic Auth,
-reverse proxy), the **Flask + Socket.IO web UI** (127.0.0.1:5000), and one
+reverse proxy), the **Flask web UI** (127.0.0.1:5000), and one
 **`amneziawg-go`** daemon per VPN interface.
 
 ```
 web-ui/
 ├── app.py                      Flask entrypoint, env parsing
-├── core/                       request guards (auth, CSRF), settings, runtime wiring, helpers, logging
+├── core/                       request guards (CSRF), live updates (events), settings, runtime wiring, helpers, logging
 ├── routes/                     servers.py, settings.py, system.py (all /api routes)
 ├── services/amnezia_manager.py all business logic
 ├── templates/index.html        page shell
 └── static/
     ├── css/style.css           a few styles (tailwind.css is built by build_css.sh)
-    ├── vendor/                 socket.io + qrcode, unmodified release files
-    └── js/  app.js             state, sockets, API calls, page actions
+    ├── vendor/                 qrcode, an unmodified release file
+    └── js/  app.js             state, live updates, API calls, page actions
               forms.js          the forms (side drawer), checked by /api/validate
               modals.js         the QR, logs and full-config views
               ui.js             toasts, dialogs, drawer, menus, inline rename
@@ -146,12 +146,11 @@ All `/api/*` routes sit behind nginx HTTP Basic Auth (the panel's sign-in, see
 reaches it around nginx. Scripts send the same Basic Auth (`curl -u`). `API_TOKEN` was
 removed in 2.4; a container that still sets it logs a warning and ignores it.
 
-Live updates over Socket.IO (`/socket.io/`) are the one exception: nginx does not
-Basic-Auth-gate that path, because some browsers (notably iPadOS Safari) don't
-reliably reattach cached Basic Auth credentials to a WebSocket handshake, which
-showed up as endless credential prompts. Instead, Flask sets a persisted session
-cookie on any request that already cleared Basic Auth on `/` or `/api/`, and the
-WebSocket handshake is authorized from that cookie.
+Live updates are no exception: `GET /api/events` is a Server-Sent Events stream (an
+ordinary request that stays open), behind the same Basic Auth, which the browser
+sends with it as with any request. Until 2.5 they went over Socket.IO, whose
+WebSocket handshake iPadOS Safari sent without the credential, so `/socket.io/` had
+to be gated by a session cookie instead; that exception is gone, with the cookie.
 
 **Mutating requests must send `Content-Type: application/json`** (anything else gets
 `415`). This is what stops another site's page from driving the API using your cached
@@ -160,6 +159,7 @@ Basic Auth credentials.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes, endpoint, handshake age) |
+| GET | `/api/events` | live updates, a Server-Sent Events stream: `traffic_update` (every 7 s per running server, the same per-client shape as `traffic` above), `server_status` (after a start or stop), `ping` (every 15 s when idle) |
 | POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `endpoint_host`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
 | DELETE | `/api/servers/<id>` | delete server and its clients |
 | POST | `/api/servers/<id>/start` \| `/stop` | bring the interface up/down |
@@ -232,12 +232,13 @@ today's environment.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NGINX_PORT` | `80` | Port nginx listens on inside the container |
-| `ALLOWED_ORIGINS` | *(empty)* | Socket.IO origins besides the panel's own. Needed behind a TLS reverse proxy: nginx passes on `X-Forwarded-Proto: http`, so the `https://` origin fails Socket.IO's same-origin check; set it to that origin, e.g. `https://vpn.example.com`. `*` allows any |
 | `WAN_IF` | *(auto)* | Outbound interface for the NAT and forwarding rules; detected from the default route |
 | `AWG_LOG_FILE` | `/var/log/amnezia/amneziawg-go.log` | Where the daemon's log goes |
 
-Retired, ignored with a warning at boot: `API_TOKEN` (2.4) and `AUTO_START_SERVERS`
-(2.5; a restart brings back what was running, and `false` no longer stops that).
+Retired, ignored with a warning at boot: `API_TOKEN` (2.4), `AUTO_START_SERVERS`
+(2.5; a restart brings back what was running, and `false` no longer stops that) and
+`ALLOWED_ORIGINS` (2.5; the live updates no longer use Socket.IO, so a reverse proxy
+needs nothing set).
 `SYS_MODULE` is not needed: the daemon runs in userspace.
 
 ## 🧪 Local build/run (dev)

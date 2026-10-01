@@ -134,7 +134,7 @@ class AmneziaManager:
     def __init__(
         self,
         *,
-        socketio_instance,
+        events,
         auto_start_servers,
         default_mtu,
         default_subnet,
@@ -152,7 +152,8 @@ class AmneziaManager:
         # Request handlers and the traffic monitor are separate threads; config
         # writes go through this one at a time (see save_config).
         self._save_lock = threading.Lock()
-        self.socketio = socketio_instance
+        # Live updates for the page (core/events.py), published from plain threads.
+        self.events = events
 
         self.auto_start_servers_enabled = auto_start_servers
         self.default_mtu = default_mtu
@@ -490,7 +491,7 @@ class AmneziaManager:
                 finally:
                     self._geoip_pending.discard(ip)
 
-            self.socketio.start_background_task(resolve)
+            self.start_background_task(resolve)
         return (None, None)
 
     def lookup_geoip(self, ip):
@@ -2015,24 +2016,29 @@ PersistentKeepalive = 25
             return "not_found"
         return "running" if self.interface_state(server["interface"]) in ("up", "unknown") else "stopped"
 
-    def emit_status_after_delay(self, server_id, status, delay_seconds=2):
-        """Push a server_status update to clients once the interface has settled.
+    @staticmethod
+    def start_background_task(target):
+        """Run `target` on a daemon thread: the traffic loop, a delayed status push, a
+        GeoIP lookup. A method, as is `sleep`, so the tests can run it inline."""
+        threading.Thread(target=target, daemon=True).start()
 
-        Runs as a Socket.IO background task, which follows whatever async mode the
-        server is in (a plain thread under async_mode="threading").
-        """
+    @staticmethod
+    def sleep(seconds):
+        time.sleep(seconds)
+
+    def emit_status_after_delay(self, server_id, status, delay_seconds=2):
+        """Push a server_status update to the page once the interface has settled."""
 
         def emit_later():
-            self.socketio.sleep(delay_seconds)
+            self.sleep(delay_seconds)
             self.read_telemetry()  # so the reload it prompts sees the interface as it is now
-            self.socketio.emit("server_status", {"server_id": server_id, "status": status})
+            self.events.publish("server_status", {"server_id": server_id, "status": status})
 
-        self.socketio.start_background_task(emit_later)
+        self.start_background_task(emit_later)
 
     def start_traffic_monitoring(self):
-        """Read telemetry every 7 s and push each running server's to the browsers."""
+        """Read telemetry every 7 s and push each running server's to the page."""
 
-        # A Socket.IO background task, so it follows the server's async mode.
         def monitor_traffic():
             while True:
                 try:
@@ -2040,13 +2046,13 @@ PersistentKeepalive = 25
                     for server in self.config["servers"]:
                         traffic = self.get_traffic_for_server(server["id"])
                         if traffic is not None:
-                            self.socketio.emit("traffic_update", {"server_id": server["id"], "traffic": traffic})
-                    self.socketio.sleep(7)
+                            self.events.publish("traffic_update", {"server_id": server["id"], "traffic": traffic})
+                    self.sleep(7)
                 except Exception as e:
                     logger.error("Error in traffic monitoring: %s", e)
-                    self.socketio.sleep(7)
+                    self.sleep(7)
 
-        self.socketio.start_background_task(monitor_traffic)
+        self.start_background_task(monitor_traffic)
 
     def get_client_configs(self, server_id=None):
         """All clients, or only those of `server_id` (none for an unknown server)."""

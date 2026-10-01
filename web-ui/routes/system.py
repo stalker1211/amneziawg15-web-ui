@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from core.logging_setup import get_logger
-from flask import Blueprint, jsonify, make_response, render_template, request
+from flask import Blueprint, Response, jsonify, make_response, render_template, request
 
 # pylint: disable=broad-exception-caught
 # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
@@ -96,6 +96,17 @@ def render_page(amnezia_manager, access, *, cache_bust, build_label):
 def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
     """Register system and health-related Flask routes on the app."""
     system_bp = Blueprint("system_routes", __name__)
+
+    @system_bp.route("/api/events")
+    def events():
+        """Live updates as Server-Sent Events (core/events.py): server_status and
+        traffic_update. Under /api/, so nginx's Basic Auth gates it like every call."""
+        return Response(
+            amnezia_manager.events.stream(),
+            mimetype="text/event-stream",
+            # nginx buffers a proxied response; this one must pass through as written.
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @system_bp.route("/api/system/status")
     def system_status():

@@ -208,15 +208,14 @@ class SettingsRouteTests(unittest.TestCase):
         stop.assert_called_once_with(server["id"])
         start.assert_called_once_with(server["id"])
 
-    def test_a_password_change_rotates_the_session_key(self):
-        key = self.app.secret_key
+    def test_a_password_change_with_a_wrong_current_password_applies_nothing(self):
         self.post({"access": {"current_password": "wrong", "password": "n3w-secret"}, "settings": {"geoip": False}}, 400)
-        self.assertEqual((self.app.secret_key, self.manager.enable_geoip), (key, True))  # nothing applied
+        self.assertTrue(self.manager.enable_geoip)  # not even the setting sent with it
+        self.assertFalse(self.access.verify("n3w-secret"))
 
         saved = self.post({"access": {"current_password": "changeme", "password": "n3w-secret"}})
         self.assertTrue(saved["access_changed"])
         self.assertFalse(saved["access"]["password_is_default"])
-        self.assertNotEqual(self.app.secret_key, key)
         self.assertTrue(self.access.verify("n3w-secret"))
 
     def test_the_drawer_is_checked_through_validate(self):

@@ -10,7 +10,6 @@
          unmodified release files (hashes pinned in tests/test_frontend.py);
          tailwind.css is built by build_css.sh and loads after style.css, as the
          old in-browser Tailwind did, so utilities win ties with style.css. -->
-    <script src="{{ url_for('static', filename='vendor/socket.io-4.8.4.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/qrcode-1.0.0.min.js') }}"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ cache_bust }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}?v={{ cache_bust }}">

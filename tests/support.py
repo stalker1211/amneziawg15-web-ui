@@ -32,24 +32,14 @@ HEADER_PROTECTION_KEY = "aGVhZGVyUFJPVEVDVElPTmtleTAwMDAwMDAwMDAwMDA="
 PUBLIC_IP = "203.0.113.9"
 
 
-class FakeSocketIO:
-    """Records emits and sleeps. Background tasks are dropped unless `run_tasks`,
-    in which case they run inline (the traffic loop needs a way out: see StopLoop)."""
+class FakeEvents:
+    """Records what the manager publishes for the page (core/events.py)."""
 
-    def __init__(self, run_tasks=False):
-        self.emitted = []
-        self.slept = []
-        self.run_tasks = run_tasks
+    def __init__(self):
+        self.published = []
 
-    def emit(self, event, data=None, **_kwargs):
-        self.emitted.append((event, data))
-
-    def sleep(self, seconds):
-        self.slept.append(seconds)
-
-    def start_background_task(self, target, *args, **kwargs):
-        if self.run_tasks:
-            target(*args, **kwargs)
+    def publish(self, event, data):
+        self.published.append((event, data))
 
 
 class FakeSubprocess:
@@ -147,6 +137,10 @@ def build_real_manager(test_case, fake_subprocess=None, **overrides):
     test_case.addCleanup(patcher.stop)
 
     class _RealSystemManager(AmneziaManager):
+        def __init__(self, *args, **kwargs):
+            self.slept = []
+            super().__init__(*args, **kwargs)
+
         def ensure_directories(self):
             os.makedirs(self.config_dir, exist_ok=True)
             os.makedirs(self.wireguard_config_dir, exist_ok=True)
@@ -157,9 +151,17 @@ def build_real_manager(test_case, fake_subprocess=None, **overrides):
         def start_traffic_monitoring(self):
             return None
 
+        # Background work runs inline (the traffic loop needs a way out: see StopLoop
+        # in test_system_edges) and waits are recorded, not waited.
+        def start_background_task(self, target):
+            target()
+
+        def sleep(self, seconds):
+            self.slept.append(seconds)
+
     tmp = tempfile.mkdtemp(prefix="awg-sys-")
     kwargs = {
-        "socketio_instance": FakeSocketIO(run_tasks=True),
+        "events": FakeEvents(),
         "auto_start_servers": False,
         "default_mtu": 1420,
         "default_subnet": "10.0.0.0/24",
@@ -184,6 +186,7 @@ def build_manager(**overrides):
 
         def __init__(self, *args, **kwargs):
             self.commands = []
+            self.slept = []
             self._server_keys_issued = False
             super().__init__(*args, **kwargs)
 
@@ -229,9 +232,16 @@ def build_manager(**overrides):
         def start_server(self, server_id):
             return True
 
+        # Background work is dropped and waits are recorded, so no test leaves a thread.
+        def start_background_task(self, target):
+            return None
+
+        def sleep(self, seconds):
+            self.slept.append(seconds)
+
     tmp = tempfile.mkdtemp(prefix="awg-test-")
     kwargs = {
-        "socketio_instance": FakeSocketIO(),
+        "events": FakeEvents(),
         "auto_start_servers": False,
         "default_mtu": 1420,
         "default_subnet": "10.0.0.0/24",
@@ -247,14 +257,14 @@ def build_manager(**overrides):
     return _TestManager(**kwargs)
 
 
-def build_app(secret_key_path=None, awg_log_file="/nonexistent/awg.log", manager=None, access=None):
+def build_app(awg_log_file="/nonexistent/awg.log", manager=None, access=None):
     """The Flask app wired as app.py does it -- real guards and routes -- around a stubbed manager.
 
     app.py itself is not imported: it builds everything at import time against
     /etc/amnezia and a real AmneziaManager. The settings routes are registered when
     the manager has settings (build_manager(settings=...)) and `access` is given.
     """
-    from core.guards import install_guards, rotate_secret_key
+    from core.guards import install_guards
     from core.helpers import to_bool
     from flask import Flask
     from routes.servers import register_server_routes
@@ -265,20 +275,12 @@ def build_app(secret_key_path=None, awg_log_file="/nonexistent/awg.log", manager
 
     app = Flask(__name__)
     app.config.update(TESTING=True)
-    if secret_key_path is None:
-        secret_key_path = os.path.join(manager.config_dir, ".flask_secret_key")
-    install_guards(app, secret_key_path=secret_key_path)
+    install_guards(app)
 
     register_system_routes(app, manager, awg_log_file=awg_log_file, nginx_port="80")
     register_server_routes(app, manager, to_bool=to_bool)
     if manager.settings is not None and access is not None:
-        register_settings_routes(
-            app,
-            manager,
-            access,
-            build_label="test",
-            rotate_secret_key=lambda: rotate_secret_key(app, secret_key_path),
-        )
+        register_settings_routes(app, manager, access, build_label="test")
     return app, manager
 
 

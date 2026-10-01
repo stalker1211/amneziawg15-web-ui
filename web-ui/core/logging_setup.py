@@ -37,7 +37,7 @@ def configure_logging(level=None):
 
     # These are chatty and drown out our own messages. urllib3 in particular logs
     # every outbound request (public IP detection, GeoIP) at DEBUG.
-    for noisy in ("werkzeug", "engineio", "socketio", "urllib3"):
+    for noisy in ("werkzeug", "urllib3"):
         logging.getLogger(noisy).setLevel("WARNING")
 
     return root

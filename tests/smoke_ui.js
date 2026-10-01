@@ -68,7 +68,8 @@ function check(label, condition, detail) {
     check('theme button toggles light/dark and remembers the choice',
         toggles.join(' ') === 'light:light dark:dark', toggles);
 
-    // One request draws the page: the servers carry their clients and traffic.
+    // One request draws the page: the servers carry their clients and traffic. (The
+    // live-update stream, /api/events, is opened once too, and loads no data itself.)
     const apiRequests = [];
     const recordApi = (r) => { if (new URL(r.url()).pathname.startsWith('/api/')) apiRequests.push(new URL(r.url()).pathname); };
     page.on('request', recordApi);
@@ -76,7 +77,8 @@ function check(label, condition, detail) {
     await new Promise((r) => setTimeout(r, 1500));
     page.off('request', recordApi);
     check('a page load asks /api/servers once and nothing per server',
-        apiRequests.filter((u) => u === '/api/servers').length === 1 && apiRequests.every((u) => ['/api/servers', '/api/system/status'].includes(u)),
+        apiRequests.filter((u) => u === '/api/servers').length === 1 && apiRequests.filter((u) => u === '/api/events').length === 1
+            && apiRequests.every((u) => ['/api/servers', '/api/system/status', '/api/events'].includes(u)),
         apiRequests);
 
     // Telemetry patches the rows in place: buttons, focus and an open menu survive.

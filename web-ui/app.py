@@ -5,15 +5,11 @@ import os
 import time
 from urllib.parse import quote
 
-from core.guards import install_guards, rotate_secret_key
+from core.events import EventBroadcaster
+from core.guards import install_guards
 from core.helpers import to_bool
 from core.logging_setup import configure_logging, get_logger
-from core.runtime import (
-    create_flask_app,
-    create_socketio,
-    register_socket_handlers,
-    run_web_ui,
-)
+from core.runtime import create_flask_app, run_web_ui
 from core.settings import Access, Settings, retired_variables
 from flask import send_from_directory
 from routes.servers import register_server_routes
@@ -48,21 +44,10 @@ WEB_UI_PORT = 5000
 CONFIG_DIR = "/etc/amnezia"
 WIREGUARD_CONFIG_DIR = os.path.join(CONFIG_DIR, "amneziawg")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "web_config.json")
-SECRET_KEY_FILE = os.path.join(CONFIG_DIR, ".flask_secret_key")
 # Written by scripts/start.sh; nginx reads the credential from the volume.
 HTPASSWD_FILE = os.path.join(CONFIG_DIR, ".htpasswd")
-
-# Socket.IO CORS origins (comma-separated list or '*' for all)
-# Empty/not set = same-origin only (recommended for production)
-ALLOWED_ORIGINS_RAW = os.getenv("ALLOWED_ORIGINS", "").strip()
-if ALLOWED_ORIGINS_RAW == "*":
-    ALLOWED_ORIGINS = "*"
-elif ALLOWED_ORIGINS_RAW:
-    # Parse comma-separated list and strip whitespace
-    ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_RAW.split(",") if origin.strip()]
-else:
-    # Default: same-origin only (let Flask-SocketIO use its default behavior)
-    ALLOWED_ORIGINS = []
+# Signed the /socket.io/ session cookie until 2.5; a volume from before still has it.
+RETIRED_SECRET_KEY_FILE = os.path.join(CONFIG_DIR, ".flask_secret_key")
 
 logger.info("=== AmneziaWG Web UI configuration ===")
 logger.info(
@@ -73,25 +58,31 @@ logger.info(
     STATIC_DIR,
     os.path.exists(STATIC_DIR),
 )
-logger.info("nginx_port=%s allowed_origins=%s", NGINX_PORT, ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>")
+logger.info("nginx_port=%s", NGINX_PORT)
 for name, note in retired_variables():
     logger.warning("%s is set but no longer used (%s)", name, note)
+if os.path.exists(RETIRED_SECRET_KEY_FILE):
+    try:
+        os.remove(RETIRED_SECRET_KEY_FILE)
+        logger.info("Removed %s: the session cookie it signed went in 2.5", RETIRED_SECRET_KEY_FILE)
+    except OSError as e:
+        logger.warning("Could not remove %s (no longer used): %s", RETIRED_SECRET_KEY_FILE, e)
 logger.info("config_dir=%s web_ui_port=%s (internal)", CONFIG_DIR, WEB_UI_PORT)
 logger.debug("template files: %s", os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
 logger.debug("static files: %s", os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
 
 app = create_flask_app(TEMPLATE_DIR, STATIC_DIR)
-# Persisted session secret + the /socket.io/ auth cookie and the anti-CSRF JSON check
-# (see core/guards.py).
-install_guards(app, secret_key_path=SECRET_KEY_FILE)
-socketio = create_socketio(app, ALLOWED_ORIGINS)
+# The anti-CSRF JSON check (see core/guards.py).
+install_guards(app)
+# Live updates for the page, served on GET /api/events (see core/events.py).
+events = EventBroadcaster()
 
 settings = Settings()
 access = Access(HTPASSWD_FILE)
 
 # The defaults below are replaced by the resolved settings as the manager loads them.
 amnezia_manager = AmneziaManager(
-    socketio_instance=socketio,
+    events=events,
     auto_start_servers=True,
     default_mtu=1280,
     default_subnet="10.0.0.0/24",
@@ -111,15 +102,7 @@ if access.is_default():
 
 register_system_routes(app, amnezia_manager, awg_log_file=AWG_LOG_FILE, nginx_port=NGINX_PORT)
 register_server_routes(app, amnezia_manager, to_bool=to_bool)
-register_settings_routes(
-    app,
-    amnezia_manager,
-    access,
-    build_label=BUILD_LABEL,
-    rotate_secret_key=lambda: rotate_secret_key(app, SECRET_KEY_FILE),
-)
-
-register_socket_handlers(socketio, amnezia_manager, NGINX_PORT)
+register_settings_routes(app, amnezia_manager, access, build_label=BUILD_LABEL)
 
 
 # API Routes
@@ -158,7 +141,6 @@ def static_files(filename):
 
 if __name__ == "__main__":
     run_web_ui(
-        socketio,
         app,
         web_ui_port=WEB_UI_PORT,
         nginx_port=NGINX_PORT,

@@ -113,9 +113,11 @@ class NoAppLayerCredentialTests(unittest.TestCase):
     def test_flask_listens_on_loopback_only(self):
         from core.runtime import run_web_ui
 
-        socketio = mock.Mock()
-        run_web_ui(socketio, object(), web_ui_port=5000, nginx_port="80", public_ip="203.0.113.9")
-        self.assertEqual(socketio.run.call_args.kwargs["host"], "127.0.0.1")
+        app = mock.Mock()
+        run_web_ui(app, web_ui_port=5000, nginx_port="80", public_ip="203.0.113.9")
+        self.assertEqual(app.run.call_args.kwargs["host"], "127.0.0.1")
+        # Threaded: every open event stream holds a thread of its own.
+        self.assertTrue(app.run.call_args.kwargs["threaded"])
 
 
 class SerializationTests(unittest.TestCase):

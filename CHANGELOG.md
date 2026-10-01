@@ -2,6 +2,31 @@
 
 ## Version 2.5 (unreleased)
 
+Fewer moving parts. Upgrading needs no action; `ALLOWED_ORIGINS` can be dropped
+from a compose file, and one that still sets it, or `AUTO_START_SERVERS`, logs a
+warning.
+
+### Live updates: Server-Sent Events instead of Socket.IO
+- **One auth model.** The page's live updates are `GET /api/events`, a stream the
+  server keeps open (`text/event-stream`), behind nginx's Basic Auth like every other
+  request. The browser sends its cached sign-in with it, which iPadOS Safari did not
+  do for Socket.IO's WebSocket handshake; so `/socket.io/` and its exception go: the
+  year-long session cookie, the secret key on the volume (`.flask_secret_key`, removed
+  at the first boot) and its rotation on a password change.
+- **`ALLOWED_ORIGINS` is retired:** the stream is same-origin like any request, so a
+  reverse proxy needs nothing set. A set one logs a warning.
+- **The browser reconnects by itself:** `app.js` traded 174 lines of Socket.IO
+  reconnect machinery for 80 of stream handling. A hidden tab closes its stream and opens a new one with a resync
+  when shown (on a plain-HTTP address the browser allows six connections per host,
+  and a stream holds one). A stream silent for 45 s is reopened: the server sends a
+  `ping` every 15 s when idle. A 401 on the stream (the password changed in another
+  browser) leads to the sign-in once, not in a loop.
+- **Fewer dependencies:** `flask-socketio`, `python-socketio`, `python-engineio`,
+  `simple-websocket`, `wsproto`, `h11` and `bidict` are gone, and the vendored
+  `socket.io` client (150 KB) with them. nginx proxies no WebSocket any more.
+- Flask runs on Werkzeug's threaded server, as Flask-SocketIO ran it: one thread per
+  request and per open stream.
+
 ### Housekeeping
 - **`AUTO_START_SERVERS` is gone:** a restart always brings back each server as it
   was last left; a container that still sets the variable (even to `false`) logs a

@@ -18,10 +18,9 @@ WEB_UI = Path(WEB_UI_DIR)
 INDEX = WEB_UI / "templates" / "index.html"
 MARKUP = [INDEX, *sorted((WEB_UI / "static" / "js").glob("*.js"))]
 
-# Unmodified release files; the hashes are the ones cdnjs publishes (socket.io.js is
-# also byte-identical to dist/socket.io.js in the socket.io-client npm tarball).
+# Unmodified release files; the hashes are the ones cdnjs publishes. (socket.io.js went
+# in 2.5: live updates are the browser's own EventSource.)
 VENDORED = {
-    "socket.io-4.8.4.js": "sha512-dDCXSKyPaEikucluA6BrNqHngOGByBEhxwwlP+GvVt90XOe0BpmZEdnIJi849R2q9rG23Yzxhiy4uKCdnrJySw==",
     "qrcode-1.0.0.min.js": "sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA==",
 }
 
