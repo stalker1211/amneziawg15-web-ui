@@ -11,6 +11,28 @@ now asks for the password (on an iPad, a prompt). The health check is stricter (
 Health): an `unhealthy` container after the upgrade names what drifted in
 `docker inspect`.
 
+### Traffic history and graphs
+- **The last hour at a glance:** each running server's card has a band with its last
+  hour (download above a line, upload below) and its rates now; each online client's
+  row has, under its ↓/↑ totals, its last hour as a sparkline and its rate now; the
+  status strip has a fourth tile with every running server's traffic.
+- **A Traffic view per server** (the band, or Traffic in ⋯): 1 h, 6 h or 24 h; the
+  totals and the peak; a row per client with when it was online, suspended or offline
+  on the same time axis, and its totals. The crosshair's readout lists every client
+  with traffic at that moment; hovering a client draws its share, a click (or a tap)
+  keeps it. On a phone, a drag moves the crosshair.
+- **Kept in memory:** the 7 s loop already reads every peer's counters, so the panel
+  keeps every 7 s for the last hour and a per-minute sum for 24 hours, without writing
+  anything. A restart of the panel or the container starts the history over. A day
+  of 50 busy clients holds about 17 MB.
+- **↓ and ↑ are from the device's side:** ↓ is what the server sent the device (its
+  download), ↑ what it received. Until 2.5 the rows' ↓ showed the server's received
+  bytes, the device's upload. The API keeps the daemon's `received_*`/`sent_*`, and
+  `api_status.py` still prints awg's rx and tx.
+- **API:** each client's `traffic` gains `received_bps` and `sent_bps` (over the last
+  tick), `traffic_update` gains `at`, and `GET /api/servers/<id>/traffic?range=1h|6h|24h`
+  returns the history.
+
 ### Live updates: Server-Sent Events instead of Socket.IO
 - **One auth model.** The page's live updates are `GET /api/events`, a stream the
   server keeps open (`text/event-stream`), behind nginx's Basic Auth like every other
