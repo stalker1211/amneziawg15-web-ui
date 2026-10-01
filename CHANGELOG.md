@@ -7,7 +7,9 @@ now keeps a server's clients off the panel too (below). `ALLOWED_ORIGINS` and th
 new-server defaults (`DEFAULT_MTU` and the rest) can be dropped from a compose file;
 one that still sets them, or `AUTO_START_SERVERS`, logs a warning. Reload any panel
 tab left open across the upgrade: the old page keeps retrying `/socket.io/`, which
-now asks for the password (on an iPad, a prompt).
+now asks for the password (on an iPad, a prompt). The health check is stricter (see
+Health): an `unhealthy` container after the upgrade names what drifted in
+`docker inspect`.
 
 ### Live updates: Server-Sent Events instead of Socket.IO
 - **One auth model.** The page's live updates are `GET /api/events`, a stream the

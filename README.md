@@ -24,8 +24,12 @@ Current version: **2.4**
   AWG 3.0 adds header protection, content padding and tunable timings; 3.1 adds
   random packet trailers and optional cookie-reply suppression.
 - **Live monitoring** — per-client traffic, endpoint and handshake age, pushed to the
-  page as it changes (Server-Sent Events), with country flags for endpoint / server /
-  egress IPs.
+  page as it changes (Server-Sent Events), with country flags for endpoint / public /
+  egress IPs. A server's egress (where its clients' traffic leaves) is checked again
+  after each start and each NAT or LAN-block change.
+- **Health check** — Docker marks the container `unhealthy` when a server that should
+  run is down, or has drifted from the panel: a device the panel suspended or deleted
+  still let in, or firewall rules that are not what its switches call for.
 - **Re-import marks** — the panel remembers which config each device received and
   marks a client **Re-import** when its config has changed since (new transport
   parameters, new client parameters, a new public IP). Server settings say how many
@@ -39,7 +43,7 @@ Current version: **2.4**
   server (which also keeps its clients off the panel); a container restart brings back exactly the servers that were running;
   smart port/subnet/IP proposals.
 - **Panel settings** (⚙) — the sign-in credential, the daemon's and the panel's log
-  levels, GeoIP, and the defaults for new servers, stored with the servers.
+  levels, and GeoIP, stored with the servers.
 - **Forms checked as you type** by the server, in a side drawer; toasts and in-app
   confirmations instead of browser pop-ups; works down to phone width.
 - **Dark theme** (the OS preference picks the first one), collapsible help, inline rename.
@@ -167,10 +171,10 @@ Basic Auth credentials.
 | GET | `/api/servers/<id>/info` | summary (status, keys, params, client count) |
 | GET | `/api/servers/<id>/config` \| `/config/download` | the generated `.conf` |
 | POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey` / AWG 3.1 toggles; restarts if running |
-| POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables |
+| POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables and, on a running server, re-checks the egress |
 | POST | `/api/servers/<id>/rename` | `{"name": "..."}` |
 | POST | `/api/servers/<id>/endpoint-host` | `{"endpoint_host": "vpn.example.com"}`: what client configs dial (empty: the detected IP) |
-| POST | `/api/servers/<id>/egress-ip` | probe the server's outbound IP |
+| POST | `/api/servers/<id>/egress-ip` | probe the server's outbound IP (also done by itself after a start or a networking change) |
 | POST | `/api/servers/<id>/clients` | add (`name`, optional `client_params`, `copy_from_client_id`, `allowed_ips`) |
 | DELETE | `/api/servers/<id>/clients/<cid>` | delete client |
 | GET | `/api/servers/<id>/clients/<cid>/config` | download client `.conf` |
@@ -187,7 +191,7 @@ Basic Auth credentials.
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
 | POST | `/api/system/refresh-ip` | re-detect the public IP (`502`, nothing changed, when detection fails) |
 | GET | `/api/system/iptables-test` | a server's firewall rules as they are now (`?server_id=`); every server's under **⚙ → About → Firewall rules** |
-| GET | `/status` | container uptime, plain text (localhost only); a 503 naming any server that should be running but is down, which the Docker health check turns into `unhealthy` |
+| GET | `/status` | container uptime, plain text (localhost only); a 503 with a line per problem — a server that should be running but is down, a running server whose peers differ from its clients, or whose firewall rules differ from its switches — which the Docker health check turns into `unhealthy` |
 
 Example:
 
@@ -359,6 +363,7 @@ docker exec amnezia-web-ui awg show
 docker exec amnezia-web-ui awg showconf wg-<server-id>
 
 # Health and firewall checks
+docker inspect -f '{{range .State.Health.Log}}{{.Output}}{{end}}' amnezia-web-ui   # why unhealthy
 curl -u admin:pass http://localhost:8080/api/system/status
 curl -u admin:pass "http://localhost:8080/api/system/iptables-test?server_id=<server-id>"
 ```
