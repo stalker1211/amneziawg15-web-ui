@@ -8,8 +8,10 @@ SUBNET=$2
 
 # Detect WAN interface (default route) and configure LAN blocking.
 WAN_IF=${WAN_IF:-$(ip route show default 2>/dev/null | awk '{print $5}' | head -n1)}
-# BLOCK_LAN_CIDRS: 1=block VPN -> private LAN ranges, 0=allow.
+# BLOCK_LAN_CIDRS: 1=block VPN -> private LAN ranges and the panel, 0=allow.
 BLOCK_LAN_CIDRS=${BLOCK_LAN_CIDRS:-1}
+# The panel's port: nginx's, NGINX_PORT, inherited from the panel's environment.
+PANEL_PORT=${NGINX_PORT:-80}
 
 if [ -z "$INTERFACE" ] || [ -z "$SUBNET" ]; then
     echo "Usage: $0 <interface_name> <subnet>"
@@ -42,6 +44,11 @@ if ! [[ "$WAN_IF" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
     exit 1
 fi
 
+if ! [[ "$PANEL_PORT" =~ ^[0-9]{1,5}$ ]]; then
+    echo "Invalid NGINX_PORT: $PANEL_PORT" >&2
+    exit 1
+fi
+
 # Every rule carries this server's tag, so cleanup_iptables.sh removes exactly these
 # and never another server's. The ESTABLISHED,RELATED rule used to be one shared
 # rule, and stopping any server removed it for all the others.
@@ -50,14 +57,18 @@ TAG=(-m comment --comment "awg:$INTERFACE")
 # Start clean: a reapply, or a start after a crash, would otherwise double the rules.
 "$(dirname "$0")/cleanup_iptables.sh" "$INTERFACE" "$SUBNET" >/dev/null 2>&1 || true
 
-# Allow traffic on the TUN interface
-iptables -A INPUT -i "$INTERFACE" "${TAG[@]}" -j ACCEPT
-# Drop traffic from $SUBNET to private LAN ranges (optional)
+# Block LAN (optional): drop traffic from $SUBNET to private LAN ranges, and keep the
+# tunnel's clients off the panel. nginx listens on every address, so the tunnel's own
+# address (and the container's) would otherwise open it. That rule is INPUT, which
+# the FORWARD drops never see, and it goes ahead of the tunnel's ACCEPT below.
 if [ "$BLOCK_LAN_CIDRS" = "1" ]; then
+    iptables -A INPUT -i "$INTERFACE" -p tcp --dport "$PANEL_PORT" "${TAG[@]}" -j DROP
     iptables -A FORWARD -s "$SUBNET" -d 192.168.0.0/16 "${TAG[@]}" -j DROP
     iptables -A FORWARD -s "$SUBNET" -d 10.0.0.0/8 "${TAG[@]}" -j DROP
     iptables -A FORWARD -s "$SUBNET" -d 172.16.0.0/12 "${TAG[@]}" -j DROP
 fi
+# Allow traffic on the TUN interface
+iptables -A INPUT -i "$INTERFACE" "${TAG[@]}" -j ACCEPT
 iptables -A OUTPUT -o "$INTERFACE" "${TAG[@]}" -j ACCEPT
 
 # Allow forwarding traffic only from the VPN

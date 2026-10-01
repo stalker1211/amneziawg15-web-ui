@@ -787,8 +787,8 @@ class SystemRouteExtraTests(_RealSystemApp):
             payload = self.client.get(f"/api/system/iptables-test?server_id={self.server['id']}").get_json()
         self.assertEqual(payload["rules"], [f'-A INPUT -i {iface} -m comment --comment "awg:{iface}" -j ACCEPT'])
         self.assertEqual(payload["errors"], ["could not list the nat table"])
-        # 4 always, 3 LAN drops with LAN blocked, 1 with NAT (both on by default).
-        self.assertEqual((payload["expected"], payload["running"]), (8, False))
+        # 4 always, 4 drops with LAN blocked (the panel and 3 ranges), 1 with NAT (both on by default).
+        self.assertEqual((payload["expected"], payload["running"]), (9, False))
 
     def test_container_uptime(self):
         with mock.patch("routes.system.subprocess") as sp, mock.patch("routes.system.time") as clock:

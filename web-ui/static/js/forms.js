@@ -371,7 +371,7 @@ class FormUi {
                     <div class="flex flex-col">
                         ${this.formSwitch('f-autostart', 'Start after creating', 'Brings the interface up right away.', true)}
                         ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', env.enable_nat !== false)}
-                        ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server.', env.block_lan_cidrs !== false)}
+                        ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server, nor this panel.', env.block_lan_cidrs !== false)}
                     </div>`)}
                 ${this.formSection('Protocol and transport', this.transportFieldsHtml(protocol, transport),
                     '<button type="button" class="btn btn-secondary btn-sm" data-action="randomize">Randomize</button>')}`,
@@ -558,7 +558,7 @@ class FormUi {
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
                         ${this.formSwitch('s-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', info.enable_nat)}
-                        ${this.formSwitch('s-lan', 'Block private LAN ranges', 'Clients cannot reach private networks behind the server.', info.block_lan_cidrs)}
+                        ${this.formSwitch('s-lan', 'Block private LAN ranges', 'Clients cannot reach private networks behind the server, nor this panel.', info.block_lan_cidrs)}
                     </div>
                     <p class="hint">Applied to iptables immediately while the server is running.</p>`)}
                 ${this.formSection('Protocol and transport', `
@@ -793,7 +793,7 @@ class FormUi {
                     </div>
                     <div class="flex flex-col">
                         ${toggle('enable_nat', 'NAT (masquerade)', 'New servers let clients reach the internet through this host.')}
-                        ${toggle('block_lan_cidrs', 'Block private LAN ranges', 'New servers keep clients off 10/8, 172.16/12 and 192.168/16.')}
+                        ${toggle('block_lan_cidrs', 'Block private LAN ranges', 'New servers keep clients off 10/8, 172.16/12 and 192.168/16, and off this panel.')}
                     </div>`)}
                 ${this.formSection('Logging', `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -2,8 +2,9 @@
 
 ## Version 2.5 (unreleased)
 
-Fewer moving parts. Upgrading needs no action; `ALLOWED_ORIGINS` can be dropped
-from a compose file, and one that still sets it, or `AUTO_START_SERVERS`, logs a
+Fewer moving parts. Upgrading needs no action, with one change to note: Block LAN
+now keeps a server's clients off the panel too (below). `ALLOWED_ORIGINS` can be
+dropped from a compose file; one that still sets it, or `AUTO_START_SERVERS`, logs a
 warning. Reload any panel tab left open across the upgrade: the old page keeps
 retrying `/socket.io/`, which now asks for the password (on an iPad, a prompt).
 
@@ -39,6 +40,15 @@ retrying `/socket.io/`, which now asks for the password (on an iPad, a prompt).
   content type and has got 415 since mutations must send JSON; the refreshed probe
   keeps its geo label. A client without telemetry shows `-` instead of `0 B`, and a
   panel older than 2.4 is named as such. Tested now, from a recorded payload.
+
+### Block LAN covers the panel
+- **With Block LAN on, a server's clients cannot open the panel** through the tunnel
+  (at the server's tunnel address, or the container's own). It already kept them off
+  private ranges, but that rule filters traffic passing through the container, and
+  the panel is the container itself. **This changes an upgrade:** Block LAN is on by
+  default, so a device that opened the panel through its tunnel no longer can; turn
+  Block LAN off for that server to allow it again. The LAN and a reverse proxy are
+  unaffected. The ⚙ firewall check now expects one more rule per Block LAN server.
 
 ### Health
 - **`unhealthy` now means a VPN is down,** not only the panel: `/status` answers 503

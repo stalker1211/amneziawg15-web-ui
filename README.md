@@ -35,7 +35,7 @@ Current version: **2.4**
   re-import.
 - **Client suspend** — revoke access without deleting; keys are preserved.
 - **Automatic networking** — iptables NAT and optional private-LAN blocking per
-  server; a container restart brings back exactly the servers that were running;
+  server (which also keeps its clients off the panel); a container restart brings back exactly the servers that were running;
   smart port/subnet/IP proposals.
 - **Panel settings** (⚙) — the sign-in credential, the daemon's and the panel's log
   levels, GeoIP, and the defaults for new servers, stored with the servers.
@@ -222,7 +222,7 @@ today's environment.
 | `DEFAULT_PORT` | `51820` | First UDP port offered for new servers |
 | `DEFAULT_DNS` | `8.8.8.8, 1.1.1.1` | DNS servers of new servers, pushed to clients |
 | `ENABLE_NAT` | `1` | NAT/MASQUERADE for new servers; each server has its own switch |
-| `BLOCK_LAN_CIDRS` | `1` | Block private LAN ranges for new servers; each server has its own switch |
+| `BLOCK_LAN_CIDRS` | `1` | Block private LAN ranges for new servers, and this panel to their clients; each server has its own switch |
 | `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
 | `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
 | `LOG_LEVEL` | `INFO` | The web panel's log |

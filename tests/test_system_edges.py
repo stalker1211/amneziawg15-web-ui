@@ -10,6 +10,8 @@ import ast
 import json
 import os
 import ssl
+import subprocess
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -200,6 +202,50 @@ class IptablesScriptTests(_Base):
         self.fake.respond(["/app/scripts/cleanup_iptables.sh"], 2)
         with self.assertLogs(MODULE, "ERROR"):
             self.assertFalse(self.manager.cleanup_iptables("wg-x", "10.9.0.0/24", enable_nat=True))
+
+
+class IptablesRuleTests(unittest.TestCase):
+    """The scripts themselves, run with a stand-in iptables that records every call
+    (and fails each -D, which ends cleanup's delete-until-gone loops)."""
+
+    SCRIPTS = Path(WEB_UI_DIR).parent / "scripts"
+    PANEL_DROP = "-A INPUT -i wg-t -p tcp --dport 8080 -m comment --comment awg:wg-t -j DROP"
+    ACCEPT = "-A INPUT -i wg-t -m comment --comment awg:wg-t -j ACCEPT"
+
+    def _run(self, script, block_lan="1", nat="1"):
+        tmp = Path(tempfile.mkdtemp(prefix="awg-ipt-"))
+        log = tmp / "calls"
+        fake = tmp / "iptables"
+        fake.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\ncase " $* " in *" -D "*) exit 1;; esac\n', encoding="utf-8")
+        fake.chmod(0o755)
+        env = {
+            **os.environ,
+            "PATH": f"{tmp}:{os.environ['PATH']}",
+            "WAN_IF": "eth0",
+            "NGINX_PORT": "8080",
+            "BLOCK_LAN_CIDRS": block_lan,
+            "ENABLE_NAT": nat,
+        }
+        # Through bash: the repo keeps the scripts at 644; the image makes them executable.
+        subprocess.run(["bash", str(self.SCRIPTS / script), "wg-t", "10.77.0.0/24"], env=env, check=True, capture_output=True)
+        calls = log.read_text(encoding="utf-8").splitlines()
+        return [c for c in calls if " -A " in f" {c} "], [c for c in calls if " -D " in f" {c} "]
+
+    def test_block_lan_drops_the_panel_ahead_of_the_tunnels_accept(self):
+        added, _ = self._run("setup_iptables.sh")
+        self.assertLess(added.index(self.PANEL_DROP), added.index(self.ACCEPT))
+        self.assertEqual(len(added), 4 + 4 + 1)  # what /api/system/iptables-test expects
+
+    def test_without_block_lan_the_panel_stays_reachable_through_the_tunnel(self):
+        added, _ = self._run("setup_iptables.sh", block_lan="0", nat="0")
+        self.assertNotIn(self.PANEL_DROP, added)
+        self.assertEqual(len(added), 4)
+
+    def test_cleanup_deletes_each_rule_by_the_spec_setup_added(self):
+        # -D matches only an identical spec: a rule spelled differently would stay.
+        added, _ = self._run("setup_iptables.sh")
+        _, deleted = self._run("cleanup_iptables.sh")
+        self.assertEqual({rule.replace("-A ", "-D ", 1) for rule in added}, set(deleted))
 
 
 class LiveConfigTests(_Base):

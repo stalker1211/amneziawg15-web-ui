@@ -8,8 +8,10 @@ SUBNET=$2
 
 # Detect WAN interface (default route) and configure LAN blocking.
 WAN_IF=${WAN_IF:-$(ip route show default 2>/dev/null | awk '{print $5}' | head -n1)}
-# BLOCK_LAN_CIDRS: 1=block VPN -> private LAN ranges, 0=allow.
+# BLOCK_LAN_CIDRS: 1=block VPN -> private LAN ranges and the panel, 0=allow.
 BLOCK_LAN_CIDRS=${BLOCK_LAN_CIDRS:-1}
+# The panel's port, as setup_iptables.sh read it (the same environment).
+PANEL_PORT=${NGINX_PORT:-80}
 
 if [ -z "$INTERFACE" ] || [ -z "$SUBNET" ]; then
     echo "Usage: $0 <interface_name> <subnet>"
@@ -52,6 +54,7 @@ drop -D FORWARD -m state --state ESTABLISHED,RELATED "${TAG[@]}" -j ACCEPT
 drop -D FORWARD -i "$INTERFACE" -o "$WAN_IF" -s "$SUBNET" "${TAG[@]}" -j ACCEPT
 drop -D OUTPUT -o "$INTERFACE" "${TAG[@]}" -j ACCEPT
 drop -D INPUT -i "$INTERFACE" "${TAG[@]}" -j ACCEPT
+drop -D INPUT -i "$INTERFACE" -p tcp --dport "$PANEL_PORT" "${TAG[@]}" -j DROP
 drop -D FORWARD -s "$SUBNET" -d 192.168.0.0/16 "${TAG[@]}" -j DROP
 drop -D FORWARD -s "$SUBNET" -d 10.0.0.0/8 "${TAG[@]}" -j DROP
 drop -D FORWARD -s "$SUBNET" -d 172.16.0.0/12 "${TAG[@]}" -j DROP

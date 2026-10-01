@@ -268,8 +268,9 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
                 continue
             rules += [line for line in output.splitlines() if tag in line]
 
-        # INPUT, OUTPUT, FORWARD from the VPN and ESTABLISHED,RELATED; 3 LAN drops; NAT.
-        expected = 4 + 3 * bool(server.get("block_lan_cidrs")) + bool(server.get("enable_nat"))
+        # INPUT, OUTPUT, FORWARD from the VPN and ESTABLISHED,RELATED; with Block LAN the
+        # panel's INPUT drop and 3 LAN drops; NAT.
+        expected = 4 + 4 * bool(server.get("block_lan_cidrs")) + bool(server.get("enable_nat"))
         return jsonify(
             {
                 "server_id": server_id,
