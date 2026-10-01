@@ -479,6 +479,29 @@ class PublicIpTests(_Base):
 class EgressProbeTests(_Base):
     """The manager's side: the probe recorded on its server (tests/test_netinfo.py has the probe)."""
 
+    def test_a_start_checks_the_egress_again_and_tells_the_page(self):
+        server = self._server()
+        self.paths.interfaces.add(server["interface"])  # awg-quick brought it up
+        with (
+            mock.patch.object(
+                self.manager.netinfo, "detect_public_ip_from_source", return_value=("198.51.100.9", "https://api.ipify.org")
+            ) as probe,
+            mock.patch.object(self.manager.netinfo, "lookup_geoip", return_value=("Sweden", "SE")),
+        ):
+            self.assertTrue(self.manager.start_server(server["id"]))
+        probe.assert_called_once()
+        self.assertEqual(self._saved()["servers"][0]["egress_probe"]["external_ip_geo_country_code"], "SE")
+        # The status push, then the probe's: each makes the page reload the servers.
+        pushes = [event for event in self.manager.events.published if event[0] == "server_status"]
+        self.assertEqual(pushes, [("server_status", {"server_id": server["id"], "status": "running"})] * 2)
+
+    def test_no_egress_check_when_the_server_did_not_come_up(self):
+        server = self._server()  # its interface never appears
+        with mock.patch.object(self.manager.netinfo, "detect_public_ip_from_source") as probe:
+            self.manager.start_server(server["id"])
+        probe.assert_not_called()
+        self.assertIsNone(self._saved()["servers"][0]["egress_probe"])
+
     def test_probe_is_recorded_and_persisted(self):
         server = self._server()
         with (

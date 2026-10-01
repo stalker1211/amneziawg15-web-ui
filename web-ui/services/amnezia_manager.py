@@ -1688,6 +1688,7 @@ PersistentKeepalive = 25
                 else:
                     logger.error(f"Warning: iptables setup may have failed for {server['interface']}")
                 self.emit_status_after_delay(server_id, "running")
+                self.probe_egress_later(server_id)
                 return True
             else:
                 logger.error(f"Failed to start server {server['name']}")
@@ -1766,6 +1767,21 @@ PersistentKeepalive = 25
             self.events.publish("server_status", {"server_id": server_id, "status": status})
 
         self.start_background_task(emit_later)
+
+    def probe_egress_later(self, server_id, delay_seconds=2):
+        """Check where a running server's traffic exits, off the request thread, then
+        prompt the page to reload. A start and a NAT or LAN change can each move it (in
+        production NAT off exits by ProtonVPN, NAT on by the WAN); until 2.5 it was
+        probed only on request, so the card kept showing an old exit."""
+
+        def probe_later():
+            self.sleep(delay_seconds)  # the interface and its iptables rules settle
+            if self.get_server_status(server_id) != "running":
+                return
+            self.probe_server_egress_ip(server_id)
+            self.events.publish("server_status", {"server_id": server_id, "status": "running"})
+
+        self.start_background_task(probe_later)
 
     def start_traffic_monitoring(self):
         """Read telemetry every 7 s and push each running server's to the page."""

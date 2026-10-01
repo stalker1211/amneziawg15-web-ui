@@ -51,6 +51,16 @@ now asks for the password (on an iPad, a prompt).
   Block LAN off for that server to allow it again. The LAN and a reverse proxy are
   unaffected. The ⚙ firewall check now expects one more rule per Block LAN server.
 
+### The egress, kept current
+- **A server's egress is checked again by itself** after it starts (the boot
+  restore included) and after its NAT or Block LAN switch changes while it runs,
+  and the card updates live. Until now only ↻ checked it, so after a NAT change,
+  which moves where the clients' traffic exits, or a restart, the card could show an
+  old exit.
+- **The server settings drop the Public IP row:** it is the same for every server
+  and the status strip shows it; the Endpoint field shows it too, and with an
+  endpoint host set, its hint names the detected public IP.
+
 ### Health
 - **`unhealthy` now means a VPN is down,** not only the panel: `/status` answers 503
   when a server that should be running (it was last started) has no interface, from

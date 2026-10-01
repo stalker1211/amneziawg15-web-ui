@@ -555,7 +555,7 @@ class FormUi {
                 ${this.formSection('Overview', `
                     <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
                         ${row('Port', `${safe(info.port)}/udp`)}${row('Subnet', safe(info.subnet))}${row('Server IP', safe(info.server_ip))}
-                        ${row('Public IP', safe(info.public_ip))}${row('DNS', safe((info.dns || []).join(', ')))}${row('MTU', safe(info.mtu))}
+                        ${row('DNS', safe((info.dns || []).join(', ')))}${row('MTU', safe(info.mtu))}
                         ${row('Clients', safe(info.clients_count), false)}
                         <dt class="text-gray-700 dark:text-[#bac5d4]">Public key</dt>
                         <dd class="flex items-center gap-1 min-w-0"><span id="s-publicKey" class="font-mono text-xs truncate text-gray-900 dark:text-[#e5e7eb]">${safe(info.public_key)}</span>
@@ -564,7 +564,9 @@ class FormUi {
                     </dl>`)}
                 ${this.formSection('Endpoint', `
                     ${this.formField('s-endpoint_host', 'Endpoint host', info.endpoint_host || '', { mono: true, placeholder: `detected: ${info.public_ip || ''}`,
-                        hint: 'What client configs dial: a DNS name (e.g. dynamic DNS) or IPv4; empty uses the detected public IP. Changing it means every client re-imports; with a name, a new public IP needs none.' })}`)}
+                        hint: 'What client configs dial: a DNS name (e.g. dynamic DNS) or IPv4; empty uses the detected public IP. Changing it means every client re-imports; with a name, a new public IP needs none.'
+                            // With a host set the placeholder is hidden: say what the name should resolve to.
+                            + (info.endpoint_host && info.public_ip ? ` Detected public IP: <span class="font-mono">${safe(info.public_ip)}</span>.` : '') })}`)}
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
                         ${this.formSwitch('s-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', info.enable_nat)}

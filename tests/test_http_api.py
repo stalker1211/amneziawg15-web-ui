@@ -642,6 +642,15 @@ class ServerRouteTests(_RealSystemApp):
         with self.assertLogs("services.amnezia_manager", "ERROR"):
             self.assertEqual(self.client.post(self._url("networking"), json={}).get_json()["iptables"], "failed")
 
+    def test_a_networking_change_checks_a_running_servers_egress_again(self):
+        # NAT decides where the clients' traffic exits; a stopped server has no exit.
+        with mock.patch.object(self.manager, "probe_egress_later") as later:
+            self.client.post(self._url("networking"), json={"enable_nat": False})
+            later.assert_not_called()
+            self.paths.interfaces.add(self.server["interface"])
+            self.client.post(self._url("networking"), json={"enable_nat": True})
+        later.assert_called_once_with(self.server["id"])
+
     def test_server_config_and_download(self):
         on_disk = Path(self.server["config_path"]).read_text(encoding="utf-8")
         payload = self.client.get(self._url("config")).get_json()

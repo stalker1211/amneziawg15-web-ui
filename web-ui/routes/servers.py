@@ -316,6 +316,8 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
         iptables_status = "skipped"
         if amnezia_manager.get_server_status(server_id) == "running":
             iptables_status = "reapplied" if amnezia_manager.reapply_iptables_for_server(server) else "failed"
+            # NAT decides where the clients' traffic exits: check it again.
+            amnezia_manager.probe_egress_later(server_id)
 
         return jsonify(
             {

@@ -127,14 +127,20 @@ def build_real_manager(test_case, fake_subprocess=None, **overrides):
 
     Only the constructor's own edges are stubbed (directories, public-IP detection,
     the traffic thread); every subprocess call goes to a FakeSubprocess, patched for
-    the duration of `test_case`. Returns (manager, fake_subprocess).
+    the duration of `test_case`, and the network is offline: an egress probe that a
+    start or a NAT change runs (inline here) fails as with no route, unless the test
+    patches `services.netinfo.https_get` itself. Returns (manager, fake_subprocess).
     """
     from services.amnezia_manager import AmneziaManager
 
     fake = fake_subprocess or FakeSubprocess().with_wg_keys()
-    patcher = mock.patch("services.amnezia_manager.subprocess.run", fake)
-    patcher.start()
-    test_case.addCleanup(patcher.stop)
+    for target, stand_in in (
+        ("services.amnezia_manager.subprocess.run", fake),
+        ("services.netinfo.https_get", mock.Mock(side_effect=OSError("offline: tests reach no network"))),
+    ):
+        patcher = mock.patch(target, stand_in)
+        patcher.start()
+        test_case.addCleanup(patcher.stop)
 
     class _RealSystemManager(AmneziaManager):
         def __init__(self, *args, **kwargs):
