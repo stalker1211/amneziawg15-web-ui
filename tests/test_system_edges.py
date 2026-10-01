@@ -358,6 +358,7 @@ class BackgroundTaskTests(_Base):
         with (
             mock.patch("services.amnezia_manager.time.time", return_value=1_790_718_000.5),
             mock.patch.object(self.manager, "save_config") as save,
+            mock.patch.object(self.manager, "interface_totals", return_value={"received_bytes": 5}) as totals,
             self.assertRaises(StopLoop),
         ):
             AmneziaManager.start_traffic_monitoring(self.manager)
@@ -367,6 +368,9 @@ class BackgroundTaskTests(_Base):
         save.assert_not_called()
         self.assertEqual([(event, data["server_id"]) for event, data in events.published], [("traffic_update", up["id"])])
         self.assertEqual(events.published[0][1]["traffic"][client["id"]]["received_bytes"], 0)
+        # With its interface's totals, read for the running server only.
+        self.assertEqual(events.published[0][1]["totals"], {"received_bytes": 5})
+        totals.assert_called_once_with(up["interface"])
         self.manager.sleep.assert_called_once_with(7)
         # The history is recorded before anything is published, and the event carries
         # the tick's time, which the page appends to its last hour.

@@ -32,6 +32,9 @@ Current version: **2.5**
   24 h, per client, with when each was online or suspended. Kept in the panel's memory
   (every 7 s for an hour, per minute for a day), so a restart starts it over; nothing is
   written to disk. Download (↓) and upload (↑) are from the device's side.
+- **Server totals** — beside the graph, what a running server has carried since it
+  started (and since when): the kernel's counters for its interface, so a client
+  suspended or deleted since still counts. A stop and start begins them again.
 - **Health check** — Docker marks the container `unhealthy` when a server that should
   run is down, or has drifted from the panel: a device the panel suspended or deleted
   still let in, or firewall rules that are not what its switches call for.
@@ -170,8 +173,8 @@ Basic Auth credentials.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes and bit/s over the last 7 s, endpoint, handshake age) |
-| GET | `/api/events` | live updates, a Server-Sent Events stream: `traffic_update` (every 7 s per running server: its time `at` and the same per-client shape as `traffic` above), `server_status` (after a start or stop), `ping` (every 15 s when idle) |
+| GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes and bit/s over the last 7 s, endpoint, handshake age), and a running server's `totals` since its interface came up (`received_bytes`, `sent_bytes`, `since`) |
+| GET | `/api/events` | live updates, a Server-Sent Events stream: `traffic_update` (every 7 s per running server: its time `at`, the same per-client shape as `traffic` above, and its `totals`), `server_status` (after a start or stop), `ping` (every 15 s when idle) |
 | GET | `/api/servers/<id>/traffic?range=1h\|6h\|24h` | the traffic history per client, in bit/s: every 7 s for `1h` (the default), per minute for `6h` and `24h`; `null` where there is no data; totals in bytes; `since`, when the history started |
 | POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `endpoint_host`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
 | DELETE | `/api/servers/<id>` | delete server and its clients |

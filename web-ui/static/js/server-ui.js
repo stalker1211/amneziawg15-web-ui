@@ -106,16 +106,20 @@ class ServerUi {
 
         // The last hour of a running server; a click opens the Traffic dialog. AmneziaApp
         // draws the chart and the rates into it (drawTraffic): the chart needs its width.
+        // Beside it (under it on a phone), what the server carried since it started.
         const band = running ? `
+                <div class="mt-1 flex flex-col sm:flex-row gap-2">
                 <button type="button" data-action="server-traffic" data-server="${id}" aria-label="Traffic of ${safe(server.name)}: open its history"
-                    class="w-full mt-1 flex items-center gap-4 rounded-lg border border-gray-300 px-3 py-2 text-left transition hover:bg-gray-50 hover:border-gray-400 dark:border-[#334155] dark:hover:bg-[#273449] dark:hover:border-[#475569]">
+                    class="flex-1 min-w-0 flex items-center gap-4 rounded-lg border border-gray-300 px-3 py-2 text-left transition hover:bg-gray-50 hover:border-gray-400 dark:border-[#334155] dark:hover:bg-[#273449] dark:hover:border-[#475569]">
                     <span class="flex flex-col gap-0.5 flex-none w-[4.5rem]">
                         <span class="section-title">Traffic</span>
                         <span class="text-xs text-gray-600 dark:text-[#98a6ba]">last hour</span>
                     </span>
                     <span data-band-plot="${id}" class="flex-1 min-w-0 h-11"></span>
                     <span data-band-now="${id}" class="flex flex-col gap-0.5 flex-none text-xs tabular-nums text-right text-gray-800 dark:text-[#d7dee9]">${ServerUi.bandNowHtml(server.traffic || {})}</span>
-                </button>` : '';
+                </button>
+                <div data-total="${id}" class="flex-none sm:w-60 flex items-center justify-between gap-4 rounded-lg border border-gray-300 px-3 py-2 dark:border-[#334155]">${ServerUi.totalHtml(server.totals)}</div>
+                </div>` : '';
 
         const status = running
             ? '<span class="pill bg-green-100 text-green-800 dark:bg-[#14532d] dark:text-[#86efac]">Running</span>'
@@ -160,6 +164,42 @@ class ServerUi {
         const sum = (key) => Object.values(traffic || {}).reduce((a, t) => a + (Number(t?.[key]) || 0), 0) / 1e6;
         const line = (key, arrow, dir) => `<span class="inline-flex items-center justify-end gap-1.5"><span class="w-3 h-0.5 rounded-full ${key}"></span>${arrow} <strong class="font-semibold ${C.text}">${window.Charts.rateNum(sum(dir))}</strong> Mbit/s</span>`;
         return line(C.dKey, '↓', 'sent_bps') + line(C.uKey, '↑', 'received_bps');
+    }
+
+    // A server's totals since its interface came up (`totals`, the kernel's counters, so a
+    // suspended or deleted client's share stays in them): "since 09:14" beside
+    // "↓ 19.15 GiB" over "↑ 3.87 GiB"; the uptime on hover.
+    static totalHtml(totals) {
+        const C = window.Charts.C;
+        const t = totals || {};
+        const started = Number(t.since);
+        const known = Number.isFinite(started) && started > 0;
+        let since = 'since start';
+        if (known) {
+            const d = new Date(started * 1000);
+            since = d.toDateString() === new Date().toDateString()
+                ? `since ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+                : `since ${ServerUi.stamp(started)}`;
+        }
+        const title = known ? `Up ${ServerUi.uptime(Date.now() / 1000 - started)}` : 'Since the server started';
+        const line = (arrow, key) => {
+            const [num, unit] = ServerUi.bytes(t[key]).split(' ');
+            return `<span>${arrow} <strong class="font-semibold ${C.text}">${num}</strong> ${unit}</span>`;
+        };
+        return `<span class="flex flex-col gap-0.5 min-w-0" title="${title}">
+                <span class="section-title">Total</span>
+                <span class="text-xs text-gray-600 dark:text-[#98a6ba] whitespace-nowrap">${since}</span>
+            </span>
+            <span class="flex flex-col gap-0.5 flex-none text-xs tabular-nums text-right text-gray-800 dark:text-[#d7dee9]">${line('↓', 'sent_bytes')}${line('↑', 'received_bytes')}</span>`;
+    }
+
+    // "3 d 4 h", "2 h 10 min", "5 min": how long an interface has been up.
+    static uptime(seconds) {
+        const s = Math.max(0, Math.floor(Number(seconds) || 0));
+        const [d, h, m] = [Math.floor(s / 86400), Math.floor((s % 86400) / 3600), Math.floor((s % 3600) / 60)];
+        if (d) return `${d} d${h ? ` ${h} h` : ''}`;
+        if (h) return `${h} h${m ? ` ${m} min` : ''}`;
+        return `${m} min`;
     }
 
     // The Clients header's summary: "4 · 2 online · 1 to re-import".

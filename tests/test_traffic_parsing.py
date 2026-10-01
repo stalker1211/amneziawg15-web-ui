@@ -7,6 +7,7 @@ one 9-column line per peer. Bytes and handshakes are plain integers -- the reaso
 for the switch from parsing "1.39 MiB received" and "1 minute, 2 seconds ago".
 """
 
+import io
 import unittest
 from unittest import mock
 
@@ -16,6 +17,11 @@ from tests.support import build_manager
 # pylint: disable=missing-function-docstring,missing-class-docstring,protected-access
 
 NOW = 1_790_718_400
+# An interface's sysfs counters, as a 50 MB download over a tunnel left them.
+SYSFS = {
+    "/sys/class/net/wg-abc/statistics/rx_bytes": "36811\n",
+    "/sys/class/net/wg-abc/statistics/tx_bytes": "52477466\n",
+}
 
 
 def interface_line(iface):
@@ -70,6 +76,55 @@ class OperstateTests(unittest.TestCase):
             self.assertEqual(AmneziaManager.interface_state("wg-abc"), "unknown")
         opened.assert_called_once_with("/sys/class/net/wg-abc/operstate", encoding="ascii")
         self.assertIsNone(AmneziaManager.interface_state("wg-surely-absent-9"))
+
+
+class InterfaceTotalsTests(unittest.TestCase):
+    """A server's totals: the kernel's counters for its interface (sysfs) and when it
+    came up (the mtime of amneziawg-go's control socket)."""
+
+    def totals(self, files, stat):
+        from services.amnezia_manager import AmneziaManager  # pylint: disable=import-outside-toplevel
+
+        def fake_open(path, **_):
+            if path not in files:
+                raise FileNotFoundError(path)
+            return io.StringIO(files[path])
+
+        with mock.patch("builtins.open", fake_open), mock.patch("services.amnezia_manager.os.stat", stat):
+            return AmneziaManager.interface_totals("wg-abc"), stat
+
+    def test_counters_and_the_socket_time(self):
+        totals, stat = self.totals(SYSFS, mock.Mock(return_value=mock.Mock(st_mtime=1_790_880_749.6)))
+        # rx is what the devices sent (their upload), as for a peer: the daemon's terms.
+        self.assertEqual(totals, {"received_bytes": 36811, "sent_bytes": 52477466, "since": 1_790_880_749})
+        stat.assert_called_once_with("/var/run/amneziawg/wg-abc.sock")
+
+    def test_no_socket_still_has_counters(self):
+        # A kernel-module interface has no amneziawg-go socket: counters, no start time.
+        totals, _ = self.totals(SYSFS, mock.Mock(side_effect=FileNotFoundError))
+        self.assertEqual(totals, {"received_bytes": 36811, "sent_bytes": 52477466, "since": None})
+
+    def test_no_interface_or_a_bad_counter_is_none(self):
+        socket = mock.Mock(return_value=mock.Mock(st_mtime=1.0))
+        self.assertIsNone(self.totals({}, socket)[0])
+        self.assertIsNone(self.totals({**SYSFS, next(iter(SYSFS)): "garbage"}, socket)[0])
+
+    def test_only_a_running_server_has_totals(self):
+        manager = build_manager()
+        server = manager.create_wireguard_server(
+            {"name": "totals", "protocol": "AWG 2.0", "subnet": "10.8.0.0/24", "auto_start": False}
+        )
+        totals = {"received_bytes": 1, "sent_bytes": 2, "since": 3}
+        with mock.patch.object(manager, "interface_totals", return_value=totals) as read:
+            manager.run_command = lambda args: interface_line("wg-other")
+            manager.read_telemetry()
+            self.assertIsNone(manager.get_server_totals(server["id"]))
+            self.assertIsNone(manager.get_server_totals("nope"))
+            read.assert_not_called()
+            manager.run_command = lambda args: interface_line(server["interface"])
+            manager.read_telemetry()
+            self.assertEqual(manager.get_server_totals(server["id"]), totals)
+            read.assert_called_once_with(server["interface"])
 
 
 class TrafficTests(unittest.TestCase):

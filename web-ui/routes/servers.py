@@ -187,13 +187,15 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
     def get_servers():
         """Everything the page shows, in one request: servers with their clients, live
         status, geo labels and the last telemetry snapshot (`traffic`, per client id;
-        empty for a stopped server). Read-only: display values are computed into the
+        empty for a stopped server), with the interface's `totals` since it came up
+        (None when stopped). Read-only: display values are computed into the
         response, never written back to the stored config."""
         payload = []
         for server in amnezia_manager.config["servers"]:
             item = serialize_server(server)
             item["status"] = amnezia_manager.get_server_status(server["id"])
             item["traffic"] = amnezia_manager.get_traffic_for_server(server["id"]) or {}
+            item["totals"] = amnezia_manager.get_server_totals(server["id"])
             item["public_ip_geo"], item["public_ip_geo_country_code"] = amnezia_manager.netinfo.lookup_geoip(
                 server.get("public_ip")
             )

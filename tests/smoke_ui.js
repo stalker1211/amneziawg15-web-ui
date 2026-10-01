@@ -132,6 +132,13 @@ function check(label, condition, detail) {
             const band = document.querySelector(`article[data-server-id="${s.id}"] [data-action="server-traffic"]`);
             return s.status === 'running' ? !!band?.querySelector('[data-band-plot] svg path') : !band;
         })));
+        // Beside it, the interface's totals since it came up (2.6): a size and a start time.
+        check('a totals box on running cards only, with its sizes and start', await page.evaluate(() => amneziaApp.lastServers.every((s) => {
+            const box = document.querySelector(`article[data-server-id="${s.id}"] [data-total]`);
+            if (s.status !== 'running') return !box;
+            const text = box?.textContent.replace(/\s+/g, ' ') || '';
+            return /Total/i.test(text) && /since \S/.test(text) && /↓ [\d.]+ (B|KiB|MiB|GiB|TiB)/.test(text) && /↑ [\d.]+ /.test(text);
+        })));
         check('a sparkline under the totals on online rows only', await page.evaluate(() => amneziaApp.lastServers.every((s) =>
             (s.clients || []).every((c) => {
                 const cell = document.querySelector(`li[data-client-id="${c.id}"] [data-cell="spark"]`);

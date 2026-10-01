@@ -88,6 +88,7 @@ class DemoManager(AmneziaManager):
 
     def __init__(self, **kwargs):
         self.running = set()  # interfaces that are "up"
+        self.started = {}  # interface -> when it came up (the totals' `since`)
         self.peers = {}  # client public key -> {endpoint, handshake_at, rx, tx, read_at}
         self._live_rngs = {}  # client name -> its live traffic's random.Random
         self._public_ip_calls = 0
@@ -121,6 +122,7 @@ class DemoManager(AmneziaManager):
     def run_command(self, args, env=None):
         if args[:2] == ["/usr/bin/awg-quick", "up"]:
             self.running.add(args[2])
+            self.started[args[2]] = time.time()
         elif args[:2] == ["/usr/bin/awg-quick", "down"]:
             self.running.discard(args[2])
         elif args == ["/usr/bin/awg", "show", "all", "dump"]:
@@ -129,6 +131,19 @@ class DemoManager(AmneziaManager):
 
     def interface_state(self, interface):
         return "unknown" if interface in self.running else None
+
+    def interface_totals(self, interface):
+        """The interface's counters as the sum of its peers' (the demo has no framing to
+        leave out), since its start."""
+        if interface not in self.running:
+            return None
+        server = next(s for s in self.config["servers"] if s["interface"] == interface)
+        peers = [self.peers.get(c["client_public_key"]) or {} for c in server["clients"]]
+        return {
+            "received_bytes": int(sum(p.get("rx", 0) for p in peers)),
+            "sent_bytes": int(sum(p.get("tx", 0) for p in peers)),
+            "since": int(self.started[interface]),
+        }
 
     def setup_iptables(self, *args, **kwargs):
         return True
@@ -241,6 +256,9 @@ def seed(manager):
     for srv in (home, travel):
         manager.start_server(srv["id"])
         manager.probe_server_egress_ip(srv["id"])
+    # Home has been up for days (the iPad's handshake is 3 d old), Travel since this morning.
+    manager.started[home["interface"]] = now - (3 * 86400 + 4 * 3600)
+    manager.started[travel["interface"]] = now - 5 * 3600
     seed_history(manager)
 
 

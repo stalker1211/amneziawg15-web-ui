@@ -15,7 +15,8 @@ What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
   server and client CRUD                      delete_server, add_wireguard_client, toggle_client_suspend
   client .conf and the outdated-config flag   generate_wireguard_client_config, config_fingerprint
   iptables, start/stop, live status           setup_iptables, start_server, get_server_status
-  telemetry                                   start_traffic_monitoring, read_telemetry, get_traffic_for_server
+  telemetry                                   start_traffic_monitoring, read_telemetry, get_traffic_for_server,
+                                              get_server_totals (interface_totals: sysfs)
   traffic history, recorded                   record_history (the rings: services/history.py)
 """
 
@@ -1741,6 +1742,32 @@ PersistentKeepalive = 25
         except OSError:
             return None
 
+    @staticmethod
+    def interface_totals(interface):
+        """What an interface has carried since it came up, in the daemon's terms
+        (received = the devices' upload), and when it came up, or None when it does
+        not exist.
+
+        The counters are the kernel's (sysfs), so a suspended or deleted client's share
+        stays in them. They count the tunnelled packets without WireGuard's framing,
+        so they run under the sum of the clients' counters: 8% on a download, 1.85x
+        on its ACKs (measured, 2.6). `since` is the mtime of amneziawg-go's control
+        socket, created as the interface comes up and left alone by a live reload, a
+        suspend or a new client (verified); None without one (a kernel-module interface).
+        """
+        counters = []
+        try:
+            for name in ("rx_bytes", "tx_bytes"):
+                with open(f"/sys/class/net/{interface}/statistics/{name}", encoding="ascii") as f:
+                    counters.append(int(f.read()))
+        except (OSError, ValueError):
+            return None
+        try:
+            since = int(os.stat(f"/var/run/amneziawg/{interface}.sock").st_mtime)
+        except OSError:
+            since = None
+        return {"received_bytes": counters[0], "sent_bytes": counters[1], "since": since}
+
     def get_server_status(self, server_id):
         """'running' when the server's interface is up, from sysfs: no subprocess.
 
@@ -1799,7 +1826,10 @@ PersistentKeepalive = 25
                     for server in self.config["servers"]:
                         traffic = self.get_traffic_for_server(server["id"])
                         if traffic is not None:
-                            self.events.publish("traffic_update", {"server_id": server["id"], "at": at, "traffic": traffic})
+                            totals = self.get_server_totals(server["id"])
+                            self.events.publish(
+                                "traffic_update", {"server_id": server["id"], "at": at, "traffic": traffic, "totals": totals}
+                            )
                     self.sleep(7)
                 except Exception as e:
                     logger.error("Error in traffic monitoring: %s", e)
@@ -1924,6 +1954,14 @@ PersistentKeepalive = 25
                 "active": seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS,
             }
         return traffic
+
+    def get_server_totals(self, server_id):
+        """A running server's interface totals (interface_totals), or None when the server
+        is unknown or its interface is not in the last snapshot, as for its traffic."""
+        server = self.get_server(server_id)
+        if not server or server["interface"] not in self._telemetry["interfaces"]:
+            return None
+        return self.interface_totals(server["interface"])
 
     def client_status(self, client):
         """'active' after a handshake in the last 5 minutes (last snapshot), else 'inactive'."""

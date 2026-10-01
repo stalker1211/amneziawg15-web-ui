@@ -447,7 +447,7 @@ SERVER_KEYS = {
     "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns", "endpoint_host",
     "egress_probe", "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip",
     "public_ip_geo", "public_ip_geo_country_code", "server_ip", "server_public_key", "status", "subnet",
-    "traffic", "transport_params",
+    "totals", "traffic", "transport_params",
 }  # fmt: skip
 CLIENT_KEYS = {
     "allowed_ips", "client_ip", "client_params", "client_public_key", "config_issued_at", "config_outdated", "created_at", "id",
@@ -744,6 +744,11 @@ class ServerRouteTests(_RealSystemApp):
             self.assertEqual(self.client.get("/api/servers").get_json()[0]["traffic"], traffic)
         with mock.patch.object(self.manager, "get_traffic_for_server", return_value=None):
             self.assertEqual(self.client.get("/api/servers").get_json()[0]["traffic"], {})
+        # The interface's totals since it came up; null for a stopped server.
+        totals = {"received_bytes": 1, "sent_bytes": 2, "since": 3}
+        with mock.patch.object(self.manager, "get_server_totals", return_value=totals):
+            self.assertEqual(self.client.get("/api/servers").get_json()[0]["totals"], totals)
+        self.assertIsNone(self.client.get("/api/servers").get_json()[0]["totals"])
 
     def test_the_per_server_list_routes_are_gone(self):
         # .../traffic came back in 2.5 as the traffic history (TrafficHistoryRouteTests).

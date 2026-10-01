@@ -395,7 +395,7 @@ class AmneziaApp {
         on('server_status', () => this.loadServers());
         on('traffic_update', (event) => {
             const data = JSON.parse(event.data);
-            this.updateServerTraffic(data.server_id, data.traffic, data.at);
+            this.updateServerTraffic(data.server_id, data.traffic, data.at, data.totals);
         });
     }
 
@@ -670,13 +670,14 @@ class AmneziaApp {
         ]);
     }
 
-    // Every 7 s: the running server's new telemetry, patched into its rows in place, and
-    // its tick (`at`) appended to the last hour the charts draw.
-    updateServerTraffic(serverId, traffic, at = null) {
+    // Every 7 s: the running server's new telemetry, patched into its rows in place, its
+    // tick (`at`) appended to the last hour the charts draw, and its interface's totals.
+    updateServerTraffic(serverId, traffic, at = null, totals = undefined) {
         const server = (this.lastServers || []).find((s) => s.id === serverId);
         if (!server) return;
         const previous = server.traffic || {};
         server.traffic = (traffic && typeof traffic === 'object') ? traffic : {};
+        if (totals !== undefined) server.totals = totals;
         if (Number.isFinite(at)) this.appendTrafficTick(server, at);
         this.patchServerRows(server, previous);
         this.drawBand(server);
@@ -797,7 +798,8 @@ class AmneziaApp {
         return out;
     }
 
-    // A running card's band: its last hour across the card's width, and its rates now.
+    // A running card's band: its last hour across the card's width, its rates now, and
+    // the totals box beside it.
     drawBand(server) {
         const { maxOf, mirrored } = window.Charts;
         const plot = document.querySelector(`[data-band-plot="${server.id}"]`);
@@ -809,6 +811,8 @@ class AmneziaApp {
         }
         const now = document.querySelector(`[data-band-now="${server.id}"]`);
         if (now) now.innerHTML = window.ServerUi.bandNowHtml(server.traffic || {});
+        const total = document.querySelector(`[data-total="${server.id}"]`);
+        if (total) total.innerHTML = window.ServerUi.totalHtml(server.totals);
     }
 
     // Every chart on the page: the bands, the sparklines and the strip.

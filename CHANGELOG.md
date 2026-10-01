@@ -2,6 +2,16 @@
 
 ## Version 2.6 (unreleased)
 
+### Traffic
+- **Server totals:** beside a running server's traffic graph, a box with what it has
+  carried since it started (↓ and ↑) and when that was ("since 09:14", or a date; the
+  uptime on hover). They are the kernel's counters for the server's interface, read
+  every 7 s with nothing stored, so a client suspended or deleted since still counts,
+  and a stop and start (or a change that restarts the server) begins them again. They
+  leave out WireGuard's framing, so they run a little under the sum of the clients'
+  rows, more so for upload (mostly small packets). In the API: `totals` on each server
+  in `/api/servers` and in each `traffic_update`, `null` for a stopped server.
+
 ### Tooling
 - **The release checker, `tests/release_check.py`**: the image from the tree, checked
   end to end in one command (about 3 minutes). It builds the image, checks it carries the tree, boots it with no

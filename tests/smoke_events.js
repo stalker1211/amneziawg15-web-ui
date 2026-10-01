@@ -92,6 +92,20 @@ const streamOpen = () => !!(amneziaApp.events && amneziaApp.events.readyState ==
             && window.__spark.now() > window.__spark.newest;
     }, 20000));
 
+    // And the totals box beside the band (2.6) takes the tick's totals: marked stale here,
+    // it is drawn again, from counters newer than the ones the page loaded with.
+    await page.evaluate(() => {
+        const server = amneziaApp.lastServers.find((s) => s.totals);
+        window.__total = { id: server?.id, sent: server?.totals.sent_bytes };
+        const box = document.querySelector(`[data-total="${server?.id}"]`);
+        if (box) box.textContent = 'stale';
+    });
+    check('a traffic_update redraws the totals box with newer counters', await waitFor(page, () => {
+        const server = amneziaApp.lastServers.find((s) => s.id === window.__total.id);
+        const box = document.querySelector(`[data-total="${window.__total.id}"]`);
+        return !!box && /Total/i.test(box.textContent) && server.totals.sent_bytes > window.__total.sent;
+    }, 20000));
+
     // --- the browser gives the stream up ------------------------------------
     // As after a 502 while the panel restarts: closed, then an error. recoverEvents
     // asks /api/system/status, gets 200 and opens a new stream 3 s later.
