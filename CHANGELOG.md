@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Version 2.5 (unreleased)
+## Version 2.5 (2026-10-01)
 
 Fewer moving parts. Upgrading needs no action, with one change to note: Block LAN
 now keeps a server's clients off the panel too (below). `ALLOWED_ORIGINS` and the
