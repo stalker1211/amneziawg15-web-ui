@@ -10,7 +10,8 @@ One rule for every setting (DEVELOPMENT.md §11, "Settings: one rule"):
 Removing a variable therefore keeps its last value, now editable, and the first 2.4
 boot copies today's environment, so upgrading changes nothing. An invalid value is
 logged and ignored. Deployment-only variables (NGINX_PORT, AWG_LOG_FILE) are not
-settings and stay in app.py; retired ones are listed in RETIRED.
+settings and stay in app.py; retired ones are listed in RETIRED, and their stored
+values are dropped at boot.
 
 The Basic Auth credential is not stored here but in /etc/amnezia/.htpasswd, which
 nginx reads directly (see Access).
@@ -18,48 +19,16 @@ nginx reads directly (see Access).
 
 import grp
 import hmac
-import ipaddress
 import os
 import subprocess
 import tempfile
 
-from core.helpers import is_valid_ip, parse_daemon_log_level, to_bool
+from core.helpers import parse_daemon_log_level, to_bool
 from core.logging_setup import get_logger
 
 logger = get_logger(__name__)
 
 PANEL_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
-
-
-def _mtu(raw):
-    value = int(str(raw).strip())
-    if not 1280 <= value <= 1440:
-        raise ValueError(f"MTU must be between 1280 and 1440, got {value}")
-    return value
-
-
-def _port(raw):
-    value = int(str(raw).strip())
-    if not 1 <= value <= 65535:
-        raise ValueError(f"Port must be between 1 and 65535, got {value}")
-    return value
-
-
-def _subnet(raw):
-    network = ipaddress.ip_network(str(raw).strip(), strict=False)
-    if network.version != 4 or network.prefixlen > 30:
-        raise ValueError(f"Subnet must be an IPv4 /30 or larger, got {raw}")
-    return str(network)
-
-
-def _dns(raw):
-    servers = [part.strip() for part in (raw if isinstance(raw, list) else str(raw).split(",")) if str(part).strip()]
-    if not servers:
-        raise ValueError("At least one DNS server is required")
-    for server in servers:
-        if not is_valid_ip(server):
-            raise ValueError(f"Invalid DNS server IP: {server}")
-    return ", ".join(servers)
 
 
 def _flag(raw):
@@ -90,12 +59,6 @@ FIELDS = {
     "geoip": ("ENABLE_GEOIP", _flag, True),
     "awg_log_level": ("AWG_LOG_LEVEL", _daemon_level, "error"),
     "log_level": ("LOG_LEVEL", _panel_level, "INFO"),
-    "default_mtu": ("DEFAULT_MTU", _mtu, 1280),
-    "default_subnet": ("DEFAULT_SUBNET", _subnet, "10.0.0.0/24"),
-    "default_port": ("DEFAULT_PORT", _port, 51820),
-    "default_dns": ("DEFAULT_DNS", _dns, "8.8.8.8, 1.1.1.1"),
-    "enable_nat": ("ENABLE_NAT", _flag, True),
-    "block_lan_cidrs": ("BLOCK_LAN_CIDRS", _flag, True),
 }
 
 # Variables that no longer do anything. A container that still sets one is told so at
@@ -104,6 +67,10 @@ RETIRED = {
     "API_TOKEN": "removed in 2.4; nginx Basic Auth is the only credential",
     "AUTO_START_SERVERS": "removed in 2.5; each server comes back as it was last left",
     "ALLOWED_ORIGINS": "removed in 2.5 with Socket.IO; live updates are an ordinary request behind Basic Auth",
+    **dict.fromkeys(
+        ("DEFAULT_MTU", "DEFAULT_SUBNET", "DEFAULT_PORT", "DEFAULT_DNS", "ENABLE_NAT", "BLOCK_LAN_CIDRS"),
+        "removed in 2.5 with the new-server defaults; the New server form starts from your newest server",
+    ),
 }
 
 
@@ -127,8 +94,14 @@ class Settings:
 
     def resolve(self, stored):
         """Resolve every setting against `stored` (the config's `settings` dict), writing
-        pinned values through into it. Returns True when `stored` changed."""
-        changed = False
+        pinned values through into it and dropping keys of retired settings (the
+        new-server defaults until 2.5). Returns True when `stored` changed."""
+        stale = sorted(key for key in stored if key not in FIELDS)
+        for key in stale:
+            del stored[key]
+        if stale:
+            logger.info("Dropped retired settings: %s", ", ".join(stale))
+        changed = bool(stale)
         for key, (env, parse, default) in FIELDS.items():
             raw = self.env_value(key)
             if raw:

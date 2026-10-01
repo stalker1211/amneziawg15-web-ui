@@ -26,8 +26,6 @@ class AmneziaApp {
         this.lastServers = [];
         this.lastResyncAt = 0;
         this.drawerCtx = null;
-        // New-server defaults: rendered into the page, updated by the settings drawer.
-        this.environment = { ...(window.AppConfig.defaults || {}) };
         this.currentPublicIp = '';
         this.currentPublicIpCountryCode = '';
         this.init();

@@ -80,7 +80,8 @@ events = EventBroadcaster()
 settings = Settings()
 access = Access(HTPASSWD_FILE)
 
-# The defaults below are replaced by the resolved settings as the manager loads them.
+# The built-in new-server values: the form's first server (page_config), and what an
+# API call that leaves a field out gets. Later servers start from the newest one.
 amnezia_manager = AmneziaManager(
     events=events,
     auto_start_servers=True,

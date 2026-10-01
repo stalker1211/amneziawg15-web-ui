@@ -43,8 +43,9 @@ def tail_lines(path, count, block_size=64 * 1024):
 def page_config(amnezia_manager, access=None):
     """What the page needs from the backend before its first request, rendered into
     index.html as JSON (`#appConfig`): the protocol table, the parameter key lists and
-    the new-server defaults. The UI keeps no copy of any of it (static/js/protocols.js
-    only reads this), so there is nothing to drift.
+    the built-in values the New server form offers when there is no server to copy
+    from yet. The UI keeps no copy of any of it (static/js/protocols.js only reads
+    this), so there is nothing to drift.
     """
     m = amnezia_manager
     return {
@@ -83,10 +84,10 @@ def page_config(amnezia_manager, access=None):
 def render_page(amnezia_manager, access, *, cache_bust, build_label):
     """index.html with the page config, never cached.
 
-    The page carries live state (#appConfig: the default-password banner, the
-    new-server defaults). Without Cache-Control Safari brought back an old copy from
-    its back/forward cache after the password changed, banner and all; no-store also
-    keeps the page out of that cache.
+    The page carries live state (#appConfig: the default-password banner). Without
+    Cache-Control Safari brought back an old copy from its back/forward cache after
+    the password changed, banner and all; no-store also keeps the page out of that
+    cache.
     """
     response = make_response(
         render_template(

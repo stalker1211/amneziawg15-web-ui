@@ -169,8 +169,8 @@ class AmneziaManager:
         self.awg_log_level = awg_log_level if awg_log_level in self.DAEMON_LOG_LEVELS else "off"
 
         self.config = self.load_config()
-        # Stored settings, pinned by the environment (core/settings.py): they replace
-        # the defaults passed in above. The tests pass none.
+        # Stored settings, pinned by the environment (core/settings.py): GeoIP and the
+        # daemon's log level replace the values passed in above. The tests pass none.
         self.settings = settings
         if settings is not None:
             if settings.resolve(self.config.setdefault("settings", {})):
@@ -527,14 +527,8 @@ class AmneziaManager:
             return (None, None)
 
     def apply_settings(self):
-        """Take the new-server defaults, GeoIP and the daemon's log level from the settings."""
+        """Take GeoIP and the daemon's log level from the settings."""
         values = self.settings.values
-        self.default_mtu = values["default_mtu"]
-        self.default_subnet = values["default_subnet"]
-        self.default_port = values["default_port"]
-        self.dns_servers = [dns.strip() for dns in values["default_dns"].split(",") if dns.strip()]
-        self.default_enable_nat = values["enable_nat"]
-        self.default_block_lan_cidrs = values["block_lan_cidrs"]
         self.enable_geoip = values["geoip"]
         self.awg_log_level = values["awg_log_level"]
 

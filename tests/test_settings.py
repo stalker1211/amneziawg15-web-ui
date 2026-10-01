@@ -27,11 +27,11 @@ HAVE_OPENSSL = shutil.which("openssl") is not None
 class ResolveTests(unittest.TestCase):
     def test_env_pins_and_writes_through(self):
         stored = {}
-        settings = Settings({"DEFAULT_MTU": "1420", "ENABLE_NAT": "0"})
+        settings = Settings({"LOG_LEVEL": "warning", "ENABLE_GEOIP": "0"})
         self.assertTrue(settings.resolve(stored))
-        self.assertEqual(stored, {"default_mtu": 1420, "enable_nat": False})
-        self.assertEqual((settings.values["default_mtu"], settings.sources["default_mtu"]), (1420, "env"))
-        self.assertEqual(settings.sources["default_port"], "default")
+        self.assertEqual(stored, {"log_level": "WARNING", "geoip": False})
+        self.assertEqual((settings.values["log_level"], settings.sources["log_level"]), ("WARNING", "env"))
+        self.assertEqual(settings.sources["awg_log_level"], "default")
         self.assertFalse(settings.resolve(stored))  # the second boot changes nothing
 
     def test_a_removed_variable_keeps_its_last_value_now_editable(self):
@@ -44,39 +44,50 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(stored["awg_log_level"], "error")
 
     def test_empty_counts_as_unset_and_invalid_is_ignored(self):
-        stored = {"default_port": 51900}
-        settings = Settings({"AWG_LOG_LEVEL": "", "DEFAULT_PORT": "99999", "LOG_LEVEL": "loud"})
+        stored = {"geoip": False}
+        settings = Settings({"AWG_LOG_LEVEL": "", "ENABLE_GEOIP": "maybe", "LOG_LEVEL": "loud"})
         with self.assertLogs("core.settings", "WARNING") as logs:
             settings.resolve(stored)
         self.assertEqual(len(logs.output), 2)
-        self.assertEqual((settings.values["default_port"], settings.sources["default_port"]), (51900, "panel"))
+        self.assertEqual((settings.values["geoip"], settings.sources["geoip"]), (False, "panel"))
         self.assertEqual((settings.values["awg_log_level"], settings.sources["awg_log_level"]), ("error", "default"))
         self.assertEqual(settings.values["log_level"], "INFO")
-        self.assertEqual(stored, {"default_port": 51900})
+        self.assertEqual(stored, {"geoip": False})
 
     def test_upgrading_keeps_todays_environment(self):
-        # Production's compose today: the first 2.4 boot copies it all.
-        env = {"DEFAULT_MTU": "1280", "ENABLE_NAT": "0", "AWG_LOG_LEVEL": "debug", "NGINX_PORT": "8091"}
+        # Production's compose before 2.4: the first 2.4 boot copied it all.
+        env = {"AWG_LOG_LEVEL": "debug", "LOG_LEVEL": "DEBUG", "NGINX_PORT": "8091"}
         stored = {}
         Settings(env).resolve(stored)
-        self.assertEqual(stored, {"default_mtu": 1280, "enable_nat": False, "awg_log_level": "debug"})
+        self.assertEqual(stored, {"awg_log_level": "debug", "log_level": "DEBUG"})
+
+    def test_retired_settings_leave_the_store(self):
+        # Production's store at 2.4: two new-server defaults (gone in 2.5) beside a live one.
+        stored = {"default_mtu": 1280, "enable_nat": False, "geoip": True}
+        settings = Settings({"DEFAULT_MTU": "1300"})
+        with self.assertLogs("core.settings", "INFO") as logs:
+            self.assertTrue(settings.resolve(stored))
+        self.assertEqual(stored, {"geoip": True})
+        self.assertIn("Dropped retired settings: default_mtu, enable_nat", logs.output[0])
+        self.assertNotIn("default_mtu", settings.values)
+        self.assertFalse(settings.resolve(stored))
 
     def test_a_pinned_setting_can_come_back_unchanged_but_not_change(self):
-        settings = Settings({"DEFAULT_MTU": "1420"})
+        settings = Settings({"LOG_LEVEL": "WARNING"})
         settings.resolve({})
-        self.assertEqual(settings.check({"default_mtu": "1420"}), ({}, []))
-        _, errors = settings.check({"default_mtu": 1300})
-        self.assertEqual(errors, ["default_mtu is set by DEFAULT_MTU; remove the variable to change it here"])
+        self.assertEqual(settings.check({"log_level": "warning"}), ({}, []))
+        _, errors = settings.check({"log_level": "DEBUG"})
+        self.assertEqual(errors, ["log_level is set by LOG_LEVEL; remove the variable to change it here"])
 
     def test_values_are_validated(self):
         settings = Settings({})
         settings.resolve({})
-        bad = {"default_mtu": 900, "default_subnet": "10.0.0.0/31", "default_dns": "8.8.8.8, nope", "geoip": "maybe",
-               "awg_log_level": "loud", "log_level": "chatty", "default_port": 0, "unknown": 1}  # fmt: skip
+        bad = {"geoip": "maybe", "awg_log_level": "loud", "log_level": "chatty", "default_mtu": 1420, "unknown": 1}
         _, errors = settings.check(bad)
         self.assertEqual(len(errors), len(bad))
-        values, errors = settings.check({"default_dns": " 1.1.1.1 ,9.9.9.9", "geoip": "off", "awg_log_level": "verbose"})
-        self.assertEqual((values, errors), ({"default_dns": "1.1.1.1, 9.9.9.9", "geoip": False, "awg_log_level": "debug"}, []))
+        self.assertIn("Unknown setting 'default_mtu'", errors)
+        values, errors = settings.check({"geoip": "off", "awg_log_level": "verbose", "log_level": " info "})
+        self.assertEqual((values, errors), ({"geoip": False, "awg_log_level": "debug", "log_level": "INFO"}, []))
 
 
 @unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
@@ -84,9 +95,17 @@ class RetiredVariableTests(unittest.TestCase):
     def test_only_a_set_retired_variable_is_reported(self):
         from core.settings import retired_variables
 
-        found = retired_variables({"AUTO_START_SERVERS": "false", "API_TOKEN": " ", "DEFAULT_MTU": "1420"})
+        found = retired_variables({"AUTO_START_SERVERS": "false", "API_TOKEN": " ", "NGINX_PORT": "8080"})
         self.assertEqual([name for name, _note in found], ["AUTO_START_SERVERS"])
         self.assertEqual(retired_variables({}), [])
+
+    def test_the_new_server_defaults_are_retired(self):
+        from core.settings import retired_variables
+
+        six = ("DEFAULT_MTU", "DEFAULT_SUBNET", "DEFAULT_PORT", "DEFAULT_DNS", "ENABLE_NAT", "BLOCK_LAN_CIDRS")
+        found = retired_variables(dict.fromkeys(six, "1"))
+        self.assertEqual([name for name, _note in found], list(six))
+        self.assertIn("newest server", found[0][1])
 
 
 class AccessTests(unittest.TestCase):
@@ -143,20 +162,29 @@ class AccessTests(unittest.TestCase):
 
 
 class ManagerSettingsTests(unittest.TestCase):
-    def test_resolved_settings_become_the_managers_defaults_and_are_saved(self):
-        manager = build_manager(settings=Settings({"DEFAULT_MTU": "1300", "DEFAULT_DNS": "9.9.9.9", "ENABLE_GEOIP": "0"}))
-        self.assertEqual((manager.default_mtu, manager.dns_servers, manager.enable_geoip), (1300, ["9.9.9.9"], False))
-        self.assertEqual(manager.awg_log_level, "error")  # the new default
+    def test_resolved_settings_reach_the_manager_and_are_saved(self):
+        manager = build_manager(settings=Settings({"ENABLE_GEOIP": "0"}))
+        self.assertEqual((manager.enable_geoip, manager.awg_log_level), (False, "error"))  # error: the default
         stored = json.loads(Path(manager.config_file).read_text(encoding="utf-8"))["settings"]
-        self.assertEqual(stored, {"default_mtu": 1300, "default_dns": "9.9.9.9", "geoip": False})
+        self.assertEqual(stored, {"geoip": False})
+
+    def test_a_stored_new_server_default_no_longer_applies(self):
+        # A 2.4 store with MTU 1300 and NAT off: dropped at the first boot, and a server
+        # created through the API without those fields gets the built-in values.
+        tmp = tempfile.mkdtemp(prefix="awg-settings-")
+        config_file = os.path.join(tmp, "web_config.json")
+        settings = {"default_mtu": 1300, "enable_nat": False, "geoip": True}
+        Path(config_file).write_text(json.dumps({"servers": [], "settings": settings}), encoding="utf-8")
+        manager = build_manager(settings=Settings({}), config_dir=tmp, wireguard_config_dir=tmp, config_file=config_file)
+        self.assertEqual(json.loads(Path(config_file).read_text(encoding="utf-8"))["settings"], {"geoip": True})
         server = manager.create_wireguard_server({"name": "x", "auto_start": False})
-        self.assertEqual((server["mtu"], server["dns"]), (1300, ["9.9.9.9"]))
+        self.assertEqual((server["mtu"], server["enable_nat"]), (1420, True))  # build_manager's built-in values
 
 
 @unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
 class SettingsRouteTests(unittest.TestCase):
     def setUp(self):
-        manager = build_manager(settings=Settings({"DEFAULT_PORT": "51900"}))
+        manager = build_manager(settings=Settings({"ENABLE_GEOIP": "1"}))
         self.access = Access(os.path.join(manager.config_dir, ".htpasswd"), environ={})
         Path(self.access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
         self.app, self.manager = build_app(manager=manager, access=self.access)
@@ -172,9 +200,9 @@ class SettingsRouteTests(unittest.TestCase):
 
     def test_get_shows_values_sources_and_never_the_password(self):
         payload = self.http.get("/api/settings").get_json()
-        self.assertEqual(payload["values"]["default_port"], 51900)
-        self.assertEqual(payload["sources"]["default_port"], "env")
-        self.assertEqual(payload["env"]["default_port"], "DEFAULT_PORT")
+        self.assertEqual(sorted(payload["values"]), ["awg_log_level", "geoip", "log_level"])
+        self.assertEqual((payload["values"]["geoip"], payload["sources"]["geoip"]), (True, "env"))
+        self.assertEqual(payload["env"]["geoip"], "ENABLE_GEOIP")
         self.assertTrue(payload["access"]["password_is_default"])
         self.assertEqual(payload["about"]["build_label"], "test")
         body = json.dumps(payload)
@@ -182,17 +210,18 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertNotIn(Path(self.access.path).read_text(encoding="utf-8").split(":", 1)[1].strip(), body)
 
     def test_a_change_is_applied_at_once_and_saved(self):
-        saved = self.post({"settings": {"default_mtu": 1400, "geoip": False, "log_level": "WARNING"}})
-        self.assertEqual(sorted(saved["changed"]), ["default_mtu", "geoip", "log_level"])
-        self.assertEqual((self.manager.default_mtu, self.manager.enable_geoip), (1400, False))
+        self.addCleanup(logging.getLogger().setLevel, logging.getLogger().level)
+        saved = self.post({"settings": {"awg_log_level": "debug", "log_level": "WARNING"}})
+        self.assertEqual(sorted(saved["changed"]), ["awg_log_level", "log_level"])
+        self.assertEqual(self.manager.awg_log_level, "debug")
         self.assertEqual(logging.getLogger().level, logging.WARNING)
-        self.assertEqual(self.stored()["default_mtu"], 1400)
-        logging.getLogger().setLevel(logging.INFO)
+        self.assertEqual(self.stored()["log_level"], "WARNING")
 
     def test_invalid_or_pinned_changes_apply_nothing(self):
-        self.post({"settings": {"default_mtu": 1400, "default_port": 1}}, status=400)
-        self.post({"settings": {"default_mtu": 5000}}, status=400)
-        self.assertEqual(self.manager.default_mtu, 1280)
+        self.post({"settings": {"log_level": "WARNING", "geoip": False}}, status=400)  # geoip is pinned
+        self.post({"settings": {"log_level": "loud"}}, status=400)
+        self.post({"settings": {"default_mtu": 1400}}, status=400)  # retired in 2.5
+        self.assertEqual(self.manager.settings.values["log_level"], "INFO")
 
     def test_a_new_daemon_level_offers_to_restart_the_running_servers(self):
         server = self.manager.create_wireguard_server({"name": "x", "auto_start": False, "port": 51820})
@@ -209,8 +238,9 @@ class SettingsRouteTests(unittest.TestCase):
         start.assert_called_once_with(server["id"])
 
     def test_a_password_change_with_a_wrong_current_password_applies_nothing(self):
-        self.post({"access": {"current_password": "wrong", "password": "n3w-secret"}, "settings": {"geoip": False}}, 400)
-        self.assertTrue(self.manager.enable_geoip)  # not even the setting sent with it
+        body = {"access": {"current_password": "wrong", "password": "n3w-secret"}, "settings": {"awg_log_level": "debug"}}
+        self.post(body, 400)
+        self.assertEqual(self.manager.awg_log_level, "error")  # not even the setting sent with it
         self.assertFalse(self.access.verify("n3w-secret"))
 
         saved = self.post({"access": {"current_password": "changeme", "password": "n3w-secret"}})
@@ -222,9 +252,10 @@ class SettingsRouteTests(unittest.TestCase):
         def validate(body):
             return self.http.post("/api/validate", json=body).get_json()
 
-        self.assertEqual(validate({"settings": {"default_mtu": 1400}}), {"errors": [], "warnings": []})
+        self.assertEqual(validate({"settings": {"log_level": "DEBUG"}}), {"errors": [], "warnings": []})
         self.assertEqual(
-            validate({"settings": {"default_mtu": 5000}})["errors"], ["MTU must be between 1280 and 1440, got 5000"]
+            validate({"settings": {"log_level": "loud"}})["errors"],
+            ["Panel log level must be one of DEBUG, INFO, WARNING, ERROR, got 'loud'"],
         )
         self.assertEqual(len(validate({"access": {"password": "short"}})["errors"]), 1)
         self.assertEqual(len(validate({"settings": {"awg_log_level": "debug"}})["warnings"]), 1)

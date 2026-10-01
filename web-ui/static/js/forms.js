@@ -325,17 +325,25 @@ class FormUi {
 
     // --- new server -----------------------------------------------------------------
     async openCreateServerModal() {
-        const env = this.environment || {};
         const servers = this.lastServers || [];
+        const builtIn = window.AppConfig.defaults;
+        // The newest server is the template for what a deployment keeps the same: MTU,
+        // DNS, NAT and LAN blocking (NAT off where the router routes the tunnel's
+        // subnet itself). The built-in values serve only the first server.
+        const newest = servers.reduce((a, s) => (!a || (s.created_at || 0) >= (a.created_at || 0) ? s : a), null);
+        const newestDns = newest ? [].concat(newest.dns || []).join(', ') : '';
+        const base = newest
+            ? { mtu: newest.mtu, dns: newestDns || builtIn.dns, enable_nat: newest.enable_nat, block_lan_cidrs: newest.block_lan_cidrs }
+            : builtIn;
         const usedPorts = new Set(servers.map((s) => Number(s.port)));
-        let port = Number(env.port) || 51820;
+        let port = Number(builtIn.port);
         while (usedPorts.has(port)) port += 1;
         const usedThird = new Set(servers.map((s) => (/^10\.10\.(\d+)\./.exec(s.subnet || '') || [])[1]).filter(Boolean).map(Number));
         let third = 0;
         while (usedThird.has(third) && third < 255) third += 1;
 
         const protocol = window.Protocols.DEFAULT;
-        const mtu = env.mtu || 1420;
+        const mtu = base.mtu;
         // Every server gets its own random parameters (it used to be one fixed set
         // unless Randomize was pressed).
         const generated = await this.fetchGenerated(protocol, mtu).catch(() => null);
@@ -355,7 +363,9 @@ class FormUi {
 
         this.openFormDrawer({
             title: 'New server',
-            sub: 'Creates an interface and its config; clients are added afterwards.',
+            sub: newest
+                ? `MTU, DNS, NAT and LAN blocking copied from <span class="text-purple-700 dark:text-[#c084fc]">${this.escapeHtml(newest.name)}</span>; clients are added afterwards.`
+                : 'Creates an interface and its config; clients are added afterwards.',
             body: `
                 ${this.formSection('Server', `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -363,15 +373,15 @@ class FormUi {
                         ${this.formField('f-port', 'Port (UDP)', port, { type: 'number', mono: true })}
                         ${this.formField('f-subnet', 'Subnet', `10.10.${third}.0/24`, { mono: true })}
                         ${this.formField('f-mtu', 'MTU', mtu, { type: 'number', mono: true, hint: '1280-1440; 1420 suits most links, 1280 the most restrictive ones.' })}
-                        ${this.formField('f-dns', 'DNS servers', env.dns || '1.1.1.1, 9.9.9.9', { mono: true, hint: 'Comma-separated, pushed to clients.' })}
+                        ${this.formField('f-dns', 'DNS servers', base.dns, { mono: true, hint: 'Comma-separated, pushed to clients.' })}
                         ${this.formField('f-endpoint_host', 'Endpoint host', '', { cls: 'sm:col-span-2', mono: true, placeholder: `detected: ${this.currentPublicIp || 'public IP'}`,
                             hint: 'Optional: a DNS name (e.g. dynamic DNS) or IPv4 that clients dial. With a name, a new public IP needs no re-import.' })}
                     </div>`)}
                 ${this.formSection('Networking', `
                     <div class="flex flex-col">
                         ${this.formSwitch('f-autostart', 'Start after creating', 'Brings the interface up right away.', true)}
-                        ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', env.enable_nat !== false)}
-                        ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server, nor this panel.', env.block_lan_cidrs !== false)}
+                        ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', base.enable_nat !== false)}
+                        ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server, nor this panel.', base.block_lan_cidrs !== false)}
                     </div>`)}
                 ${this.formSection('Protocol and transport', this.transportFieldsHtml(protocol, transport),
                     '<button type="button" class="btn btn-secondary btn-sm" data-action="randomize">Randomize</button>')}`,
@@ -681,7 +691,7 @@ class FormUi {
 
     // --- panel settings (⚙ in the header) -------------------------------------------------
     // GET /api/settings, checked through /api/validate, saved by POST /api/settings. A
-    // field whose environment variable is set is read-only ("set by DEFAULT_MTU").
+    // field whose environment variable is set is read-only ("set by LOG_LEVEL").
     async openSettings() {
         let data;
         try {
@@ -697,8 +707,6 @@ class FormUi {
         const safe = (v) => this.escapeHtml(v ?? '');
         const pinned = (k) => data.sources[k] === 'env';
         const hint = (k, text = '') => (pinned(k) ? this.pinnedHint(data.env[k]) : text);
-        const field = (k, label, opts = {}) => this.formField(`s-${k}`, label, values[k],
-            { ...opts, hint: hint(k, opts.hint), attrs: `${opts.attrs || ''} ${pinned(k) ? 'disabled' : ''}` });
         const toggle = (k, title, text) => this.formSwitch(`s-${k}`, title, hint(k, text), values[k], pinned(k));
         const choose = (k, label, options, text) => this.formSelect(`s-${k}`, label, options, values[k], { hint: hint(k, text), disabled: pinned(k) });
         const userPinned = access.user_source === 'env';
@@ -784,17 +792,6 @@ class FormUi {
                         ${this.formField('s-password2', 'Repeat new password', '', { type: 'password', attrs: `autocomplete="new-password" ${passwordPinned ? 'disabled' : ''}` })}
                     </div>
                     <p class="hint">Saving a new one signs other browsers out; this one keeps working.</p>`)}
-                ${this.formSection('New servers', `
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        ${field('default_mtu', 'MTU', { type: 'number', mono: true, hint: '1280-1440.' })}
-                        ${field('default_port', 'First port (UDP)', { type: 'number', mono: true })}
-                        ${field('default_subnet', 'Subnet', { mono: true })}
-                        ${field('default_dns', 'DNS servers', { mono: true, hint: 'Comma-separated.' })}
-                    </div>
-                    <div class="flex flex-col">
-                        ${toggle('enable_nat', 'NAT (masquerade)', 'New servers let clients reach the internet through this host.')}
-                        ${toggle('block_lan_cidrs', 'Block private LAN ranges', 'New servers keep clients off 10/8, 172.16/12 and 192.168/16, and off this panel.')}
-                    </div>`)}
                 ${this.formSection('Logging', `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${choose('awg_log_level', 'VPN daemon', [['off', 'Off'], ['error', 'Errors only'], ['debug', 'Debug']],
@@ -829,13 +826,8 @@ class FormUi {
             + 'remove the variable (and restart) to change it here.</span>';
     }
 
-    // After a save: the defaults new servers get, and the banner.
+    // After a save: the banner follows the credential.
     applySettings(saved) {
-        const v = saved.values;
-        this.environment = {
-            mtu: v.default_mtu, subnet: v.default_subnet, port: v.default_port, dns: v.default_dns,
-            enable_nat: v.enable_nat, block_lan_cidrs: v.block_lan_cidrs,
-        };
         const banner = document.getElementById('passwordBanner');
         if (banner) banner.hidden = !saved.access.password_is_default;
     }

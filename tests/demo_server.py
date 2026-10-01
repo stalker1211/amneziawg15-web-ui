@@ -245,14 +245,14 @@ def main():
     web_ui = REPO / "web-ui"
     app = create_flask_app(str(web_ui / "templates"), str(web_ui / "static"))
     install_guards(app)
-    # Settings as a deployment would have them: DEFAULT_MTU pinned by its variable (the
+    # Settings as a deployment would have them: AWG_LOG_LEVEL pinned by its variable (the
     # drawer shows it read-only), the rest stored; and the default admin/changeme
     # credential with its banner, as start.sh leaves a fresh volume.
     Path(tmp, "web_config.json").write_text(
-        json.dumps({"servers": [], "settings": {"default_subnet": "10.10.0.0/24", "default_dns": "1.1.1.1, 9.9.9.9"}}),
+        json.dumps({"servers": [], "settings": {"log_level": "INFO"}}),
         encoding="utf-8",
     )
-    settings = Settings({"DEFAULT_MTU": "1420"})
+    settings = Settings({"AWG_LOG_LEVEL": "error"})
     access = Access(os.path.join(tmp, ".htpasswd"), environ={})
     Path(access.path).write_text(f"admin:{Access.hash_password('changeme')}\n", encoding="utf-8")
     manager = DemoManager(

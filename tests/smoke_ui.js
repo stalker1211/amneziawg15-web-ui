@@ -207,6 +207,18 @@ function check(label, condition, detail) {
 
         await page.evaluate(() => amneziaApp.openCreateServerModal());
         await new Promise((r) => setTimeout(r, 600));
+        const startsFrom = await page.evaluate(() => {
+            const servers = amneziaApp.lastServers;
+            const newest = servers.reduce((a, s) => (s.created_at >= a.created_at ? s : a));
+            const form = {
+                mtu: Number(document.getElementById('f-mtu').value), dns: document.getElementById('f-dns').value,
+                nat: document.getElementById('f-nat').checked, lan: document.getElementById('f-lan').checked,
+            };
+            const want = { mtu: newest.mtu, dns: [].concat(newest.dns).join(', '), nat: newest.enable_nat, lan: newest.block_lan_cidrs };
+            const sub = document.getElementById('drawerSub').textContent;
+            return { ok: JSON.stringify(form) === JSON.stringify(want) && sub.includes(`copied from ${newest.name}`), form, want, newest: newest.name };
+        });
+        check('create form starts from the newest server (MTU, DNS, NAT, LAN) and says so', startsFrom.ok, startsFrom);
         check('create form offers all four protocols', await page.evaluate(() =>
             [...document.getElementById('t-protocol').options].map((o) => o.value).join(',') === 'AWG 1.5,AWG 2.0,AWG 3.0,AWG 3.1'));
         check('create form opens with generated parameters, not a fixed set', await page.evaluate(() => {
@@ -334,18 +346,21 @@ function check(label, condition, detail) {
         JSON.stringify(settingsPinned.disabled) === JSON.stringify(settingsPinned.pinned)
             && settingsPinned.banner === settingsPinned.isDefault, settingsPinned);
     const settingsSaved = await page.evaluate(async () => {
-        const port = document.getElementById('s-default_port');
-        if (!port || port.disabled) return 'port field missing or pinned';
-        port.value = String(Number(port.value) + 7);
-        port.dispatchEvent(new Event('input', { bubbles: true }));
+        if (document.getElementById('s-default_port')) return 'the retired New servers section is still there';
+        const level = document.getElementById('s-log_level');
+        if (!level || level.disabled) return 'panel level missing or pinned';
+        level.value = level.value === 'WARNING' ? 'INFO' : 'WARNING';
+        level.dispatchEvent(new Event('change', { bubbles: true }));
         await new Promise((r) => setTimeout(r, 900));
         const button = document.getElementById('drawerPrimary');
         if (button.disabled) return `save not armed: ${document.getElementById('checks').textContent}`;
         document.getElementById('drawerForm').requestSubmit();
         await new Promise((r) => setTimeout(r, 900));
-        return window.Ui.isDrawerOpen() ? 'drawer still open' : amneziaApp.environment.port;
+        if (window.Ui.isDrawerOpen()) return 'drawer still open';
+        const saved = await amneziaApp.getJson('/api/settings');
+        return saved.values.log_level === level.value ? 'saved' : `stored ${saved.values.log_level}`;
     });
-    check('saving settings updates the new-server defaults', typeof settingsSaved === 'number', settingsSaved);
+    check('saving settings stores the change (and the New servers section is gone)', settingsSaved === 'saved', settingsSaved);
     check('the credential needs its repeat and the current password', await page.evaluate(async () => {
         await amneziaApp.openSettings();
         await new Promise((r) => setTimeout(r, 600));

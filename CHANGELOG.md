@@ -3,10 +3,11 @@
 ## Version 2.5 (unreleased)
 
 Fewer moving parts. Upgrading needs no action, with one change to note: Block LAN
-now keeps a server's clients off the panel too (below). `ALLOWED_ORIGINS` can be
-dropped from a compose file; one that still sets it, or `AUTO_START_SERVERS`, logs a
-warning. Reload any panel tab left open across the upgrade: the old page keeps
-retrying `/socket.io/`, which now asks for the password (on an iPad, a prompt).
+now keeps a server's clients off the panel too (below). `ALLOWED_ORIGINS` and the
+new-server defaults (`DEFAULT_MTU` and the rest) can be dropped from a compose file;
+one that still sets them, or `AUTO_START_SERVERS`, logs a warning. Reload any panel
+tab left open across the upgrade: the old page keeps retrying `/socket.io/`, which
+now asks for the password (on an iPad, a prompt).
 
 ### Live updates: Server-Sent Events instead of Socket.IO
 - **One auth model.** The page's live updates are `GET /api/events`, a stream the
@@ -56,6 +57,18 @@ retrying `/socket.io/`, which now asks for the password (on an iPad, a prompt).
   60 s after the container starts, and the Docker health check's log names it
   (`docker inspect`). Starting the server again, or stopping it in the panel, makes
   the container healthy again.
+
+### New servers start from the newest one
+- **The ⚙ New servers section is gone,** and its six settings with it. The New
+  server form starts from your newest server: its MTU, DNS, NAT and LAN blocking
+  (the port and subnet are the next free ones, as before), and says which server it
+  copied. The first server starts from the built-in values (MTU 1280, DNS
+  8.8.8.8 and 1.1.1.1, NAT and LAN blocking on). The section's subnet was never used
+  by the form, and every field could be changed there anyway.
+- **`DEFAULT_MTU`, `DEFAULT_SUBNET`, `DEFAULT_PORT`, `DEFAULT_DNS`, `ENABLE_NAT` and
+  `BLOCK_LAN_CIDRS` are retired:** a set one logs a warning. Their stored values are
+  dropped at the first boot; existing servers keep their own MTU, DNS, NAT and LAN
+  blocking.
 
 ### Housekeeping
 - **`AUTO_START_SERVERS` is gone:** a restart always brings back each server as it

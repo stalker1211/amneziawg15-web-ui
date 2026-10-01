@@ -5,7 +5,7 @@ servers — WireGuard with obfuscation that resists DPI-based blocking. Create s
 manage clients, hand out configs, and watch traffic live, all from one container.
 
 Everything is configurable in the panel, including its own settings (⚙ in the
-header: sign-in, logging, GeoIP, new-server defaults). An environment variable can
+header: sign-in, logging, GeoIP). An environment variable can
 pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
 
 Current version: **2.4**
@@ -18,7 +18,8 @@ Current version: **2.4**
 ## 🚀 Features
 
 - **Servers and clients from the browser** — create, start/stop, rename, delete; add
-  clients and hand out configs as `.conf`, text or QR code.
+  clients and hand out configs as `.conf`, text or QR code. A new server starts from
+  the newest one's MTU, DNS, NAT and LAN blocking.
 - **AWG 1.5 / 2.0 / 3.0 / 3.1**, with only the relevant fields shown per protocol.
   AWG 3.0 adds header protection, content padding and tunable timings; 3.1 adds
   random packet trailers and optional cookie-reply suppression.
@@ -217,12 +218,6 @@ today's environment.
 | Variable | Default | Setting |
 |----------|---------|---------|
 | `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in. Stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
-| `DEFAULT_MTU` | `1280` | MTU of new servers (1280–1440) |
-| `DEFAULT_SUBNET` | `10.0.0.0/24` | Subnet of new servers |
-| `DEFAULT_PORT` | `51820` | First UDP port offered for new servers |
-| `DEFAULT_DNS` | `8.8.8.8, 1.1.1.1` | DNS servers of new servers, pushed to clients |
-| `ENABLE_NAT` | `1` | NAT/MASQUERADE for new servers; each server has its own switch |
-| `BLOCK_LAN_CIDRS` | `1` | Block private LAN ranges for new servers, and this panel to their clients; each server has its own switch |
 | `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
 | `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
 | `LOG_LEVEL` | `INFO` | The web panel's log |
@@ -236,9 +231,11 @@ today's environment.
 | `AWG_LOG_FILE` | `/var/log/amnezia/amneziawg-go.log` | Where the daemon's log goes |
 
 Retired, ignored with a warning at boot: `API_TOKEN` (2.4), `AUTO_START_SERVERS`
-(2.5; a restart brings back what was running, and `false` no longer stops that) and
+(2.5; a restart brings back what was running, and `false` no longer stops that),
 `ALLOWED_ORIGINS` (2.5; the live updates no longer use Socket.IO, so a reverse proxy
-needs nothing set).
+needs nothing set), and the new-server defaults `DEFAULT_MTU`, `DEFAULT_SUBNET`,
+`DEFAULT_PORT`, `DEFAULT_DNS`, `ENABLE_NAT` and `BLOCK_LAN_CIDRS` (2.5; the New
+server form starts from your newest server, and each server keeps its own values).
 `SYS_MODULE` is not needed: the daemon runs in userspace.
 
 ## 🧪 Local build/run (dev)
