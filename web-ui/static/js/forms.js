@@ -53,7 +53,7 @@ class FormUi {
     }
 
     formCallout(html) {
-        return `<p class="rounded-lg border px-3 py-2 text-xs bg-amber-50 border-amber-200 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]">${html}</p>`;
+        return `<p class="rounded-lg border px-3 py-2 text-xs callout-amber">${html}</p>`;
     }
 
     drawerFooter(primaryLabel, left = '') {
@@ -350,11 +350,11 @@ class FormUi {
         const list = (items) => `<ul class="mt-1 list-disc pl-5 flex flex-col gap-0.5">${items.map((x) => `<li>${this.escapeHtml(x)}</li>`).join('')}</ul>`;
         let html = '';
         if (errors.length) {
-            html += `<div class="rounded-lg border px-3 py-2 text-sm bg-red-50 border-red-200 text-red-800 dark:bg-[#3b1219] dark:border-[#7f1d1d] dark:text-[#fecaca]" role="alert">
+            html += `<div class="rounded-lg border px-3 py-2 text-sm callout-red" role="alert">
                 <strong class="font-semibold">${errors.length === 1 ? 'One thing to fix' : `${errors.length} things to fix`}</strong>${list(errors)}</div>`;
         }
         if (warnings.length) {
-            html += `<div class="rounded-lg border px-3 py-2 text-sm bg-amber-50 border-amber-200 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]">
+            html += `<div class="rounded-lg border px-3 py-2 text-sm callout-amber">
                 <strong class="font-semibold">Worth a look</strong> <span class="text-xs">(saving still works)</span>${list(warnings)}</div>`;
         }
         if (!html) {

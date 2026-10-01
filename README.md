@@ -34,7 +34,8 @@ Current version: **2.5**
   written to disk. Download (↓) and upload (↑) are from the device's side.
 - **Server totals** — beside the graph, what a running server has carried since it
   started (and since when): the kernel's counters for its interface, so a client
-  suspended or deleted since still counts. A stop and start begins them again.
+  suspended or deleted since still counts. A stop and start begins them again. A click
+  opens the Traffic view, as on the graph.
 - **Signature packets from a profile** — in a client's drawer, **Generate** fills
   I1–I5 with packets shaped like a QUIC connection opening or a DNS lookup (or random
   ones), so a handshake is preceded by traffic that looks like something else.
@@ -366,8 +367,13 @@ Two kinds, and the distinction matters:
 | `AllowedIPs` | client | all | What the device sends through the tunnel, set per client: `0.0.0.0/0` (the default) is all IPv4, a narrower list is split tunnelling. Adding `::/0` sends IPv6 in too, where the server drops it and apps fall back to IPv4; a Linux device with IPv6 switched off cannot bring `::/0` up |
 | `Endpoint` | server | all | The detected public IP, or the server's **endpoint host** (a DNS name or IPv4). With a dynamic DNS name, a new public IP needs no re-import |
 
-Junk packets and signature packets camouflage the *handshake* only; S/H values and
-header protection affect the tunnel itself. The UI shows only the fields the selected
+What hides what: **I1–I5** (a protocol's shape) and **Jc/Jmin/Jmax** (random junk,
+different every handshake) precede the handshake; **S1–S3** and **H1–H3** disguise the
+handshake messages; **S4** and **H4** (and on AWG 3.x `ContentPaddingAddition`) every data
+packet; AWG 3.x **header protection** and 3.1 **random trailers** both; the 3.x timings
+when rekeys happen. I1–I5 and Jc work together: the I-packets give the first packets a
+familiar shape, and Jc keeps the burst before each handshake from being the same sizes
+every time. The UI shows only the fields the selected
 protocol supports and validates the constraints above as you type: I1–I5 tags as
 the daemon parses them, uint16/uint32 bounds, and warnings for equal message sizes,
 H values in WireGuard's own 1–4 (without header protection), AWG 3.x timers that

@@ -144,7 +144,7 @@ class AmneziaApp {
 
         if (!value.trim()) {
             qrContainer.innerHTML = `
-                <div class="rounded-lg border px-3 py-2 text-sm bg-red-50 border-red-200 text-red-800 dark:bg-[#3b1219] dark:border-[#7f1d1d] dark:text-[#fecaca]">
+                <div class="rounded-lg border px-3 py-2 text-sm callout-red">
                     No configuration text to encode.
                 </div>
             `;
@@ -180,7 +180,7 @@ class AmneziaApp {
             const bytes = this.getUtf8ByteLength(value);
             const safeMsg = this.escapeHtml(lastError?.message || String(lastError));
             qrContainer.innerHTML = `
-                <div class="rounded-lg border px-3 py-2 text-sm bg-red-50 border-red-200 text-red-800 dark:bg-[#3b1219] dark:border-[#7f1d1d] dark:text-[#fecaca]">
+                <div class="rounded-lg border px-3 py-2 text-sm callout-red">
                     <div class="font-semibold mb-1">QR code could not be generated</div>
                     <div class="mb-2">Most commonly this happens when the config is too large for a QR code (payload: <span class=\"font-mono\">${bytes}</span> bytes).</div>
                     <div class="text-xs text-red-600 dark:text-[#fca5a5] font-mono break-all">${safeMsg}</div>

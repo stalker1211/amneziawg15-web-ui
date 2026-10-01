@@ -10,7 +10,14 @@
   and a stop and start (or a change that restarts the server) begins them again. They
   leave out WireGuard's framing, so they run a little under the sum of the clients'
   rows, more so for upload (mostly small packets). In the API: `totals` on each server
-  in `/api/servers` and in each `traffic_update`, `null` for a stopped server.
+  in `/api/servers` and in each `traffic_update`, `null` for a stopped server. A click
+  on the box opens the Traffic view, as a click on the graph does.
+
+### Interface
+- **Notices readable in the light theme:** the default-password banner, the drawer's
+  callouts and "Worth a look" (amber), the "things to fix" boxes (red) and the QR view's
+  re-import notice (rose) were too pale on white; they are a shade stronger. The dark
+  theme is unchanged.
 
 ### Signature packets
 - **Generate I1–I5 from a profile:** the client drawer's I1–I5 section has a shape

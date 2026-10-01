@@ -38,7 +38,7 @@
         <!-- Shown while the credential is start.sh's admin/changeme (page_config's passwordIsDefault). -->
         <!-- `hidden` sits on a wrapper with no display class: Tailwind's .flex would win over it. -->
         <div id="passwordBanner" role="alert" hidden>
-            <div class="rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3 bg-amber-50 border-amber-200 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]">
+            <div class="rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center justify-between gap-3 callout-amber">
                 <span><strong class="font-semibold">Default password.</strong> <span id="passwordBannerText">This panel still signs in with <span class="font-mono">changeme</span>.</span></span>
                 <button type="button" class="btn btn-secondary btn-sm" data-action="open-settings">Change it in Settings</button>
             </div>

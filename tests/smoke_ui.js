@@ -127,7 +127,7 @@ function check(label, condition, detail) {
         await page.evaluate((t) => document.body.classList.toggle('dark', t === 'dark'), theme);
 
         // Traffic (step 13): a band on running cards, a sparkline on online rows, the
-        // dialog from the band and from ⋯, its ranges, readout, highlight and pin.
+        // dialog from the band, from ⋯ and from the totals, its ranges, readout, highlight and pin.
         check('a traffic band on running cards only, with a chart', await page.evaluate(() => amneziaApp.lastServers.every((s) => {
             const band = document.querySelector(`article[data-server-id="${s.id}"] [data-action="server-traffic"]`);
             return s.status === 'running' ? !!band?.querySelector('[data-band-plot] svg path') : !band;
@@ -192,9 +192,14 @@ function check(label, condition, detail) {
             await wait(700);
             out.fromMenu = amneziaApp.trafficView?.serverId === server.id && !!document.querySelector('#trafficPlot svg');
             window.Ui.closeDialog();
+            // The totals box beside the band opens the same dialog (2.6).
+            document.querySelector(`[data-total="${server.id}"]`).click();
+            await wait(700);
+            out.fromTotals = amneziaApp.trafficView?.serverId === server.id && !!document.querySelector('#trafficPlot svg');
+            window.Ui.closeDialog();
             return out;
         });
-        check('the Traffic dialog: from the band, every range, the readout, highlight, pin, and from ⋯',
+        check('the Traffic dialog: from the band, every range, the readout, highlight, pin, from ⋯ and from the totals',
             Object.values(dialog).every((v) => (typeof v === 'object' ? Object.values(v).every(Boolean) : v)), dialog);
 
         for (const server of servers) {

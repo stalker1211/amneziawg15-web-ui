@@ -106,7 +106,8 @@ class ServerUi {
 
         // The last hour of a running server; a click opens the Traffic dialog. AmneziaApp
         // draws the chart and the rates into it (drawTraffic): the chart needs its width.
-        // Beside it (under it on a phone), what the server carried since it started.
+        // Beside it (under it on a phone), what the server carried since it started; a
+        // click there opens the same dialog.
         const band = running ? `
                 <div class="mt-1 flex flex-col sm:flex-row gap-2">
                 <button type="button" data-action="server-traffic" data-server="${id}" aria-label="Traffic of ${safe(server.name)}: open its history"
@@ -118,7 +119,8 @@ class ServerUi {
                     <span data-band-plot="${id}" class="flex-1 min-w-0 h-11"></span>
                     <span data-band-now="${id}" class="flex flex-col gap-0.5 flex-none text-xs tabular-nums text-right text-gray-800 dark:text-[#d7dee9]">${ServerUi.bandNowHtml(server.traffic || {})}</span>
                 </button>
-                <div data-total="${id}" class="flex-none sm:w-60 flex items-center justify-between gap-4 rounded-lg border border-gray-300 px-3 py-2 dark:border-[#334155]">${ServerUi.totalHtml(server.totals)}</div>
+                <button type="button" data-action="server-traffic" data-server="${id}" data-total="${id}" aria-label="Totals of ${safe(server.name)}: open its traffic history"
+                    class="flex-none sm:w-60 flex items-center justify-between gap-4 rounded-lg border border-gray-300 px-3 py-2 text-left transition hover:bg-gray-50 hover:border-gray-400 dark:border-[#334155] dark:hover:bg-[#273449] dark:hover:border-[#475569]">${ServerUi.totalHtml(server.totals)}</button>
                 </div>` : '';
 
         const status = running

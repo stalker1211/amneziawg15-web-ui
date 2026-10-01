@@ -49,6 +49,14 @@
     .hint-pinned { @apply block font-medium text-rose-700 dark:text-[#fda4af]; }
     .section-title { @apply text-xs font-semibold uppercase tracking-wider text-gray-700 dark:text-[#bac5d4]; }
 
+    /* The coloured notices, in one place. On a white page the -50 backgrounds with -200
+       borders were too pale to see; dark mode keeps its own look. Amber asks for
+       attention (the default-password banner, a drawer's callout, "Worth a look"), red is
+       an error (what to fix, a failed load), rose a config the device must re-import. */
+    .callout-amber { @apply bg-amber-100 border-amber-300 text-amber-900 dark:bg-[#2b1d05] dark:border-[#78350f] dark:text-[#fde68a]; }
+    .callout-red { @apply bg-red-100 border-red-300 text-red-900 dark:bg-[#3b1219] dark:border-[#7f1d1d] dark:text-[#fecaca]; }
+    .callout-rose { @apply bg-rose-100 border-rose-300 text-rose-900 dark:bg-[#3b0a1a] dark:border-[#881337] dark:text-[#fecdd3]; }
+
     .pill { @apply inline-flex items-center gap-1 h-[1.375rem] px-2 rounded-full text-xs font-semibold whitespace-nowrap; }
 
     /* On/off switch: a real checkbox over a drawn track. */

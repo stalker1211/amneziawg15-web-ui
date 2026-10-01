@@ -27,7 +27,7 @@ class ModalUi {
 
         const issuedOn = window.ServerUi.stamp(client.config_issued_at);
         const notice = client.config_outdated
-            ? `<p class="w-full rounded-lg border px-3 py-2 text-sm bg-rose-50 border-rose-200 text-rose-900 dark:bg-[#3b0a1a] dark:border-[#881337] dark:text-[#fecdd3]">
+            ? `<p class="w-full rounded-lg border px-3 py-2 text-sm callout-rose">
                 <strong class="font-semibold">This replaces the config on the device.</strong>
                 The one handed out${issuedOn ? ` on ${safe(issuedOn)}` : ''} no longer matches. Scan or download it again.</p>`
             : '';
