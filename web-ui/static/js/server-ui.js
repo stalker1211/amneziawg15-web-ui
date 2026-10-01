@@ -3,7 +3,9 @@
 // Pure renderers: they take the API payloads and return HTML. Every value goes
 // through escapeHtml; buttons and switches name their action in data-action (with
 // data-server / data-client), dispatched by AmneziaApp.setupActions. Ids are 6 hex chars
-// from the backend, escaped anyway.
+// from the backend, escaped anyway. Traffic reads from the device's side: ↓ download is
+// what the server sent it (`sent_*`), ↑ upload what it received; the charts are
+// window.Charts (charts.js).
 class ServerUi {
     static flag(countryCode) {
         const cc = String(countryCode || '').trim().toUpperCase();
@@ -102,6 +104,19 @@ class ServerUi {
             egress = '<span class="text-gray-700 dark:text-[#bac5d4]">Egress not checked yet</span>';
         }
 
+        // The last hour of a running server; a click opens the Traffic dialog. AmneziaApp
+        // draws the chart and the rates into it (drawTraffic): the chart needs its width.
+        const band = running ? `
+                <button type="button" data-action="server-traffic" data-server="${id}" aria-label="Traffic of ${safe(server.name)}: open its history"
+                    class="w-full mt-1 flex items-center gap-4 rounded-lg border border-gray-300 px-3 py-2 text-left transition hover:bg-gray-50 hover:border-gray-400 dark:border-[#334155] dark:hover:bg-[#273449] dark:hover:border-[#475569]">
+                    <span class="flex flex-col gap-0.5 flex-none w-[4.5rem]">
+                        <span class="section-title">Traffic</span>
+                        <span class="text-xs text-gray-600 dark:text-[#98a6ba]">last hour</span>
+                    </span>
+                    <span data-band-plot="${id}" class="flex-1 min-w-0 h-11"></span>
+                    <span data-band-now="${id}" class="flex flex-col gap-0.5 flex-none text-xs tabular-nums text-right text-gray-800 dark:text-[#d7dee9]">${ServerUi.bandNowHtml(server.traffic || {})}</span>
+                </button>` : '';
+
         const status = running
             ? '<span class="pill bg-green-100 text-green-800 dark:bg-[#14532d] dark:text-[#86efac]">Running</span>'
             : '<span class="pill bg-gray-200 text-gray-800 dark:bg-[#334155] dark:text-[#d7dee9]">Stopped</span>';
@@ -131,12 +146,20 @@ class ServerUi {
                         ${egress}
                         <button type="button" class="icon-btn icon-btn-sm" data-action="probe-egress" data-server="${id}" aria-label="Check egress IP again" title="Check egress IP again">${icon('refresh', 'w-3.5 h-3.5')}</button>
                     </p>
-                </div>
+                </div>${band}
             </div>
             <div id="clients-${id}" class="border-t border-gray-300 dark:border-[#2b3647] ${running ? '' : 'opacity-75'}">
                 ${renderServerClients(server.id, server.clients || [])}
             </div>
         </article>`;
+    }
+
+    // A server's rates now, the sum over its clients: "↓ 4.4 Mbit/s" over "↑ 0.2 Mbit/s".
+    static bandNowHtml(traffic) {
+        const C = window.Charts.C;
+        const sum = (key) => Object.values(traffic || {}).reduce((a, t) => a + (Number(t?.[key]) || 0), 0) / 1e6;
+        const line = (key, arrow, dir) => `<span class="inline-flex items-center justify-end gap-1.5"><span class="w-3 h-0.5 rounded-full ${key}"></span>${arrow} <strong class="font-semibold ${C.text}">${window.Charts.rateNum(sum(dir))}</strong> Mbit/s</span>`;
+        return line(C.dKey, '↓', 'sent_bps') + line(C.uKey, '↑', 'received_bps');
     }
 
     // The Clients header's summary: "4 · 2 online · 1 to re-import".
@@ -150,7 +173,8 @@ class ServerUi {
     // The Clients header and rows of one card, rendered with the servers. Telemetry
     // then patches the data-cell elements in place (patchClients), so the buttons,
     // keyboard focus, a text selection and an open ⋯ menu survive every update.
-    static renderServerClientsHtml({ server, clients, traffic, escapeHtml, isClientActiveFromTraffic }) {
+    // `sparks` holds each online client's last hour, bucketed ({down, up}; AmneziaApp.sparks).
+    static renderServerClientsHtml({ server, clients, traffic, sparks = {}, escapeHtml, isClientActiveFromTraffic }) {
         const safe = (v) => escapeHtml(v ?? '');
         const header = `
             <div class="px-4 sm:px-5 pt-3 pb-1 flex items-center gap-2">
@@ -161,13 +185,15 @@ class ServerUi {
             return `${header}<p class="px-4 sm:px-5 pb-4 text-sm text-gray-700 dark:text-[#bac5d4]">No clients yet. Add one with + Client.</p>`;
         }
         const rows = clients.map((client) => ServerUi.clientRowHtml({
-            server, client, clientTraffic: traffic[client.id] || {}, safe, isClientActiveFromTraffic,
+            server, client, clientTraffic: traffic[client.id] || {}, spark: sparks[client.id], safe, isClientActiveFromTraffic,
         })).join('');
         return `${header}<ul class="divide-y divide-gray-300 dark:divide-[#2b3647]">${rows}</ul>`;
     }
 
     // What the telemetry-driven cells of a row show; shared by the render and the patch.
-    static liveCells({ server, client, clientTraffic, safe, isClientActiveFromTraffic }) {
+    // An online row gets a third line under its totals: its last hour (`spark`) and its
+    // rate now; any other row has none.
+    static liveCells({ server, client, clientTraffic, spark = null, safe, isClientActiveFromTraffic }) {
         const suspended = !!client.suspended;
         const on = ServerUi.isOnline(server, client, clientTraffic, isClientActiveFromTraffic);
         const endpoint = clientTraffic.endpoint || '';
@@ -182,17 +208,31 @@ class ServerUi {
                 ? `${ServerUi.flag(cc)} <span class="font-mono">${safe(endpoint)}</span>${where ? ` <span class="text-gray-700 dark:text-[#bac5d4]">${safe(where)}</span>` : ''}`
                 : '<span class="text-gray-600 dark:text-[#98a6ba]">Not connected</span>',
             handshake: endpoint && age ? `handshake ${age}` : '',
-            rx: ServerUi.bytes(clientTraffic.received_bytes),
-            tx: ServerUi.bytes(clientTraffic.sent_bytes),
+            down: ServerUi.bytes(clientTraffic.sent_bytes),
+            up: ServerUi.bytes(clientTraffic.received_bytes),
+            ...ServerUi.sparkCell(on, clientTraffic, spark),
         };
     }
 
-    static clientRowHtml({ server, client, clientTraffic, safe, isClientActiveFromTraffic }) {
+    static sparkCell(on, clientTraffic, spark) {
+        if (!on) return { sparkClass: 'hidden', sparkTitle: '', spark: '' };
+        const { maxOf, mirrored, rate } = window.Charts;
+        const down = spark?.down || [];
+        const up = spark?.up || [];
+        const now = ((Number(clientTraffic.sent_bps) || 0) + (Number(clientTraffic.received_bps) || 0)) / 1e6;
+        return {
+            sparkClass: 'flex items-center md:justify-end gap-1.5',
+            sparkTitle: 'The last hour (download above the line, upload below) and the rate now',
+            spark: `${mirrored({ w: 40, h: 16, down, up, dTop: Math.max(maxOf(down), 0.5), uTop: Math.max(maxOf(up), 0.25) }).svg}<span>${rate(now)}</span>`,
+        };
+    }
+
+    static clientRowHtml({ server, client, clientTraffic, spark, safe, isClientActiveFromTraffic }) {
         const icon = window.Ui.icon;
         const sid = safe(server.id);
         const cid = safe(client.id);
         const suspended = !!client.suspended;
-        const cells = ServerUi.liveCells({ server, client, clientTraffic, safe, isClientActiveFromTraffic });
+        const cells = ServerUi.liveCells({ server, client, clientTraffic, spark, safe, isClientActiveFromTraffic });
         const dim = suspended ? 'opacity-70' : '';
 
         const suspendedPill = suspended
@@ -205,7 +245,7 @@ class ServerUi {
             : '';
 
         return `
-        <li class="px-4 sm:px-5 py-3 grid gap-x-4 gap-y-1.5 grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_7.5rem_auto] items-center" data-client-id="${cid}">
+        <li class="px-4 sm:px-5 py-3 grid gap-x-4 gap-y-1.5 grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_8rem_auto] items-center" data-client-id="${cid}">
             <div class="col-span-2 md:col-span-1 flex items-center gap-2 min-w-0 ${dim}">
                 <span data-cell="dot" class="${cells.dotClass}" title="${cells.dotTitle}"></span>
                 <span class="text-sm font-medium text-sky-700 dark:text-[#7dd3fc] truncate" data-name="${cid}">${safe(client.name)}</span>
@@ -216,8 +256,9 @@ class ServerUi {
                 <span data-cell="handshake" class="text-gray-700 dark:text-[#bac5d4] ${dim}"${cells.handshake ? '' : ' hidden'}>${safe(cells.handshake)}</span>
             </div>
             <div class="flex flex-col whitespace-nowrap text-xs font-mono tabular-nums text-gray-800 dark:text-[#d7dee9] md:text-right ${dim}">
-                <span title="Received"><span class="traffic-arrow" data-cell="rx-arrow">↓</span> <span data-cell="rx">${safe(cells.rx)}</span></span>
-                <span title="Sent"><span class="traffic-arrow" data-cell="tx-arrow">↑</span> <span data-cell="tx">${safe(cells.tx)}</span></span>
+                <span title="Downloaded by the device"><span class="traffic-arrow" data-cell="down-arrow">↓</span> <span data-cell="down">${safe(cells.down)}</span></span>
+                <span title="Uploaded by the device"><span class="traffic-arrow" data-cell="up-arrow">↑</span> <span data-cell="up">${safe(cells.up)}</span></span>
+                <span data-cell="spark" class="${cells.sparkClass}" title="${cells.sparkTitle}">${cells.spark}</span>
             </div>
             <div class="flex items-center gap-1 justify-end">
                 <label class="switch switch-sm switch-amber mr-1.5" title="${suspended ? 'Reactivate client' : 'Suspend client'}">
@@ -234,7 +275,7 @@ class ServerUi {
 
     // Apply a telemetry update to a rendered card: only the data-cell elements change.
     // `previous` is the traffic the rows show now, to flash the arrows of totals that grew.
-    static patchClients({ container, server, traffic, previous, escapeHtml, isClientActiveFromTraffic }) {
+    static patchClients({ container, server, traffic, previous, sparks = {}, escapeHtml, isClientActiveFromTraffic }) {
         if (!container) return;
         const safe = (v) => escapeHtml(v ?? '');
         const clients = server.clients || [];
@@ -245,7 +286,7 @@ class ServerUi {
             if (!client) return;
             const now = traffic[client.id] || {};
             const before = previous[client.id] || {};
-            const cells = ServerUi.liveCells({ server, client, clientTraffic: now, safe, isClientActiveFromTraffic });
+            const cells = ServerUi.liveCells({ server, client, clientTraffic: now, spark: sparks[client.id], safe, isClientActiveFromTraffic });
             const cell = (name) => row.querySelector(`[data-cell="${name}"]`);
             const dot = cell('dot');
             if (dot) {
@@ -259,7 +300,13 @@ class ServerUi {
                 handshake.textContent = cells.handshake;
                 handshake.hidden = !cells.handshake;
             }
-            [['rx', 'received_bytes'], ['tx', 'sent_bytes']].forEach(([name, key]) => {
+            const spark = cell('spark');
+            if (spark) {
+                spark.className = cells.sparkClass;
+                spark.title = cells.sparkTitle;
+                spark.innerHTML = cells.spark;
+            }
+            [['down', 'sent_bytes'], ['up', 'received_bytes']].forEach(([name, key]) => {
                 const value = cell(name);
                 if (value) value.textContent = cells[name];
                 const arrow = cell(`${name}-arrow`);

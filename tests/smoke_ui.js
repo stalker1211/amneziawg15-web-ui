@@ -68,17 +68,21 @@ function check(label, condition, detail) {
     check('theme button toggles light/dark and remembers the choice',
         toggles.join(' ') === 'light:light dark:dark', toggles);
 
-    // One request draws the page: the servers carry their clients and traffic. (The
-    // live-update stream, /api/events, is opened once too, and loads no data itself.)
+    // One request draws the page: the servers carry their clients and traffic; then each
+    // running server's last hour, once, for the charts. (The live-update stream,
+    // /api/events, is opened once too, and loads no data itself.)
     const apiRequests = [];
     const recordApi = (r) => { if (new URL(r.url()).pathname.startsWith('/api/')) apiRequests.push(new URL(r.url()).pathname); };
     page.on('request', recordApi);
     await page.reload({ waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise((r) => setTimeout(r, 1500));
     page.off('request', recordApi);
-    check('a page load asks /api/servers once and nothing per server',
+    const runningIds = await page.evaluate(() => amneziaApp.lastServers.filter((s) => s.status === 'running').map((s) => s.id).sort());
+    const historyRequests = apiRequests.filter((u) => /^\/api\/servers\/[^/]+\/traffic$/.test(u)).sort();
+    check('a page load asks /api/servers once, and each running server\'s last hour once',
         apiRequests.filter((u) => u === '/api/servers').length === 1 && apiRequests.filter((u) => u === '/api/events').length === 1
-            && apiRequests.every((u) => ['/api/servers', '/api/system/status', '/api/events'].includes(u)),
+            && JSON.stringify(historyRequests) === JSON.stringify(runningIds.map((id) => `/api/servers/${id}/traffic`))
+            && apiRequests.every((u) => ['/api/servers', '/api/system/status', '/api/events'].includes(u) || historyRequests.includes(u)),
         apiRequests);
 
     // Telemetry patches the rows in place: buttons, focus and an open menu survive.
@@ -90,12 +94,16 @@ function check(label, condition, detail) {
         const edit = [...row().querySelectorAll('button')].find((b) => /Edit/.test(b.textContent));
         edit.focus();
         const before = server.traffic[client.id] || {};
+        // A live tick since the render leaves its flash on; start from none.
+        row().querySelectorAll('.traffic-flash').forEach((a) => a.classList.remove('traffic-flash'));
         amneziaApp.updateServerTraffic(server.id, { ...server.traffic, [client.id]: {
             ...before, endpoint: '198.51.100.99:4242', latest_handshake_seconds: 3, active: true,
-            received_bytes: (before.received_bytes || 0) + 5 * 1024 * 1024 } });
+            sent_bytes: (before.sent_bytes || 0) + 5 * 1024 * 1024 } });
+        // ↓ is the device's download: what the server sent it.
         return edit.isConnected && document.activeElement === edit && /198\.51\.100\.99/.test(row().textContent)
             && /handshake 3 s ago/.test(row().textContent)
-            && row().querySelector('[data-cell="rx-arrow"]').classList.contains('traffic-flash');
+            && row().querySelector('[data-cell="down-arrow"]').classList.contains('traffic-flash')
+            && !row().querySelector('[data-cell="up-arrow"]').classList.contains('traffic-flash');
     }));
     await page.evaluate(() => amneziaApp.loadServers());
     await new Promise((r) => setTimeout(r, 500));
@@ -117,6 +125,66 @@ function check(label, condition, detail) {
     for (const theme of ['light', 'dark']) {
         console.log(`\n[${theme}]`);
         await page.evaluate((t) => document.body.classList.toggle('dark', t === 'dark'), theme);
+
+        // Traffic (step 13): a band on running cards, a sparkline on online rows, the
+        // dialog from the band and from ⋯, its ranges, readout, highlight and pin.
+        check('a traffic band on running cards only, with a chart', await page.evaluate(() => amneziaApp.lastServers.every((s) => {
+            const band = document.querySelector(`article[data-server-id="${s.id}"] [data-action="server-traffic"]`);
+            return s.status === 'running' ? !!band?.querySelector('[data-band-plot] svg path') : !band;
+        })));
+        check('a sparkline under the totals on online rows only', await page.evaluate(() => amneziaApp.lastServers.every((s) =>
+            (s.clients || []).every((c) => {
+                const cell = document.querySelector(`li[data-client-id="${c.id}"] [data-cell="spark"]`);
+                const online = window.ServerUi.isOnline(s, c, (s.traffic || {})[c.id], (t) => !!t?.active);
+                return online ? !!cell?.querySelector('svg') && /bit\/s/.test(cell.textContent) && cell.offsetHeight > 0
+                    : !!cell && cell.offsetHeight === 0 && !cell.textContent.trim();
+            }))));
+        check('the strip shows the traffic now and its last hour', await page.evaluate(() =>
+            /^\d/.test(document.getElementById('stripTrafficNow').textContent)
+            && !!document.querySelector('#stripTrafficChart svg')));
+        const dialog = await page.evaluate(async () => {
+            const server = amneziaApp.lastServers.find((s) => s.status === 'running' && (s.clients || []).length);
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            document.querySelector(`[data-action="server-traffic"][data-server="${server.id}"]`).click();
+            await wait(900);
+            const out = { fromBand: /Traffic/.test(document.getElementById('dialogTitle')?.textContent || '') };
+            out.rows = document.querySelectorAll('[data-traffic-client]').length === server.clients.length;
+            out.chart = !!document.querySelector('#trafficPlot svg path[d]');
+            const ranges = {};
+            for (const r of ['1h', '6h', '24h']) {
+                document.querySelector(`#dialog [data-range="${r}"]`).click();
+                await wait(700);
+                ranges[r] = document.querySelector(`#dialog [data-range="${r}"]`).getAttribute('aria-checked') === 'true'
+                    && amneziaApp.trafficView?.data?.range === r
+                    && new RegExp(`in the last ${r.replace('h', ' h')}`).test(document.getElementById('trafficSummary').textContent);
+            }
+            out.ranges = ranges;
+            const plot = document.getElementById('trafficPlot');
+            const box = plot.getBoundingClientRect();
+            const at = { clientX: box.left + box.width * 0.8, clientY: box.top + 50, bubbles: true, pointerType: 'mouse' };
+            plot.dispatchEvent(new PointerEvent('pointermove', at));
+            const tip = document.getElementById('trafficTip');
+            out.readout = !tip.hidden && !document.getElementById('trafficCross').hidden && /download/.test(tip.textContent);
+            const row = document.querySelector('[data-traffic-client]');
+            row.dispatchEvent(new PointerEvent('pointerenter', { pointerType: 'mouse' }));
+            out.highlight = amneziaApp.trafficView.emph === row.dataset.trafficClient && row.classList.contains('bg-gray-100')
+                && document.querySelectorAll('#trafficPlot path').length > 6;
+            row.click();
+            row.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse' }));
+            out.pinned = amneziaApp.trafficView.pinned === row.dataset.trafficClient && amneziaApp.trafficView.emph === row.dataset.trafficClient;
+            plot.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'mouse', bubbles: true }));
+            out.cleared = document.getElementById('trafficTip').hidden;
+            window.Ui.closeDialog();
+            out.closed = amneziaApp.trafficView === null;
+            amneziaApp.openServerMenu(server.id, document.querySelector(`[data-action="server-menu"][data-server="${server.id}"]`));
+            [...document.querySelectorAll('#menu button')].find((b) => /Traffic/.test(b.textContent))?.click();
+            await wait(700);
+            out.fromMenu = amneziaApp.trafficView?.serverId === server.id && !!document.querySelector('#trafficPlot svg');
+            window.Ui.closeDialog();
+            return out;
+        });
+        check('the Traffic dialog: from the band, every range, the readout, highlight, pin, and from ⋯',
+            Object.values(dialog).every((v) => (typeof v === 'object' ? Object.values(v).every(Boolean) : v)), dialog);
 
         for (const server of servers) {
             const { id, protocol } = server;
@@ -280,6 +348,21 @@ function check(label, condition, detail) {
             createSubmission);
         await page.evaluate(() => window.Ui.closeDrawer());
     }
+
+    // At phone width nothing scrolls sideways, the page or the Traffic dialog.
+    await page.setViewport({ width: 390, height: 900 });
+    await new Promise((r) => setTimeout(r, 500));
+    const narrow = await page.evaluate(async () => {
+        const page = document.documentElement.scrollWidth;
+        const server = amneziaApp.lastServers.find((s) => s.status === 'running');
+        amneziaApp.showServerTraffic(server.id);
+        await new Promise((r) => setTimeout(r, 900));
+        const dialog = document.documentElement.scrollWidth;
+        window.Ui.closeDialog();
+        return { page, dialog };
+    });
+    check('no horizontal scroll at 390 px, with the dialog open too', narrow.page <= 390 && narrow.dialog <= 390, narrow);
+    await page.setViewport({ width: 1280, height: 1000 });
 
     // AllowedIPs edits arm Save without a warning; an endpoint host counts every
     // client config it changes, without the restart a transport change needs.

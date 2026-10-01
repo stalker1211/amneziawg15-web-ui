@@ -44,9 +44,10 @@
             </div>
         </div>
 
-        <!-- Status strip: public IP, servers running, clients online (handshake <= 5 min). -->
+        <!-- Status strip: public IP, servers running, clients online (handshake <= 5 min),
+             traffic now. Two by two at sm, so each tile's borders name its own place. -->
         <section aria-label="Status"
-                 class="grid grid-cols-1 sm:grid-cols-3 rounded-xl border border-gray-400 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
+                 class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 rounded-xl border border-gray-400 bg-white dark:bg-[#1f2937] dark:border-[#334155]">
             <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0">
                 <span class="section-title">Public IP</span>
                 <span class="flex items-center gap-1">
@@ -60,9 +61,16 @@
                 <span class="section-title">Servers</span>
                 <span class="text-sm"><strong id="stripServersRunning" class="font-semibold tabular-nums text-gray-900 dark:text-[#f1f5f9]">–</strong> of <span id="stripServersTotal">–</span> running</span>
             </div>
-            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t sm:border-t-0 sm:border-l border-gray-300 dark:border-[#334155]">
+            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t lg:border-t-0 lg:border-l border-gray-300 dark:border-[#334155]">
                 <span class="section-title">Clients</span>
                 <span class="text-sm"><strong id="stripClientsOnline" class="font-semibold tabular-nums text-gray-900 dark:text-[#f1f5f9]">–</strong> of <span id="stripClientsTotal">–</span> online</span>
+            </div>
+            <div class="flex items-center justify-between gap-3 px-4 py-3 min-w-0 border-t sm:border-l lg:border-t-0 border-gray-300 dark:border-[#334155]">
+                <span class="section-title">Traffic</span>
+                <span class="flex items-center gap-2.5" title="Every running server, the last hour: download above the line, upload below">
+                    <span id="stripTrafficChart"></span>
+                    <span class="text-sm"><strong id="stripTrafficNow" class="font-semibold tabular-nums text-gray-900 dark:text-[#f1f5f9]">–</strong> Mbit/s</span>
+                </span>
             </div>
         </section>
 
@@ -123,6 +131,7 @@
     <script src="{{ url_for('static', filename='js/protocols.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/ui.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/api.js') }}?v={{ cache_bust }}"></script>
+    <script src="{{ url_for('static', filename='js/charts.js') }}?v={{ cache_bust }}"></script>
     <script src="{{ url_for('static', filename='js/server-ui.js') }}?v={{ cache_bust }}"></script>
     <!-- app.js defines AmneziaApp and creates the instance; modals.js and forms.js
          add methods to its prototype. It starts on DOMContentLoaded, after all three. -->

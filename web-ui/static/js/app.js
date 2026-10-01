@@ -12,6 +12,7 @@
 //   live updates (/api/events)     setupLiveUpdates, openEvents, recoverEvents, updateStatus
 //   public IP and egress probe     updatePublicIp, refreshPublicIp, probeServerEgressIp
 //   loading and rendering          loadServers (the one request), renderServers, updateServerTraffic
+//   traffic history and charts     loadTrafficHistory, appendTrafficTick, drawTraffic, lastHour, sparks
 //   page actions                   deleteServer ... toggleServer, getJson/postJson, showTempMessage
 class AmneziaApp {
     constructor() {
@@ -24,6 +25,12 @@ class AmneziaApp {
         // The only page state: GET /api/servers, each server with its clients and
         // its last telemetry snapshot (`traffic`), kept current by traffic_update.
         this.lastServers = [];
+        // Each running server's last hour for the charts (GET .../traffic?range=1h, then
+        // one tick per traffic_update): {t: [epoch s], clients: {id: {down, up}}, loaded},
+        // in Mbit/s from the device's side. `trafficAt` is the newest tick's time, by the
+        // server's clock. server.traffic stays the snapshot.
+        this.trafficHistory = {};
+        this.trafficAt = 0;
         this.lastResyncAt = 0;
         this.drawerCtx = null;
         this.currentPublicIp = '';
@@ -194,6 +201,7 @@ class AmneziaApp {
             'add-client': (el) => this.addClient(el.dataset.server),
             'server-settings': (el) => this.showServerConfig(el.dataset.server),
             'server-menu': (el) => this.openServerMenu(el.dataset.server, el),
+            'server-traffic': (el) => this.showServerTraffic(el.dataset.server),
             'probe-egress': (el) => this.probeServerEgressIp(el.dataset.server, el),
             'raw-config': (el) => this.showRawServerConfig(el.dataset.server),
             'toggle-client': (el) => this.toggleClientSuspend(...ids(el)),
@@ -223,6 +231,15 @@ class AmneziaApp {
         this.getElement('showCreateServerBtn')?.addEventListener('click', () => this.openCreateServerModal());
         this.getElement('themeToggleBtn')?.addEventListener('click', () => this.toggleTheme());
         this.getElement('refreshIpBtn')?.addEventListener('click', () => this.refreshPublicIp());
+        // The charts are drawn to their width.
+        let resizeFrame = 0;
+        window.addEventListener('resize', () => {
+            cancelAnimationFrame(resizeFrame);
+            resizeFrame = requestAnimationFrame(() => {
+                this.drawTraffic();
+                this.redrawServerTraffic();
+            });
+        });
         this.setupDrawerForms();
     }
 
@@ -378,7 +395,7 @@ class AmneziaApp {
         on('server_status', () => this.loadServers());
         on('traffic_update', (event) => {
             const data = JSON.parse(event.data);
-            this.updateServerTraffic(data.server_id, data.traffic);
+            this.updateServerTraffic(data.server_id, data.traffic, data.at);
         });
     }
 
@@ -414,7 +431,7 @@ class AmneziaApp {
         const now = Date.now();
         if (now - this.lastResyncAt < 2000) return;
         this.lastResyncAt = now;
-        this.loadServers();
+        this.loadServers({ resync: true });
         this.loadPublicIp();
     }
 
@@ -550,7 +567,9 @@ class AmneziaApp {
             });
     }
 
-    loadServers() {
+    // `resync`: the page may have missed ticks (a hidden tab, a new stream), so every
+    // running server's last hour is fetched again, not only a newly started one's.
+    loadServers({ resync = false } = {}) {
         return this.apiFetch('/api/servers')
             .then(response => {
                 if (!response.ok) {
@@ -563,6 +582,7 @@ class AmneziaApp {
             .then(servers => {
                 this.lastServers = Array.isArray(servers) ? servers : [];
                 this.renderServers(servers);
+                this.loadTrafficHistory(resync);
             })
             .catch(error => {
                 console.error('Error loading servers:', error);
@@ -585,7 +605,7 @@ class AmneziaApp {
                 return this.renderServerClients(serverId, clients, server.traffic || {});
             },
         });
-        this.renderStrip();
+        this.drawTraffic();
     }
 
     renderServerClients(serverId, clients, traffic = {}) {
@@ -594,12 +614,14 @@ class AmneziaApp {
             server,
             clients,
             traffic,
+            sparks: this.sparks(server),
             escapeHtml: (v) => this.escapeHtml(v),
             isClientActiveFromTraffic: (clientTraffic) => this.isClientActiveFromTraffic(clientTraffic),
         });
     }
 
-    // The status strip: servers running and clients online (handshake <= 5 min).
+    // The status strip: servers running, clients online (handshake <= 5 min), and every
+    // running server's traffic: its rate now and its last hour.
     renderStrip() {
         const servers = this.lastServers || [];
         const running = servers.filter((s) => s.status === 'running').length;
@@ -617,12 +639,20 @@ class AmneziaApp {
         set('stripServersTotal', servers.length);
         set('stripClientsOnline', online);
         set('stripClientsTotal', total);
+
+        const live = servers.filter((s) => s.status === 'running');
+        const rateNow = live.reduce((a, s) => a + Object.values(s.traffic || {})
+            .reduce((b, t) => b + (Number(t?.sent_bps) || 0) + (Number(t?.received_bps) || 0), 0), 0) / 1e6;
+        set('stripTrafficNow', live.length ? window.Charts.rateNum(rateNow) : '–');
+        const chart = document.getElementById('stripTrafficChart');
+        if (chart) chart.innerHTML = live.length ? window.Charts.mirrored({ w: 76, h: 22, ...this.lastHour(live, 48) }).svg : '';
     }
 
     openServerMenu(serverId, anchor) {
         const server = (this.lastServers || []).find((s) => s.id === serverId);
         if (!server) return;
         window.Ui.openMenu(anchor, [
+            { label: 'Traffic', icon: 'activity', run: () => this.showServerTraffic(serverId) },
             { label: 'Logs', icon: 'logs', run: () => this.showServerLogs(serverId, server.interface) },
             { label: 'Full config', icon: 'code', run: () => this.showRawServerConfig(serverId) },
             { label: 'Rename', icon: 'edit', run: () => this.renameServer(serverId, document.querySelector(`[data-name="${serverId}"]`)) },
@@ -640,19 +670,152 @@ class AmneziaApp {
         ]);
     }
 
-    // Every 7 s: the running server's new telemetry, patched into its rows in place.
-    updateServerTraffic(serverId, traffic) {
+    // Every 7 s: the running server's new telemetry, patched into its rows in place, and
+    // its tick (`at`) appended to the last hour the charts draw.
+    updateServerTraffic(serverId, traffic, at = null) {
         const server = (this.lastServers || []).find((s) => s.id === serverId);
         if (!server) return;
         const previous = server.traffic || {};
         server.traffic = (traffic && typeof traffic === 'object') ? traffic : {};
+        if (Number.isFinite(at)) this.appendTrafficTick(server, at);
+        this.patchServerRows(server, previous);
+        this.drawBand(server);
+        this.renderStrip();
+        this.redrawServerTraffic(serverId, 'tick');
+    }
+
+    patchServerRows(server, previous = server.traffic || {}) {
         window.ServerUi.patchClients({
-            container: this.getElement(`clients-${serverId}`),
+            container: this.getElement(`clients-${server.id}`),
             server,
-            traffic: server.traffic,
+            traffic: server.traffic || {},
             previous,
+            sparks: this.sparks(server),
             escapeHtml: (v) => this.escapeHtml(v),
             isClientActiveFromTraffic: (t) => this.isClientActiveFromTraffic(t),
+        });
+    }
+
+    // --- traffic history: the page's last hour, and the small charts drawn from it ------
+
+    // Each running server's last hour. On a resync every one (ticks may have been
+    // missed); otherwise only a server not loaded yet (just started). A stopped server's
+    // goes: it has no band, and its next start fetches it again.
+    async loadTrafficHistory(all = false) {
+        const running = (this.lastServers || []).filter((s) => s.status === 'running');
+        Object.keys(this.trafficHistory).forEach((id) => {
+            if (!running.some((s) => s.id === id)) delete this.trafficHistory[id];
+        });
+        const wanted = running.filter((s) => all || !this.trafficHistory[s.id]?.loaded);
+        if (!wanted.length) return;
+        await Promise.all(wanted.map(async (server) => {
+            try {
+                const data = window.Charts.fromApi(await this.getJson(`/api/servers/${server.id}/traffic?range=1h`));
+                const history = { t: data.t, clients: {}, loaded: true };
+                Object.entries(data.clients).forEach(([id, c]) => { history.clients[id] = { down: c.down, up: c.up }; });
+                // Ticks that arrived while the request was out.
+                const local = this.trafficHistory[server.id];
+                const last = data.t[data.t.length - 1] ?? 0;
+                local?.t.forEach((t, i) => {
+                    if (t <= last) return;
+                    history.t.push(t);
+                    Object.entries(local.clients).forEach(([id, c]) => {
+                        history.clients[id] ??= { down: new Array(history.t.length - 1).fill(null), up: new Array(history.t.length - 1).fill(null) };
+                        history.clients[id].down.push(c.down[i] ?? null);
+                        history.clients[id].up.push(c.up[i] ?? null);
+                    });
+                });
+                this.padTrafficHistory(history);
+                this.trafficHistory[server.id] = history;
+                this.trafficAt = Math.max(this.trafficAt, data.now || 0);
+            } catch (error) {
+                console.error('Error loading traffic history:', error);
+            }
+        }));
+        this.drawTraffic();
+    }
+
+    // One tick of a running server, from traffic_update: its clients' rates now, and
+    // whatever is over an hour old falls off.
+    appendTrafficTick(server, at) {
+        const history = (this.trafficHistory[server.id] ??= { t: [], clients: {}, loaded: false });
+        if (history.t.length && at <= history.t[history.t.length - 1]) return;
+        history.t.push(at);
+        (server.clients || []).forEach((client) => {
+            const t = server.traffic[client.id];
+            // A new client: no data before it.
+            const none = () => new Array(history.t.length - 1).fill(null);
+            const c = (history.clients[client.id] ??= { down: none(), up: none() });
+            c.down.push(t ? (Number(t.sent_bps) || 0) / 1e6 : null);
+            c.up.push(t ? (Number(t.received_bps) || 0) / 1e6 : null);
+        });
+        this.padTrafficHistory(history);
+        let drop = 0;
+        while (drop < history.t.length && history.t[drop] <= at - 3600) drop += 1;
+        if (drop) {
+            history.t.splice(0, drop);
+            Object.values(history.clients).forEach((c) => { c.down.splice(0, drop); c.up.splice(0, drop); });
+        }
+        this.trafficAt = Math.max(this.trafficAt, at);
+    }
+
+    // Every client's series as long as the times: null where it has no data.
+    padTrafficHistory(history) {
+        const n = history.t.length;
+        Object.values(history.clients).forEach((c) => {
+            ['down', 'up'].forEach((key) => {
+                for (let i = c[key].length; i < n; i++) c[key][i] = null;
+                c[key].length = n;
+            });
+        });
+    }
+
+    // The last hour of these servers together, in `n` buckets: {down, up}.
+    lastHour(servers, n) {
+        const { buckets, sumSeries } = window.Charts;
+        const end = this.trafficAt || Date.now() / 1000;
+        const parts = servers.map((s) => this.trafficHistory[s.id]).filter(Boolean).map((h) => {
+            const list = Object.values(h.clients);
+            return {
+                down: buckets(h.t, sumSeries(list.map((c) => c.down), h.t.length), end - 3600, end, n),
+                up: buckets(h.t, sumSeries(list.map((c) => c.up), h.t.length), end - 3600, end, n),
+            };
+        });
+        return { down: sumSeries(parts.map((p) => p.down), n), up: sumSeries(parts.map((p) => p.up), n) };
+    }
+
+    // Each client's last hour in 60 buckets, for the sparklines in its row.
+    sparks(server) {
+        const history = this.trafficHistory[server?.id];
+        if (!history) return {};
+        const { buckets } = window.Charts;
+        const end = this.trafficAt || Date.now() / 1000;
+        const out = {};
+        Object.entries(history.clients).forEach(([id, c]) => {
+            out[id] = { down: buckets(history.t, c.down, end - 3600, end, 60), up: buckets(history.t, c.up, end - 3600, end, 60) };
+        });
+        return out;
+    }
+
+    // A running card's band: its last hour across the card's width, and its rates now.
+    drawBand(server) {
+        const { maxOf, mirrored } = window.Charts;
+        const plot = document.querySelector(`[data-band-plot="${server.id}"]`);
+        if (plot) {
+            plot.innerHTML = ''; // measured empty: the chart takes the width the rates leave
+            const lh = this.lastHour([server], 120);
+            plot.innerHTML = mirrored({ w: plot.clientWidth, h: 44, down: lh.down, up: lh.up,
+                dTop: Math.max(maxOf(lh.down), 1), uTop: Math.max(maxOf(lh.up), 0.25) }).svg;
+        }
+        const now = document.querySelector(`[data-band-now="${server.id}"]`);
+        if (now) now.innerHTML = window.ServerUi.bandNowHtml(server.traffic || {});
+    }
+
+    // Every chart on the page: the bands, the sparklines and the strip.
+    drawTraffic() {
+        (this.lastServers || []).filter((s) => s.status === 'running').forEach((server) => {
+            this.drawBand(server);
+            this.patchServerRows(server);
         });
         this.renderStrip();
     }

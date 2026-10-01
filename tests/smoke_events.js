@@ -76,6 +76,22 @@ const streamOpen = () => !!(amneziaApp.events && amneziaApp.events.readyState ==
     });
     check('traffic_update events arrive (a running server)', await waitFor(page, () => window.__traffic > 0, 20000));
 
+    // Each tick joins the page's last hour (step 13) and redraws a sparkline and the
+    // strip's tile: new SVG nodes, and a newer point at the event's time. (The hour is
+    // full, so the count holds still: the oldest point falls off.)
+    await page.evaluate(() => {
+        const cell = document.querySelector('[data-cell="spark"] svg')?.closest('[data-cell="spark"]');
+        const newest = () => Math.max(0, ...Object.values(amneziaApp.trafficHistory).map((h) => h.t[h.t.length - 1] || 0));
+        window.__spark = { row: cell?.closest('li')?.dataset.clientId, svg: cell?.querySelector('svg'),
+            tile: document.querySelector('#stripTrafficChart svg'), newest: newest(), now: newest };
+    });
+    check('a traffic_update moves a sparkline and the strip\'s tile', await waitFor(page, () => {
+        const svg = document.querySelector(`li[data-client-id="${window.__spark.row}"] [data-cell="spark"] svg`);
+        return !!window.__spark.svg && !!svg && svg !== window.__spark.svg
+            && document.querySelector('#stripTrafficChart svg') !== window.__spark.tile
+            && window.__spark.now() > window.__spark.newest;
+    }, 20000));
+
     // --- the browser gives the stream up ------------------------------------
     // As after a 502 while the panel restarts: closed, then an error. recoverEvents
     // asks /api/system/status, gets 200 and opens a new stream 3 s later.

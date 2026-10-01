@@ -5,6 +5,8 @@ Everything is the production code (routes, guards, the event stream, the traffic
 and its `awg show all dump` parser) except the system edges of the manager: keys, awg-quick, ip,
 iptables, GeoIP and the egress probe are answered here. Addresses come from the
 documentation ranges and keys are random, so nothing real can leak into a screenshot.
+The traffic history starts with an invented day (seed_history), recorded through the
+history's own path, so the Traffic dialog has 24 hours to show at once.
 
     uv run --no-project --python 3.14 --with-requirements web-ui/requirements.txt \
         tests/demo_server.py [--port 8099]
@@ -19,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import sys
 import tempfile
 import time
@@ -37,6 +40,7 @@ from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
 from routes.system import register_system_routes, render_page
 from services.amnezia_manager import AmneziaManager
+from services.history import TrafficHistory
 from services.netinfo import NetInfo
 
 PUBLIC_IPS = ("203.0.113.24", "203.0.113.57")  # refresh-ip flips between these
@@ -49,7 +53,7 @@ GEO = {
     "198.51.100.17": ("Amsterdam", "NL"),
     "198.51.100.61": ("Frankfurt am Main", "DE"),
 }
-KiB, MiB, GiB = 1024, 1024**2, 1024**3
+MiB, GiB = 1024**2, 1024**3
 
 
 def random_key():
@@ -84,7 +88,8 @@ class DemoManager(AmneziaManager):
 
     def __init__(self, **kwargs):
         self.running = set()  # interfaces that are "up"
-        self.peers = {}  # client public key -> {endpoint, handshake_at, rx, tx}
+        self.peers = {}  # client public key -> {endpoint, handshake_at, rx, tx, read_at}
+        self._live_rngs = {}  # client name -> its live traffic's random.Random
         self._public_ip_calls = 0
         super().__init__(**kwargs)
         # Replaced before the seed: until then the traffic loop has no server to look up.
@@ -154,8 +159,18 @@ class DemoManager(AmneziaManager):
                 if peer and now - peer["handshake_at"] < 300:  # online: keep it chatty, each at its own pace
                     spread = sum(map(ord, client["client_public_key"])) % 97
                     peer["handshake_at"] = now - ((int(now) + spread) % 110 + 1)
-                    peer["rx"] += (int(now) % 7 + 1) * 180 * KiB
-                    peer["tx"] += (int(now) % 5 + 1) * 40 * KiB
+                    # The invented day (DAYS) goes on live, each device at its own rate over
+                    # the time since the last reading, so the charts carry on from the seeded
+                    # history; a keepalive trickle in its quiet hours. tx is the device's download.
+                    elapsed = now - peer.get("read_at", now)
+                    peer["read_at"] = now
+                    day = DAYS.get(client["name"])
+                    rng = self._live_rngs.setdefault(client["name"], random.Random(client["name"] + "/live"))
+                    state, down, up = day(_hour(now), rng, elapsed / 60, 0) if day else OFFLINE
+                    if state != "o":
+                        down, up = 0.004, 0.002
+                    peer["tx"] += int(down * 1e6 / 8 * elapsed)
+                    peer["rx"] += int(up * 1e6 / 8 * elapsed)
                 endpoint, handshake, rx, tx = (
                     (peer["endpoint"], int(peer["handshake_at"]), int(peer["rx"]), int(peer["tx"]))
                     if peer
@@ -193,11 +208,11 @@ def seed(manager):
 
     params = {"Jc": 8, "Jmin": 40, "Jmax": 70}
     now = time.time()
-    traffic = {  # name -> (endpoint, seconds since handshake, rx, tx)
-        "iPhone": ("198.51.100.40:53412", 12, 1.39 * GiB, 214.6 * MiB),
-        "MacBook": ("203.0.113.88:61022", 184, 6.59 * GiB, 802.1 * MiB),
-        "iPad": ("198.51.100.40:50112", 3 * 86400 + 7260, 412.3 * MiB, 38.9 * MiB),
-        "Pixel": ("203.0.113.201:40211", 47, 922.4 * MiB, 101.7 * MiB),
+    traffic = {  # name -> (endpoint, seconds since handshake, rx: the device's upload, tx: its download)
+        "iPhone": ("198.51.100.40:53412", 12, 214.6 * MiB, 1.39 * GiB),
+        "MacBook": ("203.0.113.88:61022", 184, 802.1 * MiB, 6.59 * GiB),
+        "iPad": ("198.51.100.40:50112", 3 * 86400 + 7260, 38.9 * MiB, 412.3 * MiB),
+        "Pixel": ("203.0.113.201:40211", 47, 101.7 * MiB, 922.4 * MiB),
     }
     clients = {}
     for srv, names in ((home, ("iPhone", "MacBook", "iPad", "Router")), (travel, ("Pixel", "Work laptop")),
@@ -226,6 +241,128 @@ def seed(manager):
     for srv in (home, travel):
         manager.start_server(srv["id"])
         manager.probe_server_egress_ip(srv["id"])
+    seed_history(manager)
+
+
+# --- an invented day of traffic, for the history ---------------------------------------
+# What each device did at a time of day: (state, download, upload), rates in Mbit/s from
+# the device's side; "o" online, "-" offline, "s" suspended. Ported from the step 13 mock.
+OFFLINE = ("-", 0.0, 0.0)
+
+
+def _hour(at):
+    local = time.localtime(at)
+    return local.tm_hour + local.tm_min / 60 + local.tm_sec / 3600
+
+
+def _within(h, a, b):
+    return a <= h < b if a <= b else h >= a or h < b
+
+
+def _jitter(r, v, f):
+    return v * (1 - f + 2 * f * r.random())
+
+
+def _iphone(h, r, dt, _ago):
+    if not _within(h, 6.8, 0.7):
+        return OFFLINE
+    down = _jitter(r, 0.12, 0.8)
+    up = down * 0.15
+    if _within(h, 7.65, 8.5):  # music on the way to work
+        down, up = _jitter(r, 0.32, 0.1), 0.03
+    if _within(h, 12.45, 12.6):  # photos syncing
+        up = _jitter(r, 6.2, 0.15)
+    if _within(h, 20.83, 22.5):  # an evening video
+        down, up = _jitter(r, 4.4, 0.3), _jitter(r, 0.16, 0.3)
+    if r.random() < 0.04 * dt:
+        down, up = down + 1.5 + r.random() * 7, up + 0.1 + r.random() * 0.5
+    return ("o", down, up)
+
+
+def _macbook(h, r, dt, _ago):
+    if not _within(h, 8.75, 24) or _within(h, 13.08, 13.75):
+        return OFFLINE
+    down, up = _jitter(r, 0.9 if h < 18.5 else 0.35, 0.6), _jitter(r, 0.18, 0.5)
+    if _within(h, 10, 10.75) or _within(h, 15, 15.5):  # calls
+        down, up = _jitter(r, 2.6, 0.2), _jitter(r, 2.2, 0.2)
+    if _within(h, 14.17, 14.25):  # a system update
+        down, up = _jitter(r, 39, 0.06), _jitter(r, 0.45, 0.2)
+    if r.random() < 0.03 * dt:
+        down, up = down + 2 + r.random() * 10, up + r.random() * 1.5
+    return ("o", down, up)
+
+
+def _router(_h, r, _dt, ago):
+    # Suspended in the demo; until five hours ago it carried a household's background.
+    return ("s", 0.0, 0.0) if ago < 5 * 3600 else ("o", _jitter(r, 1.6, 0.45), _jitter(r, 0.3, 0.4))
+
+
+def _pixel(h, r, dt, _ago):
+    if not (_within(h, 7.15, 7.85) or _within(h, 12, 13.2) or h >= 18.5):
+        return OFFLINE
+    down = _jitter(r, 1.1 if h >= 21 else 0.5, 0.5)  # maps on the way back, in the evening
+    up = down * 0.2
+    if r.random() < 0.05 * dt:
+        down, up = down + 1 + r.random() * 5, up + r.random() * 0.6
+    return ("o", down, up)
+
+
+def _work_laptop(h, r, dt, _ago):
+    if not _within(h, 9.08, 12.58):
+        return OFFLINE
+    down, up = _jitter(r, 1.2, 0.6), _jitter(r, 0.35, 0.5)
+    if _within(h, 11.33, 11.4):
+        down = _jitter(r, 12, 0.15)
+    if r.random() < 0.03 * dt:
+        down += 2 + r.random() * 6
+    return ("o", down, up)
+
+
+DAYS = {"iPhone": _iphone, "MacBook": _macbook, "Router": _router, "Pixel": _pixel, "Work laptop": _work_laptop}
+
+
+def seed_history(manager, hours=24):
+    """The invented day, through TrafficHistory.record as the loop would have recorded it
+    every 7 s: counters that grow by each device's rates, a suspended client with no peer,
+    a stopped server with no tick. Into a fresh history, swapped in at the end, because the
+    live loop has already recorded a tick at the present. The live counters then carry on
+    from where the day left them, so the next tick is no reset."""
+    history = TrafficHistory()
+    end = time.time()
+    step = TrafficHistory.TICK_SECONDS
+    rngs = {name: random.Random(name) for name in DAYS}
+    counters = {}  # client id -> [rx, tx]: the device's upload, its download
+    for server in manager.config["servers"]:
+        for client in server["clients"]:
+            peer = manager.peers.get(client["client_public_key"]) or {}
+            counters[client["id"]] = [int(peer.get("rx", 0)), int(peer.get("tx", 0))]  # as the dump prints them
+    at = end - hours * 3600
+    while at < end:
+        h = _hour(at)
+        samples = {}
+        for server in manager.config["servers"]:
+            if server["interface"] not in manager.running:
+                samples[server["id"]] = None
+                continue
+            samples[server["id"]] = clients = {}
+            for client in server["clients"]:
+                day = DAYS.get(client["name"])
+                state, down, up = day(h, rngs[client["name"]], step / 60, end - at) if day else OFFLINE
+                counter = counters[client["id"]]
+                if state == "s":
+                    clients[client["id"]] = ("s", None, None)
+                    continue
+                counter[0] += int(up * 1e6 / 8 * step)
+                counter[1] += int(down * 1e6 / 8 * step)
+                clients[client["id"]] = (state, *counter)
+        history.record(at, samples)
+        at += step
+    for server in manager.config["servers"]:
+        for client in server["clients"]:
+            peer = manager.peers.get(client["client_public_key"])
+            if peer:
+                peer["rx"], peer["tx"] = counters[client["id"]]
+    manager.history = history
 
 
 def write_log(path, manager):
@@ -251,6 +388,7 @@ def write_log(path, manager):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--port", type=int, default=8099)
+    parser.add_argument("--host", default="127.0.0.1", help="address to listen on; 0.0.0.0 for the LAN (no sign-in!)")
     parser.add_argument("--empty", action="store_true", help="start with no servers")
     parser.add_argument("--label", default="demo (example data)", help="build label under the heading")
     args = parser.parse_args()
@@ -291,9 +429,9 @@ def main():
     def static_files(filename):
         return send_from_directory(str(web_ui / "static"), filename)
 
-    print(f"Demo panel on http://127.0.0.1:{args.port}/ (state in {tmp})", flush=True)
+    print(f"Demo panel on http://{args.host}:{args.port}/ (state in {tmp})", flush=True)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)  # no line per request
-    app.run(host="127.0.0.1", port=args.port, threaded=True)
+    app.run(host=args.host, port=args.port, threaded=True)
 
 
 if __name__ == "__main__":
