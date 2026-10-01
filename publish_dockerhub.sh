@@ -129,6 +129,16 @@ if ! docker info >/dev/null 2>&1; then
 	echo "Error: docker daemon not reachable. Is Docker running?" >&2
 	exit 1
 fi
+# Local Docker only: a context or DOCKER_HOST pointing elsewhere (the NAS) would build and scan
+# there. `docker context inspect` reports whichever of them wins.
+DOCKER_ENDPOINT="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+case "${DOCKER_ENDPOINT}" in
+unix://*) echo "Docker: ${DOCKER_ENDPOINT}" ;;
+*)
+	echo "Error: Docker is ${DOCKER_ENDPOINT}, not a local socket; switch the context (docker context use) or DOCKER_HOST" >&2
+	exit 1
+	;;
+esac
 if ! command -v grype >/dev/null 2>&1; then
 	echo "Error: grype is not installed (brew install grype)" >&2
 	exit 1

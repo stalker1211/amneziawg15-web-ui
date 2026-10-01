@@ -25,7 +25,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const basic = (password) => 'Basic ' + Buffer.from(`${USER}:${password}`).toString('base64');
 
 (async () => {
-  const b = await puppeteer.launch({ headless: true });
+  const b = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   const p = await b.newPage();
   const log = [];
   let stream401 = 0;

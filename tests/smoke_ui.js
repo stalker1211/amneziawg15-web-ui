@@ -159,9 +159,13 @@ function check(label, condition, detail) {
                     && new RegExp(`in the last ${r.replace('h', ' h')}`).test(document.getElementById('trafficSummary').textContent);
             }
             out.ranges = ranges;
+            // The readout at the newest tick, the one point every history has (a fresh
+            // container's starts at its boot).
+            document.querySelector('#dialog [data-range="1h"]').click();
+            await wait(700);
             const plot = document.getElementById('trafficPlot');
             const box = plot.getBoundingClientRect();
-            const at = { clientX: box.left + box.width * 0.8, clientY: box.top + 50, bubbles: true, pointerType: 'mouse' };
+            const at = { clientX: box.right - 2, clientY: box.top + 50, bubbles: true, pointerType: 'mouse' };
             plot.dispatchEvent(new PointerEvent('pointermove', at));
             const tip = document.getElementById('trafficTip');
             out.readout = !tip.hidden && !document.getElementById('trafficCross').hidden && /download/.test(tip.textContent);
@@ -381,7 +385,7 @@ function check(label, condition, detail) {
         return armed && !warned;
     }));
     check('switching the protocol re-checks the whole form', await page.evaluate(async () => {
-        const server = amneziaApp.lastServers[0];
+        const server = amneziaApp.lastServers.find((s) => s.protocol === 'AWG 2.0');
         amneziaApp.showServerConfig(server.id);
         await new Promise((r) => setTimeout(r, 900));
         const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };

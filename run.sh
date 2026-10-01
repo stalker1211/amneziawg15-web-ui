@@ -11,6 +11,17 @@ INTERACTIVE="${INTERACTIVE:-0}"
 ENTRYPOINT="${ENTRYPOINT:-}"
 CMD_ARGS=("$@")
 
+# Local Docker only: a context or DOCKER_HOST pointing elsewhere (the NAS) would build and run
+# there. `docker context inspect` reports whichever of them wins.
+DOCKER_ENDPOINT="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+case "${DOCKER_ENDPOINT}" in
+unix://*) echo "Docker: ${DOCKER_ENDPOINT}" ;;
+*)
+	echo "Error: Docker is ${DOCKER_ENDPOINT}, not a local socket; switch the context (docker context use) or DOCKER_HOST" >&2
+	exit 1
+	;;
+esac
+
 # Build image by default (set BUILD=0 to skip).
 BUILD="${BUILD:-1}"
 DOCKERFILE="${DOCKERFILE:-Dockerfile}"
