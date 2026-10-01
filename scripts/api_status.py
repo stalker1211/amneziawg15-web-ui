@@ -1,16 +1,20 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["requests==2.34.2"]
+# dependencies = []
 # ///
-"""AmneziaWG Web UI status viewer."""
+"""AmneziaWG Web UI status viewer.
+
+Standard library only (since 2.5), so the uv shebang has nothing to install.
+"""
 
 import argparse
+import base64
+import json
 import os
 import sys
-
-import requests
-from requests.auth import HTTPBasicAuth
+import urllib.error
+import urllib.request
 
 
 class _Ansi:
@@ -47,33 +51,27 @@ def _handshake_color(handshake):
     return _Ansi.RED if "never" in s else (_Ansi.DIM if not s or s == "-" else _Ansi.YELLOW)
 
 
-def _http_session(user, password):
-    """Create a session with the panel's Basic Auth credentials."""
-    s = requests.Session()
-    if user and password:
-        s.auth = HTTPBasicAuth(user, password)
-    return s
+def _call(method, url, credentials, timeout):
+    """One call to the panel's API, returning (payload, error).
 
-
-def _get_json(s, url, timeout):
-    """Fetch JSON, returning (payload, error)."""
+    The Basic Auth credential goes with the request itself, as nginx wants it on
+    every one. A POST carries an empty JSON body: the panel refuses a mutation without
+    a JSON content type (415), which is what the old POST without one got.
+    """
+    headers = {"Accept": "application/json"}
+    if credentials:
+        headers["Authorization"] = "Basic " + base64.b64encode(credentials.encode()).decode()
+    data = None
+    if method == "POST":
+        headers["Content-Type"] = "application/json"
+        data = b"{}"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        resp = s.get(url, timeout=timeout)
-        if resp.status_code >= 400:
-            return None, f"HTTP {resp.status_code}"
-        return resp.json(), None
-    except (requests.RequestException, ValueError) as e:
-        return None, f"invalid response: {e}"
-
-
-def _post_json(s, url, timeout):
-    """POST request returning JSON as (payload, error)."""
-    try:
-        resp = s.post(url, timeout=timeout)
-        if resp.status_code >= 400:
-            return None, f"HTTP {resp.status_code}"
-        return resp.json(), None
-    except (requests.RequestException, ValueError) as e:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.load(response), None
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}"
+    except (OSError, ValueError) as e:
         return None, f"invalid response: {e}"
 
 
@@ -130,10 +128,12 @@ def _print_client(client, traffic, color_enabled):
     geo_str = _colorize(f" ({geo})", _Ansi.GRAY, enabled=color_enabled) if geo != "-" else ""
     print(f"\t  ip = {client.get('client_ip', '-')}  endpoint = {endpoint}{geo_str}")
 
+    # No telemetry for this client (its server is stopped, or the panel predates 2.4):
+    # "-", not a made-up 0 B.
     hs_val = _since(tinfo.get("latest_handshake_seconds")) if tinfo else "-"
     hs = _colorize(hs_val, _handshake_color(hs_val), enabled=color_enabled)
-    rx = _colorize(_bytes(tinfo.get("received_bytes")), _Ansi.MAGENTA, enabled=color_enabled)
-    tx = _colorize(_bytes(tinfo.get("sent_bytes")), _Ansi.MAGENTA, enabled=color_enabled)
+    rx = _colorize(_bytes(tinfo.get("received_bytes")) if tinfo else "-", _Ansi.MAGENTA, enabled=color_enabled)
+    tx = _colorize(_bytes(tinfo.get("sent_bytes")) if tinfo else "-", _Ansi.MAGENTA, enabled=color_enabled)
     print(f"\t  last handshake: {hs}  rx = {rx}  tx = {tx}")
 
 
@@ -150,10 +150,10 @@ def main():
     args = p.parse_args()
 
     color_enabled = sys.stdout.isatty()
-    s = _http_session(args.user, args.password)
+    credentials = f"{args.user}:{args.password}" if args.user and args.password else None
 
     base = args.base_url.rstrip("/")
-    servers, err = _get_json(s, f"{base}/api/servers", args.timeout)
+    servers, err = _call("GET", f"{base}/api/servers", credentials, args.timeout)
     if err:
         print(f"Failed to fetch servers: {err}", file=sys.stderr)
         return 2
@@ -172,14 +172,9 @@ def main():
 
         sid = server.get("id")
         if args.refresh_egress and sid:
-            refreshed_probe, refresh_err = _post_json(s, f"{base}/api/servers/{sid}/egress-ip", args.timeout)
+            refreshed_probe, refresh_err = _call("POST", f"{base}/api/servers/{sid}/egress-ip", credentials, args.timeout)
             if not refresh_err and isinstance(refreshed_probe, dict):
-                server["egress_probe"] = {
-                    "external_ip": refreshed_probe.get("external_ip"),
-                    "checked_at": refreshed_probe.get("checked_at"),
-                    "service": refreshed_probe.get("service"),
-                    "error": refreshed_probe.get("error"),
-                }
+                server["egress_probe"] = refreshed_probe  # the whole probe, geo label included
 
         sname = _colorize(server.get("name", "-"), _Ansi.BOLD, _Ansi.CYAN, enabled=color_enabled)
         sstatus = _colorize(
@@ -200,11 +195,14 @@ def main():
         print(f"\tServer IP = {server_public}  port = {server_port}{server_geo_str}")
         print(f"\tEgress IP = {egress}{egress_geo_str}")
 
-        # /api/servers carries each server's clients and its last telemetry snapshot.
-        clients, traffic = server.get("clients") or [], server.get("traffic") or {}
+        # /api/servers carries each server's clients and, since 2.4, its last telemetry
+        # snapshot. A panel from before has no `traffic` at all: say so.
+        clients, traffic = server.get("clients") or [], server.get("traffic")
         if not clients:
             print("\t<no clients>")
             continue
+        if traffic is None:
+            print("\t<no traffic: this panel is older than 2.4>")
 
         for client in clients:
             if isinstance(client, dict):

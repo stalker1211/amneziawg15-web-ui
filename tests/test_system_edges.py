@@ -2,13 +2,14 @@
 
 tests/support.py's build_manager() overrides this whole layer so the logic tests stay
 hermetic. Here the production code runs instead, with only `subprocess.run` (a
-FakeSubprocess), two system paths (SystemPaths) and `requests` replaced -- so the argv
+FakeSubprocess), two system paths (SystemPaths) and `https_get` replaced -- so the argv
 each operation produces, and what it does when a command fails, are pinned down.
 """
 
 import ast
 import json
 import os
+import ssl
 import threading
 import unittest
 from pathlib import Path
@@ -336,15 +337,80 @@ class BackgroundTaskTests(_Base):
         self.assertEqual(self.manager.events.published[-1], ("server_status", {"server_id": "abc", "status": "running"}))
 
 
-class _Response:
-    def __init__(self, status=200, text="", data=None, content_type="application/json"):
-        self.status_code = status
-        self.text = text
-        self._data = data
-        self.headers = {"content-type": content_type}
+def _Response(status=200, text="", data=None, content_type="application/json"):
+    """What https_get returns."""
+    from core.helpers import HttpsResponse
 
-    def json(self):
-        return self._data
+    return HttpsResponse(status, content_type, json.dumps(data) if data is not None else text)
+
+
+class HttpsGetTests(unittest.TestCase):
+    """core/helpers.py https_get: the panel's one outbound HTTP client, on http.client."""
+
+    def _get(self, url="https://ipapi.co/8.8.8.8/json/", response=None, error=None, **kwargs):
+        from core import helpers
+
+        connection = mock.Mock()
+        if error:
+            connection.request.side_effect = error
+        connection.getresponse.return_value = response or mock.Mock(
+            status=200, read=mock.Mock(return_value=b"ok"), getheader=mock.Mock(return_value="text/plain")
+        )
+        with mock.patch.object(helpers.http.client, "HTTPSConnection", return_value=connection) as cls:
+            try:
+                return helpers.https_get(url, timeout=3, **kwargs), cls, connection
+            finally:
+                self.connection = connection
+
+    def test_the_certificate_and_host_name_are_checked(self):
+        _, cls, _ = self._get()
+        context = cls.call_args.kwargs["context"]
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_host_port_path_and_timeout(self):
+        _, cls, connection = self._get("https://ipapi.co/8.8.8.8/json/?fields=country")
+        self.assertEqual(cls.call_args.args, ("ipapi.co", 443))
+        self.assertEqual(cls.call_args.kwargs["timeout"], 3)
+        self.assertEqual(connection.request.call_args.args, ("GET", "/8.8.8.8/json/?fields=country"))
+        _, cls, connection = self._get("https://example.test:8443")
+        self.assertEqual((cls.call_args.args, connection.request.call_args.args), (("example.test", 8443), ("GET", "/")))
+
+    def test_bound_to_a_source_address_only_when_given_one(self):
+        _, cls, _ = self._get(source_ip="10.0.0.1")
+        self.assertEqual(cls.call_args.kwargs["source_address"], ("10.0.0.1", 0))
+        _, cls, _ = self._get()
+        self.assertIsNone(cls.call_args.kwargs["source_address"])
+
+    def test_a_user_agent_always_goes_with_it(self):
+        # ipapi.co answers 429 to a request without one.
+        _, _, connection = self._get(headers={"Accept": "application/json"})
+        self.assertEqual(
+            connection.request.call_args.kwargs["headers"], {"User-Agent": "amneziawg-web-ui", "Accept": "application/json"}
+        )
+
+    def test_the_answer_capped_and_decoded(self):
+        from core.helpers import MAX_BODY_BYTES
+
+        read = mock.Mock(return_value=b"198.51.100.7\xff")
+        response = mock.Mock(status=503, read=read, getheader=mock.Mock(return_value="text/plain"))
+        result, _, _ = self._get(response=response)
+        self.assertEqual(result, (503, "text/plain", "198.51.100.7\ufffd"))
+        read.assert_called_once_with(MAX_BODY_BYTES)
+
+    def test_the_connection_is_closed_even_when_the_request_fails(self):
+        with self.assertRaises(OSError):
+            self._get(error=OSError("unreachable"))
+        self.connection.close.assert_called_once_with()
+
+    def test_only_https(self):
+        from core import helpers
+
+        with mock.patch.object(helpers.http.client, "HTTPSConnection") as cls:
+            for url in ("http://api.ipify.org", "api.ipify.org", "https://"):
+                with self.assertRaises(ValueError, msg=url):
+                    helpers.https_get(url, timeout=3)
+        cls.assert_not_called()
 
 
 class PublicIpTests(_Base):
@@ -360,7 +426,7 @@ class PublicIpTests(_Base):
             "https://icanhazip.com": _Response(text="198.51.100.7\n"),
         }
         with (
-            mock.patch(f"{MODULE}.requests.get", side_effect=lambda url, timeout: answers[url]) as get,
+            mock.patch(f"{MODULE}.https_get", side_effect=lambda url, timeout: answers[url]) as get,
             self.assertLogs(MODULE, "INFO"),
         ):
             self.assertEqual(self._detect(), "198.51.100.7")
@@ -369,13 +435,13 @@ class PublicIpTests(_Base):
     def test_none_when_nothing_answers_and_no_local_guess(self):
         # The old fallbacks (the route source address, "YOUR_SERVER_IP") would have
         # gone into every client config's Endpoint.
-        with mock.patch(f"{MODULE}.requests.get", side_effect=OSError("offline")), self.assertLogs(MODULE, "WARNING"):
+        with mock.patch(f"{MODULE}.https_get", side_effect=OSError("offline")), self.assertLogs(MODULE, "WARNING"):
             self.assertIsNone(self._detect())
         self.assertEqual(self.fake.calls, [])
 
     def test_boot_without_internet_keeps_the_last_known_address(self):
         self._server()
-        with mock.patch(f"{MODULE}.requests.get", side_effect=OSError("offline")), self.assertLogs(MODULE, "WARNING"):
+        with mock.patch(f"{MODULE}.https_get", side_effect=OSError("offline")), self.assertLogs(MODULE, "WARNING"):
             from services.amnezia_manager import AmneziaManager
 
             self.assertIsNone(AmneziaManager.detect_public_ip(self.manager))
@@ -393,7 +459,7 @@ class PublicIpTests(_Base):
 
 class GeoIpTests(_Base):
     def _lookup(self, ip, response=None, side_effect=None):
-        with mock.patch(f"{MODULE}.requests.get", return_value=response, side_effect=side_effect) as get:
+        with mock.patch(f"{MODULE}.https_get", return_value=response, side_effect=side_effect) as get:
             return self.manager.lookup_geoip(ip), get
 
     def test_non_public_or_invalid_addresses_are_not_looked_up(self):
@@ -448,13 +514,13 @@ class GeoIpTests(_Base):
         # The traffic loop reads the cache only; a miss is looked up in a background task.
         tasks = []
         self.manager.start_background_task = lambda target: tasks.append(target)
-        with mock.patch(f"{MODULE}.requests.get") as get:
+        with mock.patch(f"{MODULE}.https_get") as get:
             self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), (None, None))
             self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), (None, None))
             self.assertEqual(self.manager.lookup_geoip_cached("10.0.0.1"), (None, None))
             get.assert_not_called()
         self.assertEqual(len(tasks), 1)  # one lookup per address, however often it is asked
-        with mock.patch(f"{MODULE}.requests.get", return_value=_Response(data={"country": "US"})):
+        with mock.patch(f"{MODULE}.https_get", return_value=_Response(data={"country": "US"})):
             tasks[0]()
         self.assertEqual(self.manager.lookup_geoip_cached("8.8.8.8"), ("US", "US"))
         self.assertEqual(self.manager._geoip_pending, set())
@@ -466,27 +532,6 @@ class GeoIpTests(_Base):
         get.assert_not_called()
 
 
-class _Session:
-    def __init__(self, response=None, error=None):
-        self.response = response
-        self.error = error
-        self.mounted = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def mount(self, prefix, adapter):
-        self.mounted.append((prefix, adapter._source_ip))
-
-    def get(self, url, timeout):
-        if self.error:
-            raise self.error
-        return self.response
-
-
 class EgressProbeTests(_Base):
     def test_source_and_service_are_validated(self):
         with self.assertRaises(ValueError):
@@ -495,15 +540,19 @@ class EgressProbeTests(_Base):
             self.manager.detect_public_ip_from_source("10.0.0.1", "https://evil.example")
 
     def test_request_is_bound_to_the_source_address(self):
-        session = _Session(_Response(text="198.51.100.9\n"))
-        with mock.patch(f"{MODULE}.requests.Session", return_value=session):
+        with mock.patch(f"{MODULE}.https_get", return_value=_Response(text="198.51.100.9\n")) as get:
             result = self.manager.detect_public_ip_from_source("10.0.0.1", "https://ident.me")
         self.assertEqual(result, ("198.51.100.9", "https://ident.me"))
-        self.assertEqual(session.mounted, [("http://", "10.0.0.1"), ("https://", "10.0.0.1")])
+        self.assertEqual(get.call_args.kwargs["source_ip"], "10.0.0.1")
 
-    def test_bad_answers_raise(self):
-        for session in (_Session(_Response(503)), _Session(_Response(text="nope")), _Session(error=OSError("x"))):
-            with mock.patch(f"{MODULE}.requests.Session", return_value=session), self.assertRaises(RuntimeError):
+    def test_bad_answers_raise_with_the_service_named_once(self):
+        cases = (
+            ({"return_value": _Response(503)}, r"^https://ident\.me: HTTP 503$"),
+            ({"return_value": _Response(text="nope")}, r"^https://ident\.me: invalid IP response 'nope'$"),
+            ({"side_effect": OSError("x")}, r"^https://ident\.me: x$"),
+        )
+        for kwargs, message in cases:
+            with mock.patch(f"{MODULE}.https_get", **kwargs), self.assertRaisesRegex(RuntimeError, message):
                 self.manager.detect_public_ip_from_source("10.0.0.1", "https://ident.me")
 
     def test_service_rotation(self):

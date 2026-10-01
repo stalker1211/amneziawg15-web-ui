@@ -1,6 +1,10 @@
-"""Shared utility helpers for configuration and validation."""
+"""Shared utility helpers for configuration, validation and outbound HTTPS."""
 
+import http.client
 import ipaddress
+import ssl
+from typing import NamedTuple
+from urllib.parse import urlparse
 
 
 def sanitize_config_value(value):
@@ -44,3 +48,45 @@ def is_valid_ip(ip):
     except ValueError:
         return False
     return True
+
+
+class HttpsResponse(NamedTuple):
+    status: int
+    content_type: str
+    text: str
+
+
+# ipapi.co answers a request without a User-Agent with 429.
+USER_AGENT = "amneziawg-web-ui"
+MAX_BODY_BYTES = 64 * 1024
+
+
+def https_get(url, timeout, source_ip=None, headers=None):
+    """GET an https:// URL with the standard library.
+
+    The panel's three outbound calls -- the public IP, the egress probe and GeoIP --
+    are small GETs, so this replaced `requests` and its four dependencies in 2.5. The
+    certificate and host name are checked against the system's store (Alpine's
+    ca-certificates, refreshed by every image build), not a bundle frozen at a pin.
+    With `source_ip` the connection leaves from that address: the egress probe asks
+    from a tunnel's own address. Redirects are not followed; none of the services
+    sends one. The body is read up to MAX_BODY_BYTES.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError(f"Not an https URL: {url}")
+    path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
+    connection = http.client.HTTPSConnection(
+        parsed.hostname,
+        parsed.port or 443,
+        timeout=timeout,
+        source_address=(source_ip, 0) if source_ip else None,
+        context=ssl.create_default_context(),
+    )
+    try:
+        connection.request("GET", path, headers={"User-Agent": USER_AGENT, **(headers or {})})
+        response = connection.getresponse()
+        body = response.read(MAX_BODY_BYTES)
+        return HttpsResponse(response.status, response.getheader("Content-Type", ""), body.decode("utf-8", errors="replace"))
+    finally:
+        connection.close()

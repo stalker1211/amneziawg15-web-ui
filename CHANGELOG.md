@@ -28,6 +28,18 @@ retrying `/socket.io/`, which now asks for the password (on an iPad, a prompt).
 - Flask runs on Werkzeug's threaded server, as Flask-SocketIO ran it: one thread per
   request and per open stream.
 
+### Outbound HTTPS on the standard library
+- **The public IP, the egress probe and GeoIP** use one small helper over Python's
+  `http.client` instead of `requests`, so `requests`, `urllib3`, `idna`,
+  `charset-normalizer` and `certifi` are gone: 73 packages in the image, from 85 in
+  2.4. Certificates are checked against Alpine's `ca-certificates`, renewed by every
+  image build, not a bundle frozen at a pin.
+- **`scripts/api_status.py` needs nothing installed** (standard library only, still
+  run through its uv shebang). `--refresh-egress` works again: its POST had no JSON
+  content type and has got 415 since mutations must send JSON; the refreshed probe
+  keeps its geo label. A client without telemetry shows `-` instead of `0 B`, and a
+  panel older than 2.4 is named as such. Tested now, from a recorded payload.
+
 ### Housekeeping
 - **`AUTO_START_SERVERS` is gone:** a restart always brings back each server as it
   was last left; a container that still sets the variable (even to `false`) logs a

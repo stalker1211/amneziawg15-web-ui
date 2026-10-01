@@ -32,10 +32,8 @@ import uuid
 from typing import ClassVar
 from urllib.parse import urlparse
 
-import requests
-from core.helpers import is_valid_ip, sanitize_config_value, to_bool
+from core.helpers import https_get, is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
-from requests.adapters import HTTPAdapter
 
 from services import generator
 
@@ -216,10 +214,10 @@ class AmneziaManager:
         """
         for service in self.PUBLIC_IP_SERVICES:
             try:
-                response = requests.get(service, timeout=5)
+                response = https_get(service, timeout=5)
             except Exception:  # pylint: disable=broad-exception-caught  -- try the next one
                 continue
-            ip = response.text.strip() if response.status_code == 200 else ""
+            ip = response.text.strip() if response.status == 200 else ""
             if is_valid_ip(ip):
                 logger.info("Detected public IP: %s", ip)
                 return ip
@@ -287,21 +285,6 @@ class AmneziaManager:
         except ValueError:
             return False
 
-    class _SourceAddressAdapter(HTTPAdapter):
-        """Requests adapter that binds outbound sockets to a specific source IP."""
-
-        def __init__(self, source_ip, **kwargs):
-            self._source_ip = source_ip
-            super().__init__(**kwargs)
-
-        def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-            pool_kwargs["source_address"] = (self._source_ip, 0)
-            return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
-
-        def proxy_manager_for(self, proxy, **proxy_kwargs):
-            proxy_kwargs["source_address"] = (self._source_ip, 0)
-            return super().proxy_manager_for(proxy, **proxy_kwargs)
-
     def detect_public_ip_from_source(self, source_ip, service):
         """Detect external IP for traffic originating from a specific source IP."""
         if not is_valid_ip(source_ip):
@@ -310,22 +293,17 @@ class AmneziaManager:
         if service not in self.EGRESS_PROBE_SERVICES:
             raise ValueError(f"Unsupported egress probe service: {service}")
 
-        with requests.Session() as session:
-            adapter = self._SourceAddressAdapter(source_ip)
-            session.mount("http://", adapter)
-            session.mount("https://", adapter)
-            try:
-                response = session.get(service, timeout=8)
-                if response.status_code != 200:
-                    raise RuntimeError(f"{service}: HTTP {response.status_code}")
-
-                body = response.text.strip()
-                if body and is_valid_ip(body):
-                    return body, service
-
-                raise RuntimeError(f"{service}: invalid IP response '{body[:120]}'")
-            except Exception as e:
-                raise RuntimeError(f"{service}: {e}") from e
+        # Bound to the tunnel's address, so the answer is where that tunnel's traffic exits.
+        try:
+            response = https_get(service, timeout=8, source_ip=source_ip)
+        except Exception as e:
+            raise RuntimeError(f"{service}: {e}") from e
+        if response.status != 200:
+            raise RuntimeError(f"{service}: HTTP {response.status}")
+        body = response.text.strip()
+        if body and is_valid_ip(body):
+            return body, service
+        raise RuntimeError(f"{service}: invalid IP response '{body[:120]}'")
 
     def get_next_egress_probe_service(self, server):
         """Rotate egress probe services for a server across refreshes."""
@@ -534,17 +512,12 @@ class AmneziaManager:
             return None
 
         try:
-            resp = requests.get(
-                f"https://ipapi.co/{ip}/json/",
-                timeout=2,
-                headers={"User-Agent": "amneziawg-web-ui"},
-            )
-            if resp.status_code != 200:
-                self._cache_geoip(ip, now, None, None, {"status": resp.status_code}, failed=True)
+            resp = https_get(f"https://ipapi.co/{ip}/json/", timeout=2)
+            if resp.status != 200:
+                self._cache_geoip(ip, now, None, None, {"status": resp.status}, failed=True)
                 return (None, None)
 
-            content_type = resp.headers.get("content-type", "")
-            data = resp.json() if content_type.startswith("application/json") else {}
+            data = json.loads(resp.text) if resp.content_type.startswith("application/json") else {}
             label = format_geo_label(data)
             country_code = extract_country_code(data)
             self._cache_geoip(ip, now, label, country_code, data)
