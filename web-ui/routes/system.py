@@ -13,6 +13,10 @@ from flask import Blueprint, Response, jsonify, make_response, render_template, 
 
 logger = get_logger(__name__)
 
+# /status forgives a server that should run but is down this long after the container
+# starts: the boot restore is bringing it back.
+STATUS_GRACE_SECONDS = 60
+
 
 def tail_lines(path, count, block_size=64 * 1024):
     """The last `count` lines of a text file, read backwards from its end.
@@ -280,7 +284,13 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
 
     @system_bp.route("/status")
     def get_container_uptime():
-        """Return simple text uptime for container health checks."""
+        """The Docker HEALTHCHECK: container uptime, and a 503 naming each server that
+        should run but is down, once the container is STATUS_GRACE_SECONDS old.
+
+        "Should run" is the stored status, what was last asked for (the boot restore
+        brings those back), so "unhealthy" in docker ps and TrueNAS means a VPN is
+        down, not only that the panel is.
+        """
         result = subprocess.check_output(["stat", "-c %Y", "/proc/1/cmdline"], text=True)
         uptime_seconds_epoch = int(result.strip())
 
@@ -292,6 +302,16 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
         minutes = (uptime_seconds % 3600) // 60
         seconds = uptime_seconds % 60
 
-        return f"Container Uptime: {days}d {hours}h {minutes}m {seconds}s"
+        uptime = f"Container Uptime: {days}d {hours}h {minutes}m {seconds}s"
+        if uptime_seconds < STATUS_GRACE_SECONDS:
+            return uptime
+        down = [
+            f"{server['name']} ({server['interface']})"
+            for server in amnezia_manager.config["servers"]
+            if server.get("status") == "running" and amnezia_manager.get_server_status(server["id"]) != "running"
+        ]
+        if down:
+            return f"{uptime}\nDown, though it should run: {', '.join(down)}", 503
+        return uptime
 
     app.register_blueprint(system_bp)

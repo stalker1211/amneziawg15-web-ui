@@ -165,8 +165,10 @@ EXPOSE 51820/udp
 ENV NGINX_PORT=80
 ENV PATH="/opt/venv/bin:${PATH}"
 
-# Health check
+# Health check: /status answers 503 when a server that should run is down (after a
+# grace period from boot). http.client, unlike urlopen, does not raise on a 503, so the
+# body naming the server is printed into the health log (docker inspect).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import os, sys, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"NGINX_PORT\", \"80\")}/status', timeout=10).read(); sys.exit(0)" || exit 1
+    CMD python3 -c "import os, sys, http.client; c = http.client.HTTPConnection('127.0.0.1', int(os.environ.get('NGINX_PORT', '80')), timeout=10); c.request('GET', '/status'); r = c.getresponse(); print(r.read().decode()); sys.exit(r.status != 200)" || exit 1
 
 ENTRYPOINT ["/app/scripts/start.sh"]

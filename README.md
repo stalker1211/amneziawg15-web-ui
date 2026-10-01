@@ -186,7 +186,7 @@ Basic Auth credentials.
 | GET | `/api/system/awg-log` | tail the daemon log (`?interface=&lines=`) |
 | POST | `/api/system/refresh-ip` | re-detect the public IP (`502`, nothing changed, when detection fails) |
 | GET | `/api/system/iptables-test` | a server's firewall rules as they are now (`?server_id=`); every server's under **⚙ → About → Firewall rules** |
-| GET | `/status` | container uptime, plain text (localhost only) |
+| GET | `/status` | container uptime, plain text (localhost only); a 503 naming any server that should be running but is down, which the Docker health check turns into `unhealthy` |
 
 Example:
 

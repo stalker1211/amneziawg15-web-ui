@@ -40,6 +40,13 @@ retrying `/socket.io/`, which now asks for the password (on an iPad, a prompt).
   keeps its geo label. A client without telemetry shows `-` instead of `0 B`, and a
   panel older than 2.4 is named as such. Tested now, from a recorded payload.
 
+### Health
+- **`unhealthy` now means a VPN is down,** not only the panel: `/status` answers 503
+  when a server that should be running (it was last started) has no interface, from
+  60 s after the container starts, and the Docker health check's log names it
+  (`docker inspect`). Starting the server again, or stopping it in the panel, makes
+  the container healthy again.
+
 ### Housekeeping
 - **`AUTO_START_SERVERS` is gone:** a restart always brings back each server as it
   was last left; a container that still sets the variable (even to `false`) logs a

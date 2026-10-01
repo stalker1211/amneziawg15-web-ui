@@ -5,15 +5,21 @@ installs the production guards from core/guards.py and the real routes around a
 stubbed manager.
 """
 
+import http.server
 import json
 import os
 import re
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from tests.support import WEB_UI_DIR, SystemPaths, build_app, build_manager, build_real_manager
+
+DOCKERFILE = Path(__file__).resolve().parent.parent / "Dockerfile"
 
 STATIC_JS = os.path.join(WEB_UI_DIR, "static", "js")
 
@@ -791,6 +797,64 @@ class SystemRouteExtraTests(_RealSystemApp):
             response = self.client.get("/status")
         self.assertEqual(response.get_data(as_text=True), "Container Uptime: 1d 1h 1m 1s")
         self.assertEqual(sp.check_output.call_args.args[0], ["stat", "-c %Y", "/proc/1/cmdline"])
+
+    def _status(self, uptime):
+        with mock.patch("routes.system.subprocess") as sp, mock.patch("routes.system.time") as clock:
+            sp.check_output.return_value = "1000000000\n"
+            clock.time.return_value = 1_000_000_000 + uptime
+            return self.client.get("/status")
+
+    def test_status_fails_while_a_server_that_should_run_is_down(self):
+        server = self.manager.get_server(self.server["id"])
+        server["status"] = "running"  # what was last asked for; its interface is missing
+        response = self._status(uptime=600)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.get_data(as_text=True).splitlines()[1],
+            f"Down, though it should run: {server['name']} ({server['interface']})",
+        )
+        self.paths.interfaces.add(server["interface"])
+        self.assertEqual(self._status(uptime=600).status_code, 200)
+
+    def test_status_forgives_the_boot_and_a_server_stopped_on_purpose(self):
+        from routes.system import STATUS_GRACE_SECONDS
+
+        server = self.manager.get_server(self.server["id"])
+        server["status"] = "running"
+        self.assertEqual(self._status(uptime=STATUS_GRACE_SECONDS - 1).status_code, 200)
+        server["status"] = "stopped"
+        self.assertEqual(self._status(uptime=600).status_code, 200)
+
+
+class DockerHealthcheckTests(unittest.TestCase):
+    """The Dockerfile's HEALTHCHECK command, run as Docker would, against a stand-in /status."""
+
+    def _check(self, status, body):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(body.encode())
+
+            def log_message(self, *args):
+                return None
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        command = re.search(r'CMD python3 -c "([^"]+)"', DOCKERFILE.read_text(encoding="utf-8")).group(1)
+        env = {**os.environ, "NGINX_PORT": str(server.server_address[1])}
+        return subprocess.run([sys.executable, "-c", command], env=env, capture_output=True, text=True, timeout=30, check=False)
+
+    def test_a_503_fails_and_the_log_names_the_server(self):
+        result = self._check(503, "Container Uptime: 0d 0h 5m 0s\nDown, though it should run: Home (wg-ab12cd)")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Down, though it should run: Home (wg-ab12cd)", result.stdout)
+
+    def test_a_200_passes(self):
+        result = self._check(200, "Container Uptime: 0d 0h 5m 0s")
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "Container Uptime: 0d 0h 5m 0s"))
 
 
 if __name__ == "__main__":
