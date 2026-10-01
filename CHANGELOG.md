@@ -57,6 +57,12 @@ now asks for the password (on an iPad, a prompt).
   60 s after the container starts, and the Docker health check's log names it
   (`docker inspect`). Starting the server again, or stopping it in the panel, makes
   the container healthy again.
+- **`unhealthy` also means a VPN has drifted from the panel:** a running server whose
+  VPN daemon lets in a device the panel suspended or deleted (or lacks one it added),
+  or whose firewall rules are not the number its NAT and Block LAN switches call for
+  (a lost Block LAN rule, or a NAT rule left behind). Restarting the server in the
+  panel puts either right. Whether the internet is reachable is deliberately not
+  checked: nothing in the container can fix that.
 
 ### New servers start from the newest one
 - **The ⚙ New servers section is gone,** and its six settings with it. The New

@@ -804,6 +804,21 @@ class SystemRouteExtraTests(_RealSystemApp):
             clock.time.return_value = 1_000_000_000 + uptime
             return self.client.get("/status")
 
+    def _running(self, server, peers=(), rules=None):
+        """Bring `server` up as the daemon and iptables would show it: a dump with the
+        peer keys `peers`, and `rules` tagged rules (by default what its switches want)."""
+        from routes.system import expected_rule_count
+
+        iface = server["interface"]
+        dump = [f"{iface}\tPRIVATE\tPUBLIC\t51961\toff"]  # the interface's own line
+        dump += [f"{iface}\t{key}\t(none)\t(none)\t10.61.0.{n + 2}/32\t0\t0\t0\toff" for n, key in enumerate(peers)]
+        self.fake.respond(["/usr/bin/awg", "show", "all", "dump"], "\n".join(dump))
+        count = expected_rule_count(server) if rules is None else rules
+        tagged = [f'-A FORWARD -i {iface} -m comment --comment "awg:{iface}" -j ACCEPT'] * count
+        self.fake.respond(["iptables", "-t", "filter", "-S"], "\n".join(["-P INPUT ACCEPT", *tagged]))
+        self.fake.respond(["iptables", "-t", "nat", "-S"], "-P PREROUTING ACCEPT")
+        self.paths.interfaces.add(iface)
+
     def test_status_fails_while_a_server_that_should_run_is_down(self):
         server = self.manager.get_server(self.server["id"])
         server["status"] = "running"  # what was last asked for; its interface is missing
@@ -813,7 +828,7 @@ class SystemRouteExtraTests(_RealSystemApp):
             response.get_data(as_text=True).splitlines()[1],
             f"Down, though it should run: {server['name']} ({server['interface']})",
         )
-        self.paths.interfaces.add(server["interface"])
+        self._running(server)
         self.assertEqual(self._status(uptime=600).status_code, 200)
 
     def test_status_forgives_the_boot_and_a_server_stopped_on_purpose(self):
@@ -824,6 +839,52 @@ class SystemRouteExtraTests(_RealSystemApp):
         self.assertEqual(self._status(uptime=STATUS_GRACE_SECONDS - 1).status_code, 200)
         server["status"] = "stopped"
         self.assertEqual(self._status(uptime=600).status_code, 200)
+        # Nothing running: neither the daemon nor iptables is asked anything.
+        self.assertEqual([a for a in self.fake.argvs() if a[0] in ("/usr/bin/awg", "iptables")], [])
+
+    def test_status_fails_when_the_daemons_peers_differ_from_the_panel(self):
+        server = self.manager.get_server(self.server["id"])
+        server["status"] = "running"
+        server["clients"] = [
+            {"id": "a", "name": "phone", "client_public_key": "KEY_A"},
+            {"id": "b", "name": "guest", "client_public_key": "KEY_B", "suspended": True},
+        ]
+        label = f"{server['name']} ({server['interface']})"
+        self._running(server, peers=["KEY_A"])  # the suspended device is not a peer: right
+        self.assertEqual(self._status(uptime=600).status_code, 200)
+
+        self._running(server, peers=["KEY_A", "KEY_B"])  # suspended in the panel, still let in
+        response = self._status(uptime=600)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.get_data(as_text=True).splitlines()[1],
+            f"Peers differ from the panel: {label}: 1 not in the panel, 0 missing",
+        )
+        self._running(server, peers=[])  # a live reload that never reached the daemon
+        self.assertIn(f"{label}: 0 not in the panel, 1 missing", self._status(uptime=600).get_data(as_text=True))
+
+        self.fake.respond(["/usr/bin/awg", "show", "all", "dump"], 1)  # a failure is not "no peers"
+        response = self._status(uptime=600)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Peers: could not read awg show all dump", response.get_data(as_text=True))
+
+    def test_status_fails_when_the_firewall_rules_differ(self):
+        server = self.manager.get_server(self.server["id"])
+        server["status"] = "running"
+        label = f"{server['name']} ({server['interface']})"
+        self._running(server, rules=8)  # Block LAN and NAT on: 9 wanted, one lost
+        response = self._status(uptime=600)
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_data(as_text=True).splitlines()[1], f"Firewall rules differ: {label} has 8 of 9")
+        self._running(server, rules=10)  # one too many, e.g. NAT left after it was turned off
+        self.assertIn(f"{label} has 10 of 9", self._status(uptime=600).get_data(as_text=True))
+        self._running(server)
+        self.assertEqual(self._status(uptime=600).status_code, 200)
+
+        self.fake.respond(["iptables", "-t", "nat", "-S"], 1)
+        response = self._status(uptime=600)
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Firewall rules: could not list the nat table", response.get_data(as_text=True))
 
 
 class DockerHealthcheckTests(unittest.TestCase):

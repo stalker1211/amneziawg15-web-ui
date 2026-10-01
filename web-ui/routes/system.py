@@ -18,6 +18,84 @@ logger = get_logger(__name__)
 STATUS_GRACE_SECONDS = 60
 
 
+def tagged_rules(amnezia_manager):
+    """Every rule of the filter and nat tables, and an error per table that could not
+    be listed. Plain argv calls matched in Python: no shell, no grep."""
+    lines, errors = [], []
+    for table in ("filter", "nat"):
+        output = amnezia_manager.run_command(["iptables", "-t", table, "-S"])
+        if output is None:
+            errors.append(f"could not list the {table} table")
+            continue
+        lines += output.splitlines()
+    return lines, errors
+
+
+def rules_of(server, lines):
+    """The rules scripts/setup_iptables.sh tagged `awg:<interface>` for this server."""
+    tag = f'"awg:{server["interface"]}"'
+    return [line for line in lines if tag in line]
+
+
+def expected_rule_count(server):
+    """INPUT, OUTPUT, FORWARD from the VPN and ESTABLISHED,RELATED; with Block LAN the
+    panel's INPUT drop and 3 LAN drops; NAT."""
+    return 4 + 4 * bool(server.get("block_lan_cidrs")) + bool(server.get("enable_nat"))
+
+
+def health_problems(amnezia_manager):
+    """What /status reports, one line per kind of problem. Each is state this
+    container owns and a restart of the server puts right:
+
+      * a server that should run (its stored status) but is down;
+      * a running server whose daemon has peers the panel does not (a suspended or
+        deleted device still let in) or lacks some (a live reload that failed, which
+        apply_live_config only logs);
+      * a running server whose tagged firewall rules are not the number its switches
+        call for (a lost Block LAN drop, or a NAT rule left after NAT was turned off).
+    """
+    m = amnezia_manager
+    servers = m.config["servers"]
+    live = {s["id"]: m.get_server_status(s["id"]) == "running" for s in servers}
+    running = [s for s in servers if live[s["id"]]]
+
+    def label(server):
+        return f"{server['name']} ({server['interface']})"
+
+    problems = []
+    down = [label(s) for s in servers if s.get("status") == "running" and not live[s["id"]]]
+    if down:
+        problems.append(f"Down, though it should run: {', '.join(down)}")
+    if not running:
+        return problems
+
+    # A fresh dump, not read_telemetry()'s snapshot: that one reads a failed command
+    # as "no peers", which would look like drift (or hide it).
+    dump = m.run_command(["/usr/bin/awg", "show", "all", "dump"])
+    if dump is None:
+        problems.append("Peers: could not read awg show all dump")
+    else:
+        peers = m.parse_dump(dump)
+        drift = []
+        for server in running:
+            want = {c.get("client_public_key") for c in server.get("clients") or [] if not c.get("suspended")}
+            have = set(peers.get(server["interface"]) or {})
+            if want != have:
+                drift.append(f"{label(server)}: {len(have - want)} not in the panel, {len(want - have)} missing")
+        if drift:
+            problems.append(f"Peers differ from the panel: {'; '.join(drift)}")
+
+    lines, errors = tagged_rules(m)
+    if errors:
+        problems.append(f"Firewall rules: {', '.join(errors)}")
+    else:
+        counts = [(server, len(rules_of(server, lines)), expected_rule_count(server)) for server in running]
+        off = [f"{label(server)} has {have} of {want}" for server, have, want in counts if have != want]
+        if off:
+            problems.append(f"Firewall rules differ: {', '.join(off)}")
+    return problems
+
+
 def tail_lines(path, count, block_size=64 * 1024):
     """The last `count` lines of a text file, read backwards from its end.
 
@@ -259,39 +337,28 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
         if not server:
             return jsonify({"error": "Server not found"}), 404
 
-        # Dumped with plain argv calls and matched in Python: no shell, no grep.
-        tag = f'"awg:{server["interface"]}"'
-        rules, errors = [], []
-        for table in ("filter", "nat"):
-            output = amnezia_manager.run_command(["iptables", "-t", table, "-S"])
-            if output is None:
-                errors.append(f"could not list the {table} table")
-                continue
-            rules += [line for line in output.splitlines() if tag in line]
-
-        # INPUT, OUTPUT, FORWARD from the VPN and ESTABLISHED,RELATED; with Block LAN the
-        # panel's INPUT drop and 3 LAN drops; NAT.
-        expected = 4 + 4 * bool(server.get("block_lan_cidrs")) + bool(server.get("enable_nat"))
+        lines, errors = tagged_rules(amnezia_manager)
         return jsonify(
             {
                 "server_id": server_id,
                 "server_name": server["name"],
                 "interface": server["interface"],
                 "running": amnezia_manager.get_server_status(server_id) == "running",
-                "rules": rules,
-                "expected": expected,
+                "rules": rules_of(server, lines),
+                "expected": expected_rule_count(server),
                 "errors": errors,
             }
         )
 
     @system_bp.route("/status")
     def get_container_uptime():
-        """The Docker HEALTHCHECK: container uptime, and a 503 naming each server that
-        should run but is down, once the container is STATUS_GRACE_SECONDS old.
+        """The Docker HEALTHCHECK: container uptime, and a 503 with a line per problem
+        (health_problems), once the container is STATUS_GRACE_SECONDS old.
 
         "Should run" is the stored status, what was last asked for (the boot restore
         brings those back), so "unhealthy" in docker ps and TrueNAS means a VPN is
-        down, not only that the panel is.
+        down or has drifted from the panel, not only that the panel is down. The
+        internet is deliberately not checked: nothing here can fix it.
         """
         result = subprocess.check_output(["stat", "-c %Y", "/proc/1/cmdline"], text=True)
         uptime_seconds_epoch = int(result.strip())
@@ -307,13 +374,9 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
         uptime = f"Container Uptime: {days}d {hours}h {minutes}m {seconds}s"
         if uptime_seconds < STATUS_GRACE_SECONDS:
             return uptime
-        down = [
-            f"{server['name']} ({server['interface']})"
-            for server in amnezia_manager.config["servers"]
-            if server.get("status") == "running" and amnezia_manager.get_server_status(server["id"]) != "running"
-        ]
-        if down:
-            return f"{uptime}\nDown, though it should run: {', '.join(down)}", 503
+        problems = health_problems(amnezia_manager)
+        if problems:
+            return "\n".join([uptime, *problems]), 503
         return uptime
 
     app.register_blueprint(system_bp)
