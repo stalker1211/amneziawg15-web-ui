@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## Version 2.6 (unreleased)
+
+### Tooling
+- **The release checker, `tests/release_check.py`**: the image from the tree, checked
+  end to end in one command (about 3 minutes). It builds the image, checks it carries the tree, boots it with no
+  bind mount, and checks the sign-in, a server per protocol, a restart, a real client
+  tunnel to every server (its `.conf` as issued, in a second container) and the smoke
+  tests. It reports and publishes nothing.
+- **Local Docker only:** `run.sh`, `publish_dockerhub.sh` (when it builds) and the
+  release checker say which Docker they use and stop unless it is a local socket, so a
+  Docker context or `DOCKER_HOST` pointing at another host cannot build or run there.
+
 ## Version 2.5 (2026-10-01)
 
 Fewer moving parts. Upgrading needs no action, with one change to note: Block LAN
