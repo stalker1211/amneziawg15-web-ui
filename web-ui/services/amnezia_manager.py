@@ -1,4 +1,22 @@
-"""Core service logic for managing AmneziaWG servers and clients."""
+"""Core service logic for managing AmneziaWG servers and clients.
+
+One class, AmneziaManager; web_config.json is the source of truth (DEVELOPMENT.md §3).
+What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
+
+  protocol table, parameter keys, limits      DEFAULT_PROTOCOL ... DAEMON_LOG_LEVELS
+  construction and the public IP              __init__, detect_public_ip
+  egress probe and GeoIP                      probe_server_egress_ip, lookup_geoip(_cached)
+  settings and the boot restore               apply_settings, auto_start_servers
+  protocol logic and parameter validation     normalize_protocol ... validate_client_params
+  config store                                migrate_config_schema, load_config, save_config
+  commands and key generation                 run_command, generate_*
+  server creation, server .conf, live reload  create_wireguard_server, write_server_conf
+  form checks and warnings                    check_server_basics, *_warnings, assert_no_conflicts
+  server and client CRUD                      delete_server, add_wireguard_client, toggle_client_suspend
+  client .conf and the outdated-config flag   generate_wireguard_client_config, config_fingerprint
+  iptables, start/stop, live status           setup_iptables, start_server, get_server_status
+  telemetry                                   start_traffic_monitoring, read_telemetry, get_traffic_for_server
+"""
 
 import base64
 import hashlib

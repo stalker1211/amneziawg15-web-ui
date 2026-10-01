@@ -14,7 +14,7 @@ from core.runtime import (
     register_socket_handlers,
     run_web_ui,
 )
-from core.settings import Access, Settings
+from core.settings import Access, Settings, retired_variables
 from flask import send_from_directory
 from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
@@ -64,11 +64,6 @@ else:
     # Default: same-origin only (let Flask-SocketIO use its default behavior)
     ALLOWED_ORIGINS = []
 
-# Retired in 2.4: boot restores each server's last start/stop state. For a while a
-# false value still means "start nothing at boot".
-AUTO_START_RAW = os.getenv("AUTO_START_SERVERS", "").strip()
-RESTORE_AT_BOOT = to_bool(AUTO_START_RAW, True)
-
 logger.info("=== AmneziaWG Web UI configuration ===")
 logger.info(
     "dirs: base=%s templates=%s (exists=%s) static=%s (exists=%s)",
@@ -79,15 +74,8 @@ logger.info(
     os.path.exists(STATIC_DIR),
 )
 logger.info("nginx_port=%s allowed_origins=%s", NGINX_PORT, ALLOWED_ORIGINS if ALLOWED_ORIGINS else "<same-origin only>")
-if AUTO_START_RAW:
-    logger.warning(
-        "AUTO_START_SERVERS is retired: servers come back as they were last left%s",
-        "" if RESTORE_AT_BOOT else "; set to false, so none is started at boot",
-    )
-if os.getenv("API_TOKEN", "").strip():
-    # Removed in 2.4: Flask listens on 127.0.0.1 only, so nginx's Basic Auth always
-    # decides first and the token never admitted or refused anything.
-    logger.warning("API_TOKEN is set but no longer used (removed in 2.4); nginx Basic Auth is the only credential")
+for name, note in retired_variables():
+    logger.warning("%s is set but no longer used (%s)", name, note)
 logger.info("config_dir=%s web_ui_port=%s (internal)", CONFIG_DIR, WEB_UI_PORT)
 logger.debug("template files: %s", os.listdir(TEMPLATE_DIR) if os.path.exists(TEMPLATE_DIR) else [])
 logger.debug("static files: %s", os.listdir(STATIC_DIR) if os.path.exists(STATIC_DIR) else [])
@@ -104,7 +92,7 @@ access = Access(HTPASSWD_FILE)
 # The defaults below are replaced by the resolved settings as the manager loads them.
 amnezia_manager = AmneziaManager(
     socketio_instance=socketio,
-    auto_start_servers=RESTORE_AT_BOOT,
+    auto_start_servers=True,
     default_mtu=1280,
     default_subnet="10.0.0.0/24",
     default_port=51820,

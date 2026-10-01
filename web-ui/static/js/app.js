@@ -1,4 +1,18 @@
 // AmneziaWG Web UI - Main Application JavaScript
+//
+// One class, AmneziaApp; forms.js (the drawer forms) and modals.js (the dialog views)
+// add their methods to its prototype, and the instance is the top-level `amneziaApp`.
+// What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
+//
+//   state and boot                 constructor, init
+//   helpers                        escapeHtml, apiFetch, generateQrIntoContainer
+//   the data-action dispatcher     setupActions, setupEventListeners
+//   theme                          getPreferredTheme ... updateThemeButton
+//   protocol field gating          toggleProtocolFields
+//   live updates over Socket.IO    setupSocketLifecycleHandlers ... setupSocketIO, updateStatus
+//   public IP and egress probe     updatePublicIp, refreshPublicIp, probeServerEgressIp
+//   loading and rendering          loadServers (the one request), renderServers, updateServerTraffic
+//   page actions                   deleteServer ... toggleServer, getJson/postJson, showTempMessage
 class AmneziaApp {
     constructor() {
         this.api = new window.ApiClient();

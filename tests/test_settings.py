@@ -80,6 +80,15 @@ class ResolveTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
+class RetiredVariableTests(unittest.TestCase):
+    def test_only_a_set_retired_variable_is_reported(self):
+        from core.settings import retired_variables
+
+        found = retired_variables({"AUTO_START_SERVERS": "false", "API_TOKEN": " ", "DEFAULT_MTU": "1420"})
+        self.assertEqual([name for name, _note in found], ["AUTO_START_SERVERS"])
+        self.assertEqual(retired_variables({}), [])
+
+
 class AccessTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="awg-access-")

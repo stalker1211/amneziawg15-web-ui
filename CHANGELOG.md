@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## Version 2.5 (unreleased)
+
+### Housekeeping
+- **`AUTO_START_SERVERS` is gone:** a restart always brings back each server as it
+  was last left; a container that still sets the variable (even to `false`) logs a
+  warning, as one with `API_TOKEN` does.
+- **`run_tests.sh` lints first:** `ruff check` and `ruff format --check`, at a pinned
+  ruff, before the suite (skipped where uv is missing, as inside the image). Markdown
+  is left out of ruff.
+- **A map at the top** of `amnezia_manager.py` and `app.js`: what is in the file, in
+  what order.
+- Python pins checked on 2026-09-30: all at their latest release.
+
 ## Version 2.4 (2026-09-30)
 
 Panel settings in the panel, one parameter generator on the server, and a round of

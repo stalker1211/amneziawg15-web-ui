@@ -1,6 +1,9 @@
 # Ruff config for this repo. Self-contained (no `extend` of ~/.config/ruff/ruff.toml, which ub does not
 # have) so the Mac and ub lint alike.
 line-length = 128
+# ruff formats Python code blocks inside Markdown too; the examples in DEVELOPMENT.md are
+# aligned by hand, and the docs are not code.
+extend-exclude = ["*.md"]
 
 [lint]
 ignore = [

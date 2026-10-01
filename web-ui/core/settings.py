@@ -98,6 +98,19 @@ FIELDS = {
     "block_lan_cidrs": ("BLOCK_LAN_CIDRS", _flag, True),
 }
 
+# Variables that no longer do anything. A container that still sets one is told so at
+# boot (app.py) instead of being left to wonder why it has no effect.
+RETIRED = {
+    "API_TOKEN": "removed in 2.4; nginx Basic Auth is the only credential",
+    "AUTO_START_SERVERS": "removed in 2.5; each server comes back as it was last left",
+}
+
+
+def retired_variables(environ=None):
+    """(variable, note) for each retired variable that is set and non-empty."""
+    environ = os.environ if environ is None else environ
+    return [(name, note) for name, note in RETIRED.items() if str(environ.get(name) or "").strip()]
+
 
 class Settings:
     """The resolved values, where each came from, and the one rule for changing them."""

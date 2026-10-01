@@ -236,8 +236,8 @@ today's environment.
 | `WAN_IF` | *(auto)* | Outbound interface for the NAT and forwarding rules; detected from the default route |
 | `AWG_LOG_FILE` | `/var/log/amnezia/amneziawg-go.log` | Where the daemon's log goes |
 
-Retired: `AUTO_START_SERVERS` (a restart brings back what was running; `false` still
-means "start nothing at boot" for now), `API_TOKEN` (2.4; ignored with a warning).
+Retired, ignored with a warning at boot: `API_TOKEN` (2.4) and `AUTO_START_SERVERS`
+(2.5; a restart brings back what was running, and `false` no longer stops that).
 `SYS_MODULE` is not needed: the daemon runs in userspace.
 
 ## 🧪 Local build/run (dev)

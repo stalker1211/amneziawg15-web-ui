@@ -8,10 +8,12 @@
 #   ./run_tests.sh --cov                run everything, then print a coverage report
 #   UPDATE_GOLDEN=1 ./run_tests.sh      rewrite tests/golden/*.conf fixtures
 #
-# With uv on PATH (Mac, ub) the suite runs in a uv-managed Python 3.14 env built
-# from web-ui/requirements.txt, so the deps always match the image's pins and there
-# is no .venv step; uv caches the env after the first run. Without uv it runs
-# python3 as is, which is how it runs inside the image:
+# With uv on PATH (Mac, ub) it lints first -- `ruff check` and `ruff format --check`,
+# at a pinned ruff, since the formatter's output changes between releases -- then runs
+# the suite in a uv-managed Python 3.14 env built from web-ui/requirements.txt, so the
+# deps always match the image's pins and there is no .venv step; uv caches both after
+# the first run. Without uv it skips the lint and runs python3 as is, which is how it
+# runs inside the image:
 #
 #   docker run --rm -v "$PWD":/src -w /src --entrypoint sh \
 #     amneziawg-web-ui:local -c './run_tests.sh'
@@ -30,7 +32,11 @@ if [[ "${1:-}" == "--cov" ]]; then
 	shift
 fi
 
+RUFF_VERSION=0.16.8
+
 if command -v uv >/dev/null 2>&1; then
+	uv tool run --quiet "ruff@${RUFF_VERSION}" check --quiet .
+	uv tool run --quiet "ruff@${RUFF_VERSION}" format --check --quiet .
 	PYTHON=(uv run --no-project --python 3.14 --with-requirements web-ui/requirements.txt)
 	if [[ "${COVERAGE}" == 1 ]]; then
 		PYTHON+=(--with coverage)
