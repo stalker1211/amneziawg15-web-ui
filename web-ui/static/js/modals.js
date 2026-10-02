@@ -1,9 +1,12 @@
 // AmneziaWG Web UI - the views, shown as centred dialogs: a client's QR code, a
-// server's traffic history, its daemon log and its raw .conf.
+// server's traffic history, its daemon log and its raw .conf, and the Activity events.
 //
 // Methods of AmneziaApp, installed onto its prototype at the bottom of this file
 // (like forms.js), so `this` is the app. Every interpolated value is escaped.
 class ModalUi {
+    // The Activity dialog's filters: an event's `kind` and its label.
+    static ACTIVITY_KINDS = [['all', 'All'], ['change', 'Changes'], ['session', 'Sessions'], ['health', 'Health'], ['auth', 'Sign-ins']];
+
     // The code box every view uses; it follows the theme like the rest of the page.
     codeBoxHtml(text, id) {
         return `<pre id="${id}" class="max-h-[60vh] overflow-auto rounded-lg border border-gray-400 bg-gray-100 text-gray-900 dark:border-gray-900 dark:bg-gray-900 dark:text-gray-100 p-4 text-xs leading-5 font-mono whitespace-pre">${this.escapeHtml(text)}</pre>`;
@@ -466,6 +469,232 @@ class ModalUi {
         const tipW = tip.offsetWidth || 214;
         const tipLeft = xOf(t[i]) > w * 0.6 ? x - tipW - 14 : x + 14;
         Object.assign(tip.style, { left: `${Math.max(0, Math.min(tipLeft, block.clientWidth - tipW))}px`, top: '6px' });
+    }
+
+    // What the panel recorded since it started (GET /api/activity; DEVELOPMENT.md §10,
+    // the Activity contract), newest first, filtered here by kind and server: from the
+    // header for all of it, from a server's ⋯ for that server. While open, each SSE
+    // `activity` event is prepended (receiveActivity), and a stream that (re)opens loads
+    // it again (loadActivity), since a restarted panel counts seq from 1 again.
+    showActivity(serverId = null) {
+        const view = { serverId, kind: 'all', events: [], since: null, lastSeq: 0, pending: null, error: '', options: '' };
+        this.activityView = view;
+        const box = window.Ui.openDialog(`
+            ${window.Ui.dialogHeader('Activity', '<span id="activitySub">loading…</span>')}
+            <div class="px-5 pb-5 flex flex-col gap-3">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="inline-flex rounded-lg border border-gray-400 p-0.5 dark:border-[#3b4a60]" role="radiogroup" aria-label="Kind">
+                        ${ModalUi.ACTIVITY_KINDS.map(([kind, label]) => `<button type="button" role="radio" data-activity-kind="${kind}">${label}</button>`).join('')}
+                    </div>
+                    <select id="activityServer" class="field sm:w-56" aria-label="Server"></select>
+                </div>
+                <ol id="activityList" class="max-h-[60vh] overflow-y-auto -mx-2 px-2"></ol>
+                <div class="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-gray-300 dark:border-[#334155]">
+                    <p id="activitySince" class="text-xs text-gray-600 dark:text-[#98a6ba] max-w-xl"></p>
+                    <button type="button" class="btn btn-primary" data-close="dialog">Close</button>
+                </div>
+            </div>`, {
+            size: 'max-w-3xl',
+            onClose: () => {
+                if (this.activityView === view) this.activityView = null;
+            },
+        });
+        box.querySelectorAll('[data-activity-kind]').forEach((button) => button.addEventListener('click', () => {
+            view.kind = button.dataset.activityKind;
+            this.renderActivity(view);
+        }));
+        box.querySelector('#activityServer').addEventListener('change', (event) => {
+            view.serverId = event.target.value || null;
+            this.renderActivity(view);
+        });
+        this.renderActivity(view);
+        this.loadActivity(view);
+    }
+
+    // The whole ring. Events the stream brings meanwhile wait in `pending` and are kept
+    // only above the ring's newest seq, so none is shown twice or lost.
+    async loadActivity(view = this.activityView) {
+        if (!view || this.activityView !== view) return;
+        const pending = [];
+        view.pending = pending;
+        try {
+            const body = await this.getJson('/api/activity');
+            if (this.activityView !== view || view.pending !== pending) return;
+            const events = Array.isArray(body?.events) ? body.events : [];
+            const top = events.length ? events[0].seq : 0;
+            const later = pending.filter((e) => e.seq > top).sort((a, b) => b.seq - a.seq);
+            view.events = [...later, ...events];
+            view.lastSeq = view.events.length ? view.events[0].seq : 0;
+            view.since = body?.since || null;
+            view.error = '';
+        } catch (error) {
+            if (this.activityView !== view || view.pending !== pending) return;
+            view.error = error.message;
+        }
+        view.pending = null;
+        this.renderActivity(view);
+    }
+
+    // From openEvents: one SSE `activity` event. Without the dialog there is nothing to
+    // keep; one at or below the last seq shown is a duplicate.
+    receiveActivity(event) {
+        const view = this.activityView;
+        if (!view || !Number.isFinite(event?.seq)) return;
+        if (view.pending) {
+            view.pending.push(event);
+            return;
+        }
+        if (event.seq <= view.lastSeq) return;
+        view.lastSeq = event.seq;
+        view.events.unshift(event);
+        if (view.events.length > 1000) view.events.length = 1000;
+        this.renderActivity(view);
+    }
+
+    renderActivity(view) {
+        const list = document.getElementById('activityList');
+        if (!list || this.activityView !== view) return;
+        const safe = (v) => this.escapeHtml(v ?? '');
+        const ofServer = view.serverId ? view.events.filter((e) => e.server_id === view.serverId) : view.events;
+        const shown = view.kind === 'all' ? ofServer : ofServer.filter((e) => e.kind === view.kind);
+
+        document.querySelectorAll('#dialog [data-activity-kind]').forEach((button) => {
+            const kind = button.dataset.activityKind;
+            const on = kind === view.kind;
+            const count = kind === 'all' ? ofServer.length : ofServer.filter((e) => e.kind === kind).length;
+            const label = ModalUi.ACTIVITY_KINDS.find(([k]) => k === kind)[1];
+            button.setAttribute('aria-checked', String(on));
+            button.className = `h-7 px-2.5 rounded-md text-xs font-medium whitespace-nowrap ${on
+                ? 'bg-gray-200 text-gray-900 dark:bg-[#334155] dark:text-white'
+                : 'text-gray-700 hover:bg-gray-100 dark:text-[#bac5d4] dark:hover:bg-[#273449]'}`;
+            button.innerHTML = `${label}<span class="hidden sm:inline ml-1 tabular-nums opacity-70">${count}</span>`;
+        });
+
+        // The servers there are now and any only the events still name (deleted ones);
+        // rebuilt only when that set changes, so an open select is left alone.
+        const names = new Map((this.lastServers || []).map((s) => [s.id, s.name]));
+        view.events.forEach((e) => { if (e.server_id && !names.has(e.server_id)) names.set(e.server_id, e.server); });
+        if (view.serverId && !names.has(view.serverId)) names.set(view.serverId, view.serverId);
+        const options = `<option value="">All servers</option>${[...names].map(([id, name]) =>
+            `<option value="${safe(id)}">${safe(name)}</option>`).join('')}`;
+        const select = document.getElementById('activityServer');
+        if (view.options !== options) {
+            view.options = options;
+            select.innerHTML = options;
+        }
+        select.value = view.serverId || '';
+
+        const sub = document.getElementById('activitySub');
+        if (sub) {
+            sub.textContent = view.error ? `Could not load it: ${view.error}`
+                : view.pending && !view.events.length ? 'loading…' : 'newest first · live';
+        }
+        const since = document.getElementById('activitySince');
+        if (since) {
+            since.textContent = `Kept in the panel's memory${view.since ? ` since it started ${window.ServerUi.ago(Date.parse(view.since) / 1000)}` : ''}; `
+                + 'a restart of the container empties it. Each event is also a line in docker logs.';
+        }
+
+        if (!shown.length) {
+            list.innerHTML = view.pending ? '' : `<li class="py-6 text-center text-sm text-gray-700 dark:text-[#bac5d4]">${view.events.length
+                ? 'Nothing of this kind here.' : 'Nothing recorded since the panel started.'}</li>`;
+            return;
+        }
+        // A heading for each day: the ring covers the time since boot, often days.
+        let day = '';
+        list.innerHTML = shown.map((e) => {
+            const at = new Date(e.ts);
+            const label = this.activityDay(at);
+            const heading = label !== day
+                ? `<li class="sticky top-0 z-[1] pt-3 pb-1 bg-white dark:bg-[#1f2937]"><span class="section-title">${label}</span></li>` : '';
+            day = label;
+            return heading + this.activityRowHtml(e, at);
+        }).join('');
+    }
+
+    activityDay(at) {
+        const start = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+        const days = Math.round((start(new Date()) - start(at)) / 86400000);
+        if (days === 0) return 'Today';
+        if (days === 1) return 'Yesterday';
+        return window.ServerUi.stamp(at.getTime() / 1000).split(',')[0];
+    }
+
+    activityRowHtml(e, at) {
+        const safe = (v) => this.escapeHtml(v ?? '');
+        const [icon, tone, title, detail] = this.activityText(e);
+        const two = (n) => String(n).padStart(2, '0');
+        const clock = `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+        return `
+            <li class="flex items-start gap-3 py-2 border-b border-gray-200 last:border-b-0 dark:border-[#334155]" data-activity-seq="${Number(e.seq)}" data-activity-event="${safe(e.event)}">
+                <span class="flex-none mt-0.5 w-7 h-7 rounded-full flex items-center justify-center ${tone}">${window.Ui.icon(icon, 'w-3.5 h-3.5')}</span>
+                <div class="min-w-0 flex-1">
+                    <p class="text-sm text-gray-900 dark:text-[#e5e7eb] break-words">${title}</p>
+                    ${detail ? `<p class="text-xs text-gray-700 dark:text-[#bac5d4] break-words">${detail}</p>` : ''}
+                </div>
+                <time datetime="${safe(e.ts)}" title="${safe(at.toLocaleString())}" class="flex-none text-xs tabular-nums text-gray-600 dark:text-[#98a6ba]">${clock}</time>
+            </li>`;
+    }
+
+    // [icon, badge tone, title, detail] for one event; every value escaped. Traffic is
+    // flipped to the device's side as everywhere on the page: ↓ is what the server sent.
+    activityText(e) {
+        const safe = (v) => this.escapeHtml(v ?? '');
+        const d = e.detail || {};
+        const tones = {
+            change: 'bg-sky-100 text-sky-700 dark:bg-[#0c2a3d] dark:text-[#7dd3fc]',
+            good: 'bg-green-100 text-green-700 dark:bg-[#052e16] dark:text-[#86efac]',
+            quiet: 'bg-gray-100 text-gray-600 dark:bg-[#273449] dark:text-[#bac5d4]',
+            warn: 'bg-amber-100 text-amber-800 dark:bg-[#451a03] dark:text-[#fcd34d]',
+            net: 'bg-indigo-100 text-indigo-700 dark:bg-[#1e1b4b] dark:text-[#a5b4fc]',
+            bad: 'bg-red-100 text-red-600 dark:bg-[#3b1219] dark:text-[#fca5a5]',
+        };
+        const name = (v) => `<span class="font-semibold">${safe(v)}</span>`;
+        const mono = (v) => `<span class="font-mono">${safe(v)}</span>`;
+        const muted = (v) => `<span class="text-gray-600 dark:text-[#98a6ba]"> · ${safe(v)}</span>`;
+        const server = e.server ? name(e.server) : 'a server';
+        const client = e.client ? name(e.client) : 'a client';
+        const onServer = e.server ? muted(e.server) : '';
+        const value = (v) => {
+            if (v === true) return 'on';
+            if (v === false) return 'off';
+            if (v === null || v === undefined || v === '') return 'none';
+            return Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? JSON.stringify(v) : String(v);
+        };
+        const changes = (Array.isArray(d.changes) ? d.changes : []).map((c) => ('old' in c || 'new' in c)
+            ? `${safe(c.field)} ${mono(value(c.old))} → ${mono(value(c.new))}` : safe(c.field)).join(' · ');
+        const duration = (s) => (s < 60 ? `${Math.max(0, Math.round(s))} s` : window.ServerUi.uptime(s));
+        const bytes = window.ServerUi.bytes;
+        const table = {
+            'server.create': ['plus', tones.change, `Server ${server} created`],
+            'server.delete': ['trash', tones.change, `Server ${server} deleted`],
+            'server.start': ['power', tones.good, `Server ${server} started`],
+            'server.stop': ['power', tones.quiet, `Server ${server} stopped`],
+            'server.rename': ['edit', tones.change, `Server ${server} renamed`],
+            'server.transport': ['edit', tones.change, `Transport parameters of ${server} changed`],
+            'server.networking': ['edit', tones.change, `Networking of ${server} changed`],
+            'server.endpoint': ['edit', tones.change, `Endpoint host of ${server} changed`],
+            'client.add': ['userPlus', tones.change, `Client ${client} added${onServer}`],
+            'client.delete': ['trash', tones.change, `Client ${client} deleted${onServer}`],
+            'client.suspend': ['lock', tones.warn, `Client ${client} suspended${onServer}`],
+            'client.resume': ['check', tones.good, `Client ${client} resumed${onServer}`],
+            'client.rename': ['edit', tones.change, `Client ${client} renamed${onServer}`],
+            'client.params': ['edit', tones.change, `Parameters of ${client} changed${onServer}`],
+            'settings.save': ['gear', tones.change, 'Panel settings saved'],
+            'access.change': ['key', tones.warn, d.user_changed ? 'Sign-in user and password changed' : 'Sign-in password changed'],
+            'client.online': ['activity', tones.good, `${client} came online${onServer}`,
+                d.endpoint ? `from ${mono(d.endpoint)}${d.country ? ` ${window.ServerUi.flag(d.country)} ${safe(d.country)}` : ''}` : ''],
+            'client.offline': ['activity', tones.quiet, `${client} went offline${onServer}`,
+                `after ${duration(Number(d.duration_s) || 0)} · ↓ ${bytes(d.sent_bytes)} ↑ ${bytes(d.received_bytes)}`],
+            'health.problem': ['alert', tones.warn, 'Health check failing', safe(d.problem)],
+            'health.clear': ['check', tones.good, 'Health problem cleared', safe(d.problem)],
+            'egress.change': ['globe', tones.net, `Egress IP of ${server} changed`,
+                `${mono(value(d.old))} → ${mono(value(d.new))}${d.label ? ` · ${safe(d.label)}` : ''}`],
+            'auth.fail': ['lock', tones.bad, `Failed sign-in${Number(d.count) > 1 ? `, ${Number(d.count)} times` : ''}`,
+                `from ${mono(d.address)} · ${d.user === null || d.user === undefined ? 'no user' : `user ${mono(d.user)}`}`],
+        };
+        const [icon, tone, title, detail = changes] = table[e.event] || ['dots', tones.quiet, safe(e.event)];
+        return [icon, tone, title, detail];
     }
 
     // The server's .conf as the panel generated it. It holds the server's private key.

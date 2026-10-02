@@ -202,6 +202,75 @@ function check(label, condition, detail) {
         check('the Traffic dialog: from the band, every range, the readout, highlight, pin, from ⋯ and from the totals',
             Object.values(dialog).every((v) => (typeof v === 'object' ? Object.values(v).every(Boolean) : v)), dialog);
 
+        // Activity (2.7): from the header, every filter, a live event shown once, a seq
+        // it already has skipped, a reload adding nothing; from ⋯, filtered to that
+        // server. A suspend and a resume of a client make the live events (it ends as it was).
+        const activity = await page.evaluate(async (dark) => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const seqsShown = () => [...document.querySelectorAll('#activityList [data-activity-seq]')].map((r) => Number(r.dataset.activitySeq));
+            const luminance = (css) => {
+                const [r, g, b] = css.match(/[\d.]+/g).map(Number);
+                return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+            };
+            const out = {};
+            let ring = (await amneziaApp.getJson('/api/activity')).events;
+            document.getElementById('activityBtn').click();
+            await wait(700);
+            out.fromHeader = document.getElementById('dialogTitle')?.textContent.trim() === 'Activity' && amneziaApp.activityView?.serverId === null;
+            out.all = JSON.stringify(seqsShown()) === JSON.stringify(ring.map((e) => e.seq)) && ring.length > 0;
+            out.newestFirst = seqsShown().every((s, i, a) => !i || a[i - 1] > s);
+            const kinds = {};
+            for (const [kind] of window.ModalUi.ACTIVITY_KINDS.slice(1)) {
+                const button = document.querySelector(`#dialog [data-activity-kind="${kind}"]`);
+                button.click();
+                const want = ring.filter((e) => e.kind === kind).map((e) => e.seq);
+                kinds[kind] = want.length > 0 && JSON.stringify(seqsShown()) === JSON.stringify(want)
+                    && button.getAttribute('aria-checked') === 'true';
+            }
+            out.kinds = kinds;
+            document.querySelector('#dialog [data-activity-kind="all"]').click();
+            // Each event has its own sentence (an unknown one would show its bare name).
+            const rows = [...document.querySelectorAll('#activityList [data-activity-seq]')];
+            out.described = rows.every((r) => r.querySelector('p').textContent.trim() !== r.dataset.activityEvent);
+            const text = luminance(getComputedStyle(rows[0].querySelector('p')).color);
+            const ground = luminance(getComputedStyle(document.getElementById('dialog')).backgroundColor);
+            out.readable = dark ? text > 0.75 && ground < 0.25 : text < 0.25 && ground > 0.75;
+
+            // A stopped server's client: suspending an online one would end its session too.
+            const server = amneziaApp.lastServers.find((s) => s.status !== 'running' && (s.clients || []).length);
+            const client = server.clients[0];
+            const before = seqsShown().length;
+            for (let i = 0; i < 2; i++) await amneziaApp.postJson(`/api/servers/${server.id}/clients/${client.id}/suspend`, {});
+            await wait(1500);
+            const top = amneziaApp.activityView.events.slice(0, 2);
+            out.live = seqsShown().length === before + 2 && new Set(seqsShown()).size === seqsShown().length
+                && top.map((e) => e.event).join() === (client.suspended ? 'client.suspend,client.resume' : 'client.resume,client.suspend')
+                && top.every((e) => e.client_id === client.id);
+            amneziaApp.receiveActivity(amneziaApp.activityView.events[0]);
+            amneziaApp.receiveActivity(amneziaApp.activityView.events[3]);
+            out.repeatSkipped = seqsShown().length === before + 2;
+            await amneziaApp.loadActivity();
+            out.reloadAddsNothing = seqsShown().length === before + 2;
+            window.Ui.closeDialog();
+            out.closed = amneziaApp.activityView === null;
+
+            ring = (await amneziaApp.getJson('/api/activity')).events;
+            amneziaApp.openServerMenu(server.id, document.querySelector(`[data-action="server-menu"][data-server="${server.id}"]`));
+            [...document.querySelectorAll('#menu button')].find((b) => /Activity/.test(b.textContent))?.click();
+            await wait(700);
+            const mine = ring.filter((e) => e.server_id === server.id).map((e) => e.seq);
+            out.fromMenu = document.getElementById('activityServer').value === server.id && mine.length > 0
+                && JSON.stringify(seqsShown()) === JSON.stringify(mine);
+            const select = document.getElementById('activityServer');
+            select.value = '';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            out.allServers = seqsShown().length === ring.length;
+            window.Ui.closeDialog();
+            return out;
+        }, theme === 'dark');
+        check('the Activity dialog: from the header, every filter, readable, live once, from ⋯ for its server',
+            Object.values(activity).every((v) => (typeof v === 'object' ? Object.values(v).every(Boolean) : v)), activity);
+
         for (const server of servers) {
             const { id, protocol } = server;
             const awg3 = protocol === 'AWG 3.0' || protocol === 'AWG 3.1';
@@ -425,7 +494,7 @@ function check(label, condition, detail) {
         await page.evaluate(() => window.Ui.closeDrawer());
     }
 
-    // At phone width nothing scrolls sideways, the page or the Traffic dialog.
+    // At phone width nothing scrolls sideways: the page, the Traffic or the Activity dialog.
     await page.setViewport({ width: 390, height: 900 });
     await new Promise((r) => setTimeout(r, 500));
     const narrow = await page.evaluate(async () => {
@@ -435,9 +504,13 @@ function check(label, condition, detail) {
         await new Promise((r) => setTimeout(r, 900));
         const dialog = document.documentElement.scrollWidth;
         window.Ui.closeDialog();
-        return { page, dialog };
+        amneziaApp.showActivity();
+        await new Promise((r) => setTimeout(r, 700));
+        const activity = document.documentElement.scrollWidth;
+        window.Ui.closeDialog();
+        return { page, dialog, activity };
     });
-    check('no horizontal scroll at 390 px, with the dialog open too', narrow.page <= 390 && narrow.dialog <= 390, narrow);
+    check('no horizontal scroll at 390 px, with a dialog open too', narrow.page <= 390 && narrow.dialog <= 390 && narrow.activity <= 390, narrow);
     await page.setViewport({ width: 1280, height: 1000 });
 
     // AllowedIPs edits arm Save without a warning; an endpoint host counts every

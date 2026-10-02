@@ -33,6 +33,8 @@ class AmneziaApp {
         this.trafficAt = 0;
         this.lastResyncAt = 0;
         this.drawerCtx = null;
+        // The open Activity dialog's state (modals.js showActivity), else null.
+        this.activityView = null;
         this.currentPublicIp = '';
         this.currentPublicIpCountryCode = '';
         this.init();
@@ -215,6 +217,7 @@ class AmneziaApp {
             'copy-public-key': () => this.copyText(document.getElementById('s-publicKey')?.textContent, 'Public key'),
             'show-checks': () => document.getElementById('checks')?.scrollIntoView({ block: 'nearest' }),
             'open-settings': () => this.openSettings(),
+            'open-activity': () => this.showActivity(),
             'iptables-check': () => this.checkIptables(),
         };
         const run = (event) => {
@@ -343,7 +346,7 @@ class AmneziaApp {
     }
 
     // Live updates: one EventSource on /api/events (core/events.py) carrying
-    // server_status and traffic_update. It is an ordinary request, so the browser sends
+    // server_status, traffic_update and activity. It is an ordinary request, so the browser sends
     // its cached password with it, reconnects a dropped stream by itself, and every
     // (re)open resyncs. The browser gives a stream up only on an answer that is not a
     // stream -- a 401 after the password changed elsewhere, a 502 while the panel
@@ -388,6 +391,9 @@ class AmneziaApp {
         on('open', () => {
             this.updateStatus('Connected to AmneziaWG Web UI', true);
             this.resyncAppState();
+            // An open Activity dialog reloads the ring: events missed while the stream
+            // was down, or a restarted panel's, whose seq starts from 1 again.
+            this.loadActivity();
         });
         on('error', () => {
             this.updateStatus('Reconnecting to AmneziaWG Web UI...', false);
@@ -399,6 +405,8 @@ class AmneziaApp {
             const data = JSON.parse(event.data);
             this.updateServerTraffic(data.server_id, data.traffic, data.at, data.totals);
         });
+        // One Activity event; the dialog skips a seq at or below the last it has.
+        on('activity', (event) => this.receiveActivity(JSON.parse(event.data)));
     }
 
     closeEvents() {
@@ -656,6 +664,7 @@ class AmneziaApp {
         window.Ui.openMenu(anchor, [
             { label: 'Traffic', icon: 'activity', run: () => this.showServerTraffic(serverId) },
             { label: 'Logs', icon: 'logs', run: () => this.showServerLogs(serverId, server.interface) },
+            { label: 'Activity', icon: 'history', run: () => this.showActivity(serverId) },
             { label: 'Full config', icon: 'code', run: () => this.showRawServerConfig(serverId) },
             { label: 'Rename', icon: 'edit', run: () => this.renameServer(serverId, document.querySelector(`[data-name="${serverId}"]`)) },
             '-',

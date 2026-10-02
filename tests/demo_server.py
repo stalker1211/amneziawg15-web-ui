@@ -52,6 +52,7 @@ GEO = {
     "203.0.113.201": ("Warsaw", "PL"),
     "198.51.100.17": ("Amsterdam", "NL"),
     "198.51.100.61": ("Frankfurt am Main", "DE"),
+    "198.51.100.23": ("Rotterdam", "NL"),
 }
 MiB, GiB = 1024**2, 1024**3
 
@@ -260,6 +261,27 @@ def seed(manager):
     manager.started[home["interface"]] = now - (3 * 86400 + 4 * 3600)
     manager.started[travel["interface"]] = now - 5 * 3600
     seed_history(manager)
+    seed_activity(manager, home, travel, clients)
+
+
+def seed_activity(manager, home, travel, clients):
+    """Activity of the kinds the seeding above does not reach: the rest of the contract's events.
+
+    The changes and the egress change go through the real code; a session ending, a
+    health problem, failed sign-ins and the settings are recorded as the code would.
+    """
+    record = manager.activity.record
+    record("session", "client.offline", server=home, client=clients["iPad"],
+           detail={"duration_s": 2 * 3600 + 14 * 60, "received_bytes": int(38.9 * MiB), "sent_bytes": int(412.3 * MiB)})  # fmt: skip
+    manager.netinfo.egress[home["server_ip"]] = "198.51.100.23"
+    manager.probe_server_egress_ip(home["id"])
+    line = "Travel 443: the daemon has 1 peer, the panel 2"
+    record("health", "health.problem", server=travel, detail={"problem": line})
+    record("health", "health.clear", server=travel, detail={"problem": line})
+    record("auth", "auth.fail", detail={"address": "192.0.2.77", "user": "admin", "count": 4})
+    record("auth", "auth.fail", detail={"address": "198.51.100.200", "user": "root", "count": 1})
+    record("change", "settings.save", detail={"changes": [{"field": "log_level", "old": "INFO", "new": "WARNING"}]})
+    record("change", "access.change", detail={"user_changed": False})
 
 
 # --- an invented day of traffic, for the history ---------------------------------------
