@@ -531,6 +531,28 @@ class EgressProbeTests(_Base):
         self.assertEqual(probe["external_ip_geo_country_code"], "NL")
         self.assertEqual(self._saved()["servers"][0]["egress_probe"]["external_ip"], "198.51.100.9")
 
+    def test_an_egress_change_is_an_event(self):
+        server = self._server()
+
+        def probe(answer):
+            side = {"side_effect": answer} if isinstance(answer, Exception) else {"return_value": (answer, "https://ident.me")}
+            with (
+                mock.patch.object(self.manager.netinfo, "detect_public_ip_from_source", **side),
+                mock.patch.object(self.manager.netinfo, "lookup_geoip", return_value=("Sweden", "SE")),
+            ):
+                self.manager.probe_server_egress_ip(server["id"])
+            return [(e["event"], e["server_id"], e["detail"]) for e in self.manager.activity.payload()["events"]
+                    if e["kind"] == "health"]  # fmt: skip
+
+        self.assertEqual(probe("198.51.100.9"), [])  # the first answer is no change
+        self.assertEqual(probe("198.51.100.9"), [])
+        # A failed probe in between hides nothing: the change is from the last IP seen.
+        self.assertEqual(probe(RuntimeError("ident.me: timeout")), [])
+        self.assertEqual(
+            probe("203.0.113.40"),
+            [("egress.change", server["id"], {"old": "198.51.100.9", "new": "203.0.113.40", "label": "Sweden"})],
+        )
+
     def test_failed_probe_records_the_error(self):
         server = self._server()
         with mock.patch.object(

@@ -930,6 +930,27 @@ class SystemRouteExtraTests(_RealSystemApp):
         # Nothing running: neither the daemon nor iptables is asked anything.
         self.assertEqual([a for a in self.fake.argvs() if a[0] in ("/usr/bin/awg", "iptables")], [])
 
+    def test_status_records_a_problem_once_and_its_clearing(self):
+        server = self.manager.get_server(self.server["id"])
+        server["status"] = "running"
+        down = f"Down, though it should run: {server['name']} ({server['interface']})"
+
+        def health():
+            return [(e["event"], e["server_id"], e["detail"]) for e in self.manager.activity.payload()["events"]
+                    if e["kind"] == "health"][::-1]  # fmt: skip
+
+        self._status(uptime=30)  # the boot's grace: nothing checked, nothing recorded
+        self.assertEqual(health(), [])
+        self._status(uptime=600)
+        self._status(uptime=630)  # still down: no second event
+        self._running(server)
+        self._status(uptime=660)
+        self._status(uptime=690)
+        self.assertEqual(
+            health(),
+            [("health.problem", server["id"], {"problem": down}), ("health.clear", server["id"], {"problem": down})],
+        )
+
     def test_status_fails_when_the_daemons_peers_differ_from_the_panel(self):
         server = self.manager.get_server(self.server["id"])
         server["status"] = "running"

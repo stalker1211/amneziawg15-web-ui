@@ -43,6 +43,7 @@ from core.logging_setup import get_logger
 from services import activity, authlog, generator, signatures
 from services.history import TrafficHistory
 from services.netinfo import NetInfo
+from services.sessions import Sessions
 
 logger = get_logger(__name__)
 
@@ -114,7 +115,8 @@ class AmneziaManager:
     DEFAULT_ALLOWED_IPS = "0.0.0.0/0"
 
     # A client is online (and "active") after a handshake this recent; with keepalive
-    # 25 a connected device handshakes about every 2 minutes.
+    # 25 a connected device handshakes about every 2 minutes (RekeyAfterTime). An AWG
+    # 3.x client's own RekeyAfterTime can be longer: see active_within.
     ACTIVE_WITHIN_SECONDS = 5 * 60
 
     # awg-quick runs amneziawg-go through this wrapper when the daemon logs, so its
@@ -152,6 +154,13 @@ class AmneziaManager:
         self.activity = activity.Activity(events, path=activity_path)
         # Failed sign-ins, read from nginx's error log on each tick (services/authlog.py).
         self.auth_log = authlog.AuthLog(auth_log_path)
+        # Sessions from the monitor's ticks (services/sessions.py); the last /status
+        # lines and each server's last egress IP, diffed into *health* events. Memory
+        # only, like the ring.
+        self.sessions = Sessions()
+        self._watch_lock = threading.Lock()
+        self._health = []
+        self._egress_seen = {}
 
         self.auto_start_servers_enabled = auto_start_servers
         self.default_mtu = default_mtu
@@ -302,9 +311,32 @@ class AmneziaManager:
         except Exception as e:
             probe["error"] = str(e)
 
-        server["egress_probe"] = probe
-        self.save_config()
+        with self._watch_lock:
+            new = probe["external_ip"]
+            # The last IP seen, so a failed probe in between hides no change.
+            old = self._egress_seen.get(server_id) or (server.get("egress_probe") or {}).get("external_ip")
+            if new:
+                self._egress_seen[server_id] = new
+            server["egress_probe"] = probe
+            self.save_config()
+            if new and old and new != old:
+                detail = {"old": old, "new": new, "label": probe.get("external_ip_geo")}
+                self.activity.record("health", "egress.change", server=server, detail=detail)
         return probe
+
+    def record_health(self, problems):
+        """health.problem / health.clear for each /status line (routes/system.py
+        health_problems) that appeared or cleared since the last check. The first check
+        reports what is wrong then; the server is set when the line names one alone."""
+        with self._watch_lock:
+            before, self._health = self._health, list(problems)
+            for event, lines in (("health.clear", [p for p in before if p not in problems]),
+                                 ("health.problem", [p for p in problems if p not in before])):  # fmt: skip
+                for line in lines:
+                    # health_problems names a server as "name (interface)".
+                    named = [s for s in self.config["servers"] if f"{s.get('name')} ({s.get('interface')})" in line]
+                    server = named[0] if len(named) == 1 else None
+                    self.activity.record("health", event, server=server, detail={"problem": line})
 
     def apply_settings(self):
         """Take GeoIP and the daemon's log level from the settings."""
@@ -1924,6 +1956,7 @@ PersistentKeepalive = 25
                             self.events.publish(
                                 "traffic_update", {"server_id": server["id"], "at": at, "traffic": traffic, "totals": totals}
                             )
+                    self.record_sessions()
                     self.record_auth_failures()
                     self.sleep(7)
                 except Exception as e:
@@ -1985,6 +2018,28 @@ PersistentKeepalive = 25
         self._telemetry = {"at": time.time(), "interfaces": self.parse_dump(output or ""), "read": output is not None}
         return self._telemetry
 
+    def record_sessions(self):
+        """client.online / client.offline from the last snapshot (services/sessions.py);
+        a failed read records nothing. The country of an online endpoint is looked up
+        here, not from the cache only: one wait of up to 2 s, for a new address, on a
+        tick that emits the event."""
+        if not self._telemetry["read"]:
+            return
+        observed, where = [], {}
+        for server in self.config["servers"]:
+            for client in server.get("clients", []):
+                info, seconds = self._peer_telemetry(server, client)
+                online = not client.get("suspended") and self.is_online(server, client, seconds)
+                observed.append((client.get("id"), online, info.get("rx"), info.get("tx")))
+                where[client.get("id")] = (server, client, info)
+        for event, client_id, detail in self.sessions.tick(self._telemetry["at"], observed):
+            server, client, info = where[client_id]
+            if event == "client.online":
+                endpoint = info.get("endpoint")
+                _, country = self.netinfo.lookup_geoip(self.endpoint_ip(endpoint))
+                detail = {"endpoint": endpoint, "country": country}
+            self.activity.record("session", event, server=server, client=client, detail=detail)
+
     def record_auth_failures(self):
         """An `auth.fail` event per address for each minute of failed sign-ins that has
         ended since the last tick (services/authlog.py; nothing with no log to read)."""
@@ -2007,7 +2062,7 @@ PersistentKeepalive = 25
                 info, seconds = self._peer_telemetry(server, client)
                 if client.get("suspended"):
                     state = TrafficHistory.SUSPENDED
-                elif seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS:
+                elif self.is_online(server, client, seconds):
                     state = TrafficHistory.ONLINE
                 else:
                     state = TrafficHistory.OFFLINE
@@ -2020,6 +2075,23 @@ PersistentKeepalive = 25
         """The address of 'ip:port' or '[ipv6]:port', or None."""
         match = re.fullmatch(r"\[([^\]]+)\]:\d+|([^:]+):\d+", endpoint or "")
         return (match.group(1) or match.group(2)) if match else None
+
+    def active_within(self, server, client):
+        """How recent a handshake keeps the client online: ACTIVE_WITHIN_SECONDS, or
+        twice the top of an AWG 3.x client's RekeyAfterTime when that is longer -- the
+        device handshakes only that often, and its sessions would flap."""
+        top = 0
+        if self.protocol_supports_awg3(server.get("protocol")):
+            low, _, high = str((client.get("client_params") or {}).get("RekeyAfterTime") or "").partition("-")
+            try:
+                top = int(high or low)
+            except ValueError:
+                top = 0  # unset: WireGuard's 120
+        return max(self.ACTIVE_WITHIN_SECONDS, 2 * top)
+
+    def is_online(self, server, client, seconds):
+        """`seconds` since the client's last handshake (None: never) within its threshold."""
+        return seconds is not None and seconds <= self.active_within(server, client)
 
     def _peer_telemetry(self, server, client):
         """(the client's dump entry or {}, seconds since its last handshake or None)."""
@@ -2052,7 +2124,7 @@ PersistentKeepalive = 25
                 "geo_country_code": geo_country_code,
                 "latest_handshake_at": info.get("handshake_at"),
                 "latest_handshake_seconds": seconds,
-                "active": seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS,
+                "active": self.is_online(server, client, seconds),
             }
         return traffic
 
@@ -2065,7 +2137,8 @@ PersistentKeepalive = 25
         return self.interface_totals(server["interface"])
 
     def client_status(self, client):
-        """'active' after a handshake in the last 5 minutes (last snapshot), else 'inactive'."""
+        """'active' after a handshake within its threshold (active_within; last snapshot),
+        else 'inactive'."""
         server = self.get_server(client.get("server_id")) or {}
         _, seconds = self._peer_telemetry(server, client)
-        return "active" if seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS else "inactive"
+        return "active" if self.is_online(server, client, seconds) else "inactive"

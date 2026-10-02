@@ -384,6 +384,8 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
         if uptime_seconds < STATUS_GRACE_SECONDS:
             return uptime
         problems = health_problems(amnezia_manager)
+        # Docker asks every 30 s: the *health* events are what made it (un)healthy.
+        amnezia_manager.record_health(problems)
         if problems:
             return "\n".join([uptime, *problems]), 503
         return uptime
