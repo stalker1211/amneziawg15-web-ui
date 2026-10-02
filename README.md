@@ -10,9 +10,6 @@ pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-onl
 
 Current version: **2.6**
 
-> Working on the code? See [DEVELOPMENT.md](DEVELOPMENT.md) for architecture, the
-> state model, protocol/parameter details, conventions and open items.
-
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
 ## 🚀 Features

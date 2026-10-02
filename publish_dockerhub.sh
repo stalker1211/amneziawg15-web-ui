@@ -155,6 +155,11 @@ fi
 # what is pushed is exactly what was scanned. --pull and a fresh runtime stage make
 # its apk upgrade/add fetch today's Alpine fixes; the pinned builder stages stay cached.
 CANDIDATE="amneziawg-web-ui:candidate"
+# No git information in the image's provenance attestation. buildx adds one to every
+# image it loads and the push carries it to Docker Hub, by default with the build
+# context's git remote and commit: `origin` here is the NAS clone
+# (dsergeev@nas:/mnt/storage1/git/awg.git), and every tag up to 2.6 carries it.
+export BUILDX_GIT_INFO=0
 docker buildx build \
 	--platform "${PLATFORMS}" \
 	-f "${DOCKERFILE}" \

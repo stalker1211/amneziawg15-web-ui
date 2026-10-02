@@ -191,5 +191,15 @@ class PublishRulesTests(unittest.TestCase):
         self.assertEqual(counter.read_text(encoding="utf-8").split()[1], "4")
 
 
+class ProvenanceTests(unittest.TestCase):
+    def test_the_build_keeps_git_out_of_the_provenance(self):
+        # Without it every pushed image names the private NAS remote and commit
+        # (verified on Docker Hub, 2.3 to 2.6).
+        script = (REPO / "publish_dockerhub.sh").read_text(encoding="utf-8")
+        export = script.find("\nexport BUILDX_GIT_INFO=0\n")
+        self.assertGreater(export, 0, "publish_dockerhub.sh must export BUILDX_GIT_INFO=0")
+        self.assertLess(export, script.find("docker buildx build"), "the export must come before the build")
+
+
 if __name__ == "__main__":
     unittest.main()
