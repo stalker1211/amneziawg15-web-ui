@@ -185,14 +185,20 @@ def register_system_routes(app, amnezia_manager, *, awg_log_file, nginx_port):
 
     @system_bp.route("/api/events")
     def events():
-        """Live updates as Server-Sent Events (core/events.py): server_status and
-        traffic_update. Under /api/, so nginx's Basic Auth gates it like every call."""
+        """Live updates as Server-Sent Events (core/events.py): server_status,
+        traffic_update and activity. Under /api/, so nginx's Basic Auth gates it like every call."""
         return Response(
             amnezia_manager.events.stream(),
             mimetype="text/event-stream",
             # nginx buffers a proxied response; this one must pass through as written.
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @system_bp.route("/api/activity")
+    def activity():
+        """The events in memory since the panel started (services/activity.py), newest
+        first, the whole ring: the page filters by kind and server itself."""
+        return jsonify(amnezia_manager.activity.payload())
 
     @system_bp.route("/api/system/status")
     def system_status():

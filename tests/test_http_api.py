@@ -496,6 +496,8 @@ class ApiContractTests(unittest.TestCase):
             "GET .../info": self.client.get(f"/api/servers/{self.server['id']}/info"),
             "POST .../suspend": self.client.post(f"{client_url}/suspend", json={}),
             "POST .../client-params": self.client.post(f"{client_url}/client-params", json={"client_params": {"Jc": 6}}),
+            # After every change above: the events name fields, never their secrets.
+            "GET /api/activity": self.client.get("/api/activity"),
         }
         for label, response in responses.items():
             self.assertEqual(response.status_code, 200, label)
@@ -509,10 +511,17 @@ class ApiContractTests(unittest.TestCase):
             secrets |= {client["client_private_key"], client["preshared_key"]}
             secrets |= {client["config_issued_fingerprint"]} - {None}
         self.assertTrue(any(len(secret) == 16 for secret in secrets))  # a fingerprint is among them
-        for label in ("GET /api/servers",):
+        for label in ("GET /api/servers", "GET /api/activity"):
             body = responses[label].get_data(as_text=True)
             for secret in secrets:
                 self.assertNotIn(secret, body, label)
+
+    def test_activity_payload(self):
+        body = self.client.get("/api/activity").get_json()
+        self.assertEqual(set(body), {"events", "since"})
+        self.assertEqual([e["event"] for e in body["events"]], ["client.add", "server.create"])  # newest first
+        for event in body["events"]:
+            self.assertEqual(set(event), {"seq", "ts", "kind", "event", "server_id", "server", "client_id", "client", "detail"})
 
     def test_configs_that_need_keys_still_have_them(self):
         client = self.manager.get_client(self.added["client"]["id"])

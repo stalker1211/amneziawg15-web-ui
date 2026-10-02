@@ -7,6 +7,7 @@ import re
 from core.logging_setup import get_logger
 from core.settings import Access
 from flask import Blueprint, abort, jsonify, request, send_file
+from services.activity import field_changes
 from werkzeug.exceptions import HTTPException
 
 # pylint: disable=too-many-arguments,too-many-locals,too-many-statements
@@ -340,11 +341,18 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
     def update_server_networking(server_id):
         server = server_or_404(server_id)
         data = json_body()
+        old = {
+            "NAT": server.get("enable_nat", amnezia_manager.default_enable_nat),
+            "Block LAN": server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs),
+        }
         server["enable_nat"] = to_bool(data.get("enable_nat"), server.get("enable_nat", amnezia_manager.default_enable_nat))
         server["block_lan_cidrs"] = to_bool(
             data.get("block_lan_cidrs"), server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs)
         )
         amnezia_manager.save_config()
+        changes = field_changes(old, {"NAT": server["enable_nat"], "Block LAN": server["block_lan_cidrs"]})
+        if changes:
+            amnezia_manager.activity.change("server.networking", server=server, changes=changes)
 
         iptables_status = "skipped"
         if amnezia_manager.get_server_status(server_id) == "running":

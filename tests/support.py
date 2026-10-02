@@ -178,9 +178,13 @@ def build_real_manager(test_case, fake_subprocess=None, **overrides):
         "config_dir": tmp,
         "wireguard_config_dir": tmp,
         "config_file": os.path.join(tmp, "web_config.json"),
+        # The events' stdout lines (services/activity.py), not PID 1's.
+        "activity_path": os.path.join(tmp, "activity.log"),
     }
     kwargs.update(overrides)
-    return _RealSystemManager(**kwargs), fake
+    manager = _RealSystemManager(**kwargs)
+    test_case.addCleanup(manager.activity.close)
+    return manager, fake
 
 
 def build_manager(**overrides):
@@ -258,6 +262,8 @@ def build_manager(**overrides):
         "config_dir": tmp,
         "wireguard_config_dir": tmp,
         "config_file": os.path.join(tmp, "web_config.json"),
+        # No stdout line: nothing here closes the file (build_real_manager writes one).
+        "activity_path": None,
     }
     kwargs.update(overrides)
     return _TestManager(**kwargs)

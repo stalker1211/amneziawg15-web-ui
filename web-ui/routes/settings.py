@@ -11,6 +11,7 @@ import logging
 
 from core.logging_setup import get_logger
 from flask import Blueprint, jsonify, request
+from services.activity import field_changes
 from werkzeug.exceptions import HTTPException
 
 logger = get_logger(__name__)
@@ -69,11 +70,18 @@ def register_settings_routes(app, amnezia_manager, access, *, build_label):
 
         access_changed = bool(credential.get("user") is not None or credential.get("password") is not None)
         if access_changed:
+            old_user = access.user()
             access.change(credential.get("current_password"), user=credential.get("user"), password=credential.get("password"))
             logger.info("The panel's credential was changed in Settings")
+            # Whether the name changed, never what to: the user name is half the credential.
+            amnezia_manager.activity.record("change", "access.change", detail={"user_changed": access.user() != old_user})
 
+        old_values = dict(settings.values)
         changed = settings.update(amnezia_manager.config.setdefault("settings", {}), changes)
         if changed:
+            amnezia_manager.activity.change(
+                "settings.save", changes=field_changes(old_values, settings.values, fields=changed, values=None)
+            )
             amnezia_manager.apply_settings()
             if "log_level" in changed:
                 logging.getLogger().setLevel(settings.values["log_level"])

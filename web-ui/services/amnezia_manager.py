@@ -18,6 +18,9 @@ What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
   telemetry                                   start_traffic_monitoring, read_telemetry, get_traffic_for_server,
                                               get_server_totals (interface_totals: sysfs)
   traffic history, recorded                   record_history (the rings: services/history.py)
+
+Each change to a server or a client is also an Activity event (`self.activity`,
+services/activity.py), recorded beside its logger.info line.
 """
 
 import base64
@@ -36,7 +39,7 @@ from typing import Any, ClassVar
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 
-from services import generator, signatures
+from services import activity, generator, signatures
 from services.history import TrafficHistory
 from services.netinfo import NetInfo
 
@@ -135,12 +138,16 @@ class AmneziaManager:
         enable_geoip=True,
         awg_log_level="off",
         settings=None,
+        activity_path=activity.STDOUT,
     ):
         # Request handlers and the traffic monitor are separate threads; config
         # writes go through this one at a time (see save_config).
         self._save_lock = threading.Lock()
         # Live updates for the page (core/events.py), published from plain threads.
         self.events = events
+        # The event stream: a ring for GET /api/activity, the SSE `activity` event and
+        # a JSON line on PID 1's stdout, for docker logs (services/activity.py).
+        self.activity = activity.Activity(events, path=activity_path)
 
         self.auto_start_servers_enabled = auto_start_servers
         self.default_mtu = default_mtu
@@ -898,6 +905,7 @@ class AmneziaManager:
 
         self.config["servers"].append(server_config)
         self.save_config()
+        self.activity.change("server.create", server=server_config)
 
         # Auto-start if enabled (from environment or request)
         if auto_start:
@@ -977,6 +985,7 @@ AllowedIPs = {client["client_ip"]}/32
 
         next_protocol = self.normalize_protocol(params.get("protocol", server.get("protocol")))
         next_transport_params = self.validate_transport_params(next_protocol, params)
+        old = {"Protocol": server.get("protocol"), **(server.get("transport_params") or {})}
 
         server["protocol"] = next_protocol
         server["transport_params"] = dict(next_transport_params)
@@ -989,6 +998,9 @@ AllowedIPs = {client["client_ip"]}/32
         self.write_server_conf(server)
 
         self.save_config()
+        changes = activity.field_changes(old, {"Protocol": next_protocol, **next_transport_params})
+        if changes:
+            self.activity.change("server.transport", server=server, changes=changes)
 
         # Restart if running
         was_running = self.get_server_status(server_id) == "running"
@@ -1394,6 +1406,7 @@ AllowedIPs = {client["client_ip"]}/32
         # Remove the server (its clients live in its list and go with it)
         self.config["servers"] = [s for s in self.config["servers"] if s["id"] != server_id]
         self.save_config()
+        self.activity.change("server.delete", server=server)
         return True
 
     def add_wireguard_client(self, server_id, client_name, client_params=None, copy_from_client_id=None, allowed_ips=None):
@@ -1460,6 +1473,7 @@ AllowedIPs = {client["client_ip"]}/32
         if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
         logger.info(f"Client {client_config['name']} added")
+        self.activity.change("client.add", server=server, client=client_config)
         config_content = self.generate_wireguard_client_config(
             server,
             client_config,
@@ -1483,10 +1497,14 @@ AllowedIPs = {client["client_ip"]}/32
             raw_client_params.update(self.extract_client_params(params))
 
         validated = self.validate_client_params(raw_client_params)
+        old = {**(client.get("client_params") or {}), "AllowedIPs": client.get("allowed_ips")}
         if allowed_ips is not None:
             client["allowed_ips"] = self.validate_allowed_ips(allowed_ips)
         client["client_params"] = validated
         self.save_config()
+        changes = activity.field_changes(old, {**validated, "AllowedIPs": client.get("allowed_ips")})
+        if changes:
+            self.activity.change("client.params", server=server, client=client, changes=changes)
         return client
 
     def update_endpoint_host(self, server_id, endpoint_host):
@@ -1494,8 +1512,12 @@ AllowedIPs = {client["client_ip"]}/32
         server = self.get_server(server_id)
         if not server:
             return None
+        old = server.get("endpoint_host")
         server["endpoint_host"] = self.validate_endpoint_host(endpoint_host)
         self.save_config()
+        changes = activity.field_changes({"Endpoint host": old}, {"Endpoint host": server["endpoint_host"]})
+        if changes:
+            self.activity.change("server.endpoint", server=server, changes=changes)
         return server
 
     def rename_server(self, server_id, new_name):
@@ -1503,8 +1525,12 @@ AllowedIPs = {client["client_ip"]}/32
         server = self.get_server(server_id)
         if not server:
             return None
+        old = server.get("name")
         server["name"] = self.sanitize_name(new_name)
         self.save_config()
+        changes = activity.field_changes({"Name": old}, {"Name": server["name"]})
+        if changes:
+            self.activity.change("server.rename", server=server, changes=changes)
         return server
 
     def rename_client(self, server_id, client_id, new_name):
@@ -1515,9 +1541,13 @@ AllowedIPs = {client["client_ip"]}/32
         client = self.get_client(client_id)
         if not client or client.get("server_id") != server_id:
             return None
+        old = client.get("name")
         client["name"] = self.sanitize_name(new_name)
         self.write_server_conf(server)
         self.save_config()
+        changes = activity.field_changes({"Name": old}, {"Name": client["name"]})
+        if changes:
+            self.activity.change("client.rename", server=server, client=client, changes=changes)
         return client
 
     def toggle_client_suspend(self, server_id, client_id):
@@ -1537,7 +1567,7 @@ AllowedIPs = {client["client_ip"]}/32
 
         if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
-
+        self.activity.change("client.suspend" if client["suspended"] else "client.resume", server=server, client=client)
         return client
 
     def delete_client(self, server_id, client_id):
@@ -1563,6 +1593,7 @@ AllowedIPs = {client["client_ip"]}/32
         if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
         logger.info(f"Client {server['name']}:{client['name']} removed")
+        self.activity.change("client.delete", server=server, client=client)
         return True
 
     def generate_wireguard_client_config(self, server, client_config, include_comments=True):
@@ -1745,6 +1776,7 @@ PersistentKeepalive = 25
                 self.save_config()
 
                 logger.info(f"Server {server['name']} started successfully")
+                self.activity.change("server.start", server=server)
                 if iptables_success:
                     logger.info(f"iptables rules configured for {server['interface']}")
                 else:
@@ -1780,6 +1812,7 @@ PersistentKeepalive = 25
                 self.save_config()
 
                 logger.info(f"Server {server['name']} stopped successfully")
+                self.activity.change("server.stop", server=server)
                 if iptables_cleaned:
                     logger.info(f"iptables rules cleaned up for {server['interface']}")
                 self.emit_status_after_delay(server_id, "stopped")
