@@ -18,6 +18,7 @@ What is in here, in file order (DEVELOPMENT.md §12 groups the methods by job):
   telemetry                                   start_traffic_monitoring, read_telemetry, get_traffic_for_server,
                                               get_server_totals (interface_totals: sysfs)
   traffic history, recorded                   record_history (the rings: services/history.py)
+  failed sign-ins                             record_auth_failures (nginx's error log: services/authlog.py)
 
 Each change to a server or a client is also an Activity event (`self.activity`,
 services/activity.py), recorded beside its logger.info line.
@@ -39,7 +40,7 @@ from typing import Any, ClassVar
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 
-from services import activity, generator, signatures
+from services import activity, authlog, generator, signatures
 from services.history import TrafficHistory
 from services.netinfo import NetInfo
 
@@ -139,6 +140,7 @@ class AmneziaManager:
         awg_log_level="off",
         settings=None,
         activity_path=activity.STDOUT,
+        auth_log_path=authlog.ERROR_LOG,
     ):
         # Request handlers and the traffic monitor are separate threads; config
         # writes go through this one at a time (see save_config).
@@ -148,6 +150,8 @@ class AmneziaManager:
         # The event stream: a ring for GET /api/activity, the SSE `activity` event and
         # a JSON line on PID 1's stdout, for docker logs (services/activity.py).
         self.activity = activity.Activity(events, path=activity_path)
+        # Failed sign-ins, read from nginx's error log on each tick (services/authlog.py).
+        self.auth_log = authlog.AuthLog(auth_log_path)
 
         self.auto_start_servers_enabled = auto_start_servers
         self.default_mtu = default_mtu
@@ -1920,6 +1924,7 @@ PersistentKeepalive = 25
                             self.events.publish(
                                 "traffic_update", {"server_id": server["id"], "at": at, "traffic": traffic, "totals": totals}
                             )
+                    self.record_auth_failures()
                     self.sleep(7)
                 except Exception as e:
                     logger.error("Error in traffic monitoring: %s", e)
@@ -1979,6 +1984,12 @@ PersistentKeepalive = 25
         # every server stopped.
         self._telemetry = {"at": time.time(), "interfaces": self.parse_dump(output or ""), "read": output is not None}
         return self._telemetry
+
+    def record_auth_failures(self):
+        """An `auth.fail` event per address for each minute of failed sign-ins that has
+        ended since the last tick (services/authlog.py; nothing with no log to read)."""
+        for detail in self.auth_log.poll():
+            self.activity.record("auth", "auth.fail", detail=detail)
 
     def record_history(self):
         """The last snapshot into the traffic history (services/history.py): each

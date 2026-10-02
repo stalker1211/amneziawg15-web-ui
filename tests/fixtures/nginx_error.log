@@ -1,0 +1,2 @@
+2026/10/02 23:25:28 [error] 37#37: *3 user "admin": password mismatch, client: 192.168.215.1, server: _, request: "GET /api/servers HTTP/1.1", host: "127.0.0.1:8187"
+2026/10/02 23:25:28 [error] 38#38: *4 user "mallory" was not found in "/etc/amnezia/.htpasswd", client: 192.168.215.1, server: _, request: "GET / HTTP/1.1", host: "127.0.0.1:8187"

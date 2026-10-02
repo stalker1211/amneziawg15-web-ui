@@ -180,6 +180,8 @@ def build_real_manager(test_case, fake_subprocess=None, **overrides):
         "config_file": os.path.join(tmp, "web_config.json"),
         # The events' stdout lines (services/activity.py), not PID 1's.
         "activity_path": os.path.join(tmp, "activity.log"),
+        # Not this machine's nginx log (services/authlog.py).
+        "auth_log_path": None,
     }
     kwargs.update(overrides)
     manager = _RealSystemManager(**kwargs)
@@ -264,6 +266,7 @@ def build_manager(**overrides):
         "config_file": os.path.join(tmp, "web_config.json"),
         # No stdout line: nothing here closes the file (build_real_manager writes one).
         "activity_path": None,
+        "auth_log_path": None,
     }
     kwargs.update(overrides)
     return _TestManager(**kwargs)
