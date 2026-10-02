@@ -1198,6 +1198,16 @@ AllowedIPs = {client["client_ip"]}/32
                 f"Equal S1-S4 avoid it: Randomize draws them."
             )
 
+        # The other side of it: equal S1-S4 are for random trailers only. Without them an
+        # initiation (148 + S) and a response (92 + S) are again WireGuard's 56 bytes apart.
+        sizes = {transport.get(key) for key in ("S1", "S2", "S3", "S4")}
+        trailers = self.protocol_supports_awg31(protocol) and transport.get("RandomTrailers")
+        if self.protocol_supports_s34(protocol) and len(sizes) == 1 and None not in sizes and not trailers:
+            warnings.append(
+                "Equal S1-S4 without random trailers: handshake initiations and responses keep "
+                "WireGuard's 56-byte size difference. Randomize draws them apart."
+            )
+
         def outside_common_range(key):
             value = transport.get(key)
             if value is not None and not 15 <= value <= 150:

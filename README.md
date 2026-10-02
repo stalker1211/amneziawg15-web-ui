@@ -358,7 +358,7 @@ Two kinds, and the distinction matters:
 | `HeaderProtectionKey` | server | 3.0+ | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
 | `ContentPaddingAddition` | client | 3.0+ | Extra random bytes per data packet (`10-40`) |
 | `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default |
-| `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends. Keep S1–S4 equal with it: otherwise amneziawg-go drops some data packets as false handshakes ([#186](https://github.com/amnezia-vpn/amneziawg-go/issues/186)). Randomize draws them equal while the switch is on, and the form warns with the estimated loss |
+| `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends. Keep S1–S4 equal with it: otherwise amneziawg-go drops some data packets as false handshakes ([#186](https://github.com/amnezia-vpn/amneziawg-go/issues/186)). Randomize draws them equal while the switch is on, and the form warns with the estimated loss. Without the switch, equal S1–S4 get a warning instead: initiation and response keep WireGuard's 56-byte size difference |
 | `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
 | `MTU` | — | all | Interface MTU (1280–1440) |
 | `AllowedIPs` | client | all | What the device sends through the tunnel, set per client: `0.0.0.0/0` (the default) is all IPv4, a narrower list is split tunnelling. Adding `::/0` sends IPv6 in too, where the server drops it and apps fall back to IPv4; a Linux device with IPv6 switched off cannot bring `::/0` up |

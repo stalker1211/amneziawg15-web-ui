@@ -226,6 +226,20 @@ class TrailerLossTests(unittest.TestCase):
         self.assertEqual(self.warnings(self.validated("AWG 3.0"), "AWG 3.0"), [])
         self.assertIsNone(self.m.trailer_loss("AWG 3.0", self.validated("AWG 3.0")))
 
+    def equal_s_warnings(self, transport, protocol="AWG 3.1"):
+        return [w for w in self.m.transport_param_warnings(protocol, transport, 1420) if "56-byte" in w]
+
+    def test_equal_s_without_trailers_warns(self):
+        equal = {"S1": 24, "S2": 24, "S3": 24, "S4": 24}
+        self.assertEqual(len(self.equal_s_warnings(self.validated(trailers=False, **equal))), 1)
+        # 2.0 and 3.0 have no trailers to hide it.
+        for protocol in ("AWG 2.0", "AWG 3.0"):
+            self.assertEqual(len(self.equal_s_warnings(self.validated(protocol, **equal), protocol)), 1, protocol)
+
+    def test_equal_s_with_trailers_or_unequal_s_is_quiet(self):
+        self.assertEqual(self.equal_s_warnings(self.validated(S1=24, S2=24, S3=24)), [])
+        self.assertEqual(self.equal_s_warnings(self.validated(trailers=False)), [])
+
 
 class GenerateRouteTests(unittest.TestCase):
     def setUp(self):
