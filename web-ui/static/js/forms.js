@@ -514,10 +514,15 @@ class FormUi {
     }
 
     // Random parameters from the server (POST /api/generate), the one generator:
-    // every value it draws passes the validators without a warning.
-    async fetchGenerated(protocol, mtu) {
+    // every value it draws passes the validators without a warning. With random
+    // trailers on, S1-S4 come back equal (amneziawg-go#186).
+    async fetchGenerated(protocol, mtu, { randomTrailers = false } = {}) {
         const n = Number(mtu);
-        return this.postJson('/api/generate', { protocol, ...(n >= 1280 && n <= 1440 ? { mtu: n } : {}) });
+        return this.postJson('/api/generate', {
+            protocol,
+            ...(n >= 1280 && n <= 1440 ? { mtu: n } : {}),
+            ...(randomTrailers ? { random_trailers: true } : {}),
+        });
     }
 
     fillTransportFields(params, { keepKey = false } = {}) {
@@ -537,8 +542,10 @@ class FormUi {
         const ctx = this.drawerCtx;
         const protocol = document.getElementById('t-protocol')?.value || window.Protocols.DEFAULT;
         const mtu = document.getElementById('f-mtu')?.value || ctx?.mtu;
+        const randomTrailers = window.Protocols.supportsAwg31(protocol)
+            && !!document.getElementById('t-RandomTrailers')?.checked;
         try {
-            const data = await this.fetchGenerated(protocol, mtu);
+            const data = await this.fetchGenerated(protocol, mtu, { randomTrailers });
             if (ctx !== this.drawerCtx) return;
             this.fillTransportFields(data.transport_params, { keepKey: true });
             if (ctx) ctx.transportEdited = false;

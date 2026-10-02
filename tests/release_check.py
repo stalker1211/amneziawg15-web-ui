@@ -11,12 +11,14 @@
 3. Boot it without a bind mount, with the default admin/changeme sign-in: / gives
    200 with the password, 401 without and 401 with a wrong one; every script loads; a
    form POST gets 415; .htpasswd is root:nginx 640.
-4. A server per protocol (from #appConfig), each with a client whose I1-I5 come from
-   Generate (the profiles in turn): running, the .conf's peers equal `awg show`'s,
-   mode 600; /status healthy.
+4. A server per protocol (from #appConfig), and one on AWG 3.1 with random trailers and
+   Generate's equal S1-S4, each with a client whose I1-I5 come from Generate (the
+   profiles in turn): running, the .conf's peers equal `awg show`'s, mode 600;
+   /status healthy.
 5. Stop one, `docker restart`: the same servers come back, the stopped one stays so.
 6. A real client on each server: its .conf as the panel issues it, brought up with
-   awg-quick in a second container from the same image, handshakes and pings.
+   awg-quick in a second container from the same image, handshakes and pings; through
+   the trailers server, 300 back-to-back pings at 56 and 1100 bytes lose none.
 7. The smoke tests (smoke_ui, smoke_events, smoke_signin last: it changes the
    password) in the puppeteer image, on the panel's network.
 8. With --scan, `publish_dockerhub.sh --scan`.
@@ -153,13 +155,18 @@ def main():
         config = json.loads(
             re.search(r'<script type="application/json" id="appConfig">(.*?)</script>', page, re.DOTALL).group(1)
         )
-        protocols = [p["id"] for p in config["protocols"]["supported"]]
-        for i, protocol in enumerate(protocols):
+        cases: list[tuple[str, str, dict | None]] = [(p["id"], p["id"], None) for p in config["protocols"]["supported"]]
+        # Random trailers with Generate's S1-S4, which it draws equal: step 6 wants no
+        # ping lost through it (amneziawg-go#186 drops data packets as false handshakes
+        # when S1-S4 differ).
+        trailers = api("POST", "/api/generate", {"protocol": "AWG 3.1", "random_trailers": True})["transport_params"]
+        cases.append(("AWG 3.1", "AWG 3.1 + trailers", {**trailers, "RandomTrailers": True}))
+        for i, (protocol, label, transport) in enumerate(cases):
             subnet = f"10.{90 + i}.0.0/24"
-            server = api("POST", "/api/servers", {"name": f"check {i}", "protocol": protocol, "port": 51820 + i,
-                                                  "subnet": subnet, "endpoint_host": HOST})  # fmt: skip
+            body = {"name": f"check {i}", "protocol": protocol, "port": 51820 + i, "subnet": subnet, "endpoint_host": HOST}
+            server = api("POST", "/api/servers", {**body, **({"transport_params": transport} if transport else {})})
             sid, iface = server["id"], server["interface"]
-            # Only its own subnet through the tunnel, so the client container holds all four.
+            # Only its own subnet through the tunnel, so the client container holds them all.
             client = api("POST", f"/api/servers/{sid}/clients", {"name": "phone", "allowed_ips": subnet})
             # I1-I5 from Generate, a profile per server in turn: step 6's handshake shows
             # the daemon takes them.
@@ -168,12 +175,12 @@ def main():
             cid = client["client"]["id"]
             api("POST", f"/api/servers/{sid}/clients/{cid}/client-params", {"client_params": packets})
             issued = api("GET", f"/api/servers/{sid}/clients/{cid}/config-both")["clean_config"]
-            configs[iface] = (f"{protocol}, {profile} I1-I5", subnet, issued)
+            configs[iface] = (f"{label}, {profile} I1-I5", subnet, issued, transport is not None)
             running = wait(lambda sid=sid: servers()[sid]["status"] == "running")
             peers = api("GET", f"/api/servers/{sid}/config")["config_content"].count("[Peer]")
             live = len(in_container("awg", "show", iface, "peers").stdout.split())
             conf = in_container("stat", "-c", "%a", f"/etc/amnezia/amneziawg/{iface}.conf").stdout.strip()
-            check(f"{protocol}: running, .conf peers {peers} == awg peers {live}, mode {conf}",
+            check(f"{label}: running, .conf peers {peers} == awg peers {live}, mode {conf}",
                   running and peers == live == 1 and conf == "600")  # fmt: skip
         check("/status is healthy", in_container("wget", "-q", "-O-", "http://127.0.0.1/status").returncode == 0)
 
@@ -188,7 +195,7 @@ def main():
 
         print("6. A client on each server connects (its .conf in a second container)", flush=True)
         sh("docker", "run", "-d", "--name", CLIENT, *tun, "--entrypoint", "sleep", IMAGE, "infinity")
-        for n, (iface, (protocol, subnet, conf)) in enumerate(configs.items()):
+        for n, (iface, (protocol, subnet, conf, lossless)) in enumerate(configs.items()):
             conf = "\n".join(line for line in conf.splitlines() if not line.startswith("DNS"))  # no resolvconf here
             in_container("sh", "-c", f"cat > /tmp/c{n}.conf", name=CLIENT, stdin=conf)
             up = in_container("awg-quick", "up", f"/tmp/c{n}.conf", name=CLIENT)
@@ -204,6 +211,13 @@ def main():
                 20,
             )
             check(f"{protocol}: the client's tunnel is up and handshakes", up.returncode == 0 and shook, up.stderr[-300:])
+            if lossless:
+                # Small and near-MTU packets: #186's branches each start at a size. Back
+                # to back (-A); with one H range claiming a few %, 300 lose some.
+                for size in (56, 1100):
+                    ping = in_container("ping", "-A", "-q", "-c", "300", "-W", "2", "-s", str(size), gateway, name=CLIENT)
+                    lost = re.search(r"(\d+)% packet loss", ping.stdout)
+                    check(f"{protocol}: no loss at {size} bytes", lost and lost.group(1) == "0", ping.stdout[-200:])
 
         print("7. Smoke tests (in the puppeteer image, on the container's network)", flush=True)
         for script in ("smoke_ui.js", "smoke_events.js", "smoke_signin.js"):  # signin last: it changes the password

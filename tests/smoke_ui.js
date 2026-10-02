@@ -381,6 +381,14 @@ function check(label, condition, detail) {
             amneziaApp.toggleProtocolFields('AWG 3.1', 't-');
             return getComputedStyle(document.getElementById('t-Awg31OptionsRow')).display !== 'none';
         }));
+        check('Randomize with random trailers on draws S1-S4 equal (amneziawg-go#186)', await page.evaluate(async () => {
+            const trailers = document.getElementById('t-RandomTrailers');
+            trailers.checked = true;
+            await amneziaApp.generateRandomParams();
+            const sizes = ['S1', 'S2', 'S3', 'S4'].map((k) => document.getElementById('t-' + k).value);
+            trailers.checked = false; // the create check below sends trailers off
+            return sizes[0] !== '' && sizes.every((v) => v === sizes[0]);
+        }));
         const createSubmission = await page.evaluate(async () => {
             const originalApiFetch = amneziaApp.apiFetch;
             const originalLoadServers = amneziaApp.loadServers;

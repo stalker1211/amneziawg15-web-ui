@@ -799,8 +799,9 @@ class AmneziaManager:
             return key
         return base64.b64encode(os.urandom(32)).decode("utf-8")
 
-    def generate_transport_params(self, protocol, mtu=1420):
-        """Random server-side parameters that pass validation with no warning (services/generator.py)."""
+    def generate_transport_params(self, protocol, mtu=1420, random_trailers=False):
+        """Random server-side parameters that pass validation with no warning (services/generator.py).
+        With random_trailers (AWG 3.1 only), S1-S4 come out equal (see trailer_loss)."""
         awg3 = self.protocol_supports_awg3(protocol)
         return generator.transport_params(
             with_s34=self.protocol_supports_s34(protocol),
@@ -808,6 +809,7 @@ class AmneziaManager:
             awg3=awg3,
             mtu=mtu,
             header_protection_key=self.generate_header_protection_key() if awg3 else None,
+            equal_padding=bool(random_trailers) and self.protocol_supports_awg31(protocol),
         )
 
     def generate_client_defaults(self, protocol=None):
@@ -1159,9 +1161,42 @@ AllowedIPs = {client["client_ip"]}/32
         """What client configs put in Endpoint's host: endpoint_host, else the detected IP."""
         return server.get("endpoint_host") or server.get("public_ip")
 
+    def trailer_loss(self, protocol, transport):
+        """The share of full-size data packets amneziawg-go drops as false handshakes, for
+        validated AWG 3.1 params with RandomTrailers on and unequal S1-S4; None otherwise.
+
+        amneziawg-go#186 (open at v3.1.20260828, in the kernel module too): with trailers
+        on, a data packet is tried as initiation, response and cookie before transport,
+        each branch reading 4 bytes at offset S1, S2, S3. Where that S differs from S4 the
+        bytes are junk or ciphertext, uniform, so the branch's H range claims width / 2^32
+        of the packets, which die at CheckMAC1 with nothing logged. Where it equals S4 they
+        are the packet's own type, an H4 value that disjoint ranges keep out: none. Smaller
+        packets skip the larger branches, so this is the most a packet can lose.
+        """
+        if not (self.protocol_supports_awg31(protocol) and transport.get("RandomTrailers")):
+            return None
+        sizes = [transport.get(key) for key in ("S1", "S2", "S3", "S4")]
+        if None in sizes or len(set(sizes)) == 1:
+            return None
+        kept = 1.0
+        for key, size in zip(("H1", "H2", "H3"), sizes[:3], strict=True):
+            if size != sizes[3]:
+                header = self.parse_header_value(transport.get(key, ""), protocol)
+                kept *= 1 - (header["end"] - header["start"] + 1) / 2**32
+        return 1 - kept
+
     def transport_param_warnings(self, protocol, transport, mtu):
         """Practical guidance for validated transport params; none of it is a protocol limit."""
         warnings = []
+
+        loss = self.trailer_loss(protocol, transport)
+        if loss is not None:
+            share = f"about {100 * loss:.2g}%" if loss >= 0.0001 else "under 0.01%"
+            warnings.append(
+                f"Random trailers with unequal S1-S4: the daemon can take data packets for handshakes "
+                f"and drop them ({share} with these H ranges; amneziawg-go#186). "
+                f"Equal S1-S4 avoid it: Randomize draws them."
+            )
 
         def outside_common_range(key):
             value = transport.get(key)

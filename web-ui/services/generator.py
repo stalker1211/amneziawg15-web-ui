@@ -3,10 +3,10 @@
 The draws are ported from AmneziaWG Architect's generator (Any-Tech-ARCHITECT,
 src/engines/awg/generator: strategy.ts, awg3.ts, index.ts), keeping the traps its
 comments record. Its parameter catalogue is not ported: its RandomTrailers scope and
-S4 cap contradict the daemon's source (DEVELOPMENT.md §4). Nor is its 3.1 "narrow H"
-mode: amneziawg-go classifies a packet with two comparisons per header range
-(UintRange.Contains), so a wide range costs nothing, and Architect's windows are
-1k-50k wide in every mode anyway.
+S4 cap contradict the daemon's source (DEVELOPMENT.md §4). Header windows are 1k-50k
+wide, as in every Architect mode. Width is not free: with RandomTrailers on, a data
+packet is tried as each handshake type first, and a range can claim it (amneziawg-go
+#186). So with trailers on, S1-S4 are drawn equal, which closes that.
 
 Everything drawn here passes the panel's validators without a warning; a test draws
 many sets through them.
@@ -152,8 +152,18 @@ def lift_above_floor(value, floor, high):
     return rnd(floor, high) if high > floor else floor
 
 
-def padding_sizes(*, with_s34, header_protection, mtu):
-    """S1-S4 with none of the three equal-length cases, and the nonce floor if needed."""
+def padding_sizes(*, with_s34, header_protection, mtu, equal=False):
+    """S1-S4 with none of the three equal-length cases, and the nonce floor if needed.
+
+    equal (AWG 3.1 with RandomTrailers): one size for all four. amneziawg-go then reads
+    every handshake branch's header window at a data packet's own type field, an H4
+    value that disjoint ranges keep out of H1-H3, so no data packet is taken for a
+    handshake and dropped (amneziawg-go#186). 15-32: S4 pads every data packet, and
+    the trailers already vary the handshake lengths.
+    """
+    if equal and with_s34:
+        size = rnd(S_MIN, S4_MAX)
+        return {"S1": size, "S2": size, "S3": size, "S4": size}
     s_max = min(S_MAX, mtu - 148)
     s1, s2 = rnd(S_MIN, s_max), rnd(S_MIN, s_max)
     s2 = avoid_collision(s2, s_max, lambda v: v == s1 + INIT_TO_RESPONSE)
@@ -169,10 +179,11 @@ def padding_sizes(*, with_s34, header_protection, mtu):
     return {**sizes, "S3": s3, "S4": s4}
 
 
-def transport_params(*, with_s34, header_ranges, awg3, mtu, header_protection_key=None):
+def transport_params(*, with_s34, header_ranges, awg3, mtu, header_protection_key=None, equal_padding=False):
     """Server-side parameters: S1-S4, H1-H4 and, on AWG 3.x, a HeaderProtectionKey."""
     # S values are ints; H ranges and the key are strings.
-    params: dict[str, int | str] = {**padding_sizes(with_s34=with_s34, header_protection=awg3, mtu=mtu)}
+    sizes = padding_sizes(with_s34=with_s34, header_protection=awg3, mtu=mtu, equal=equal_padding)
+    params: dict[str, int | str] = {**sizes}
     for key in ("H1", "H2", "H3", "H4"):
         params[key] = header_range(key) if header_ranges else str(header_single(key))
     if awg3 and header_protection_key:

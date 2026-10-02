@@ -171,6 +171,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
         """Random parameters for a form, the one generator the UI uses: {protocol, mtu}
         -> {protocol, transport_params, client_defaults}. A dry run like /api/validate;
         nothing is saved. Everything drawn passes the validators without a warning.
+        {random_trailers: true} (the form's switch; AWG 3.1 only) draws S1-S4 equal.
 
         With {signature_profile, server_id, host?} it also answers I1-I5 shaped like that
         profile for a client of that server (services/signatures.py): signature_packets,
@@ -180,7 +181,9 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
         mtu = amnezia_manager.validate_mtu(data.get("mtu", amnezia_manager.default_mtu))
         answer = {
             "protocol": protocol,
-            "transport_params": amnezia_manager.generate_transport_params(protocol, mtu),
+            "transport_params": amnezia_manager.generate_transport_params(
+                protocol, mtu, random_trailers=to_bool(data.get("random_trailers"), False)
+            ),
             "client_defaults": amnezia_manager.generate_client_defaults(protocol),
         }
         if data.get("signature_profile"):

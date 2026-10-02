@@ -100,6 +100,17 @@ class PaddingTests(unittest.TestCase):
     def test_awg15_has_no_s3_s4(self):
         self.assertEqual(set(generator.padding_sizes(with_s34=False, header_protection=False, mtu=1280)), {"S1", "S2"})
 
+    def test_equal_padding_is_one_size_for_all_four(self):
+        # With random trailers, amneziawg-go#186: equal S keeps data packets out of the
+        # handshake branches. The size still varies between servers.
+        seen = set()
+        for _ in range(DRAWS):
+            sizes = generator.padding_sizes(with_s34=True, header_protection=True, mtu=1280, equal=True)
+            self.assertEqual(len(set(sizes.values())), 1, sizes)
+            self.assertTrue(generator.S_MIN <= sizes["S1"] <= generator.S4_MAX, sizes)
+            seen.add(sizes["S1"])
+        self.assertGreater(len(seen), 10)
+
 
 class ClientDefaultsTests(unittest.TestCase):
     def test_junk_is_small(self):
@@ -138,6 +149,24 @@ class ThroughTheValidatorsTests(unittest.TestCase):
                     client = self.m.validate_client_params(self.m.generate_client_defaults(protocol))
                     self.assertEqual(self.m.client_param_warnings(client, mtu), [], client)
 
+    def test_many_draws_with_random_trailers_on(self):
+        for mtu in (1280, 1420):
+            for _ in range(DRAWS // 3):
+                transport = self.m.generate_transport_params("AWG 3.1", mtu, random_trailers=True)
+                validated = self.m.validate_transport_params("AWG 3.1", {**transport, "RandomTrailers": True})
+                self.assertIsNone(self.m.trailer_loss("AWG 3.1", validated), transport)
+                self.assertEqual(self.m.transport_param_warnings("AWG 3.1", validated, mtu), [], transport)
+
+    def test_random_trailers_only_matter_on_31(self):
+        # 2.0 and 3.0 have no trailers: their S1-S4 stay drawn apart.
+        for protocol in ("AWG 2.0", "AWG 3.0"):
+            unequal = sum(
+                len({v for k, v in self.m.generate_transport_params(protocol, 1420, random_trailers=True).items()
+                     if k in ("S1", "S2", "S3", "S4")}) > 1
+                for _ in range(20)
+            )  # fmt: skip
+            self.assertGreater(unequal, 15, protocol)
+
     def test_protocol_shapes(self):
         awg15 = self.m.generate_transport_params("AWG 1.5", 1420)
         self.assertEqual(set(awg15), {"S1", "S2", "H1", "H2", "H3", "H4"})
@@ -149,6 +178,53 @@ class ThroughTheValidatorsTests(unittest.TestCase):
             params = self.m.generate_transport_params(protocol, 1420)
             self.assertTrue(self.m.is_valid_wireguard_key(params["HeaderProtectionKey"]), protocol)
             self.assertIn("RejectAfterTime", self.m.generate_client_defaults(protocol))
+
+
+# amneziawg-go#186's ranges, from a production interface: 16.113% expected, 16.082% measured.
+ISSUE_186 = {"H1": "405138553-456138212", "H2": "680931238-1038459501", "H3": "1114423399-1432068193",
+             "H4": "1500000000-1500001000", "S1": 97, "S2": 41, "S3": 133, "S4": 24}  # fmt: skip
+
+
+class TrailerLossTests(unittest.TestCase):
+    """amneziawg-go#186: the warning for random trailers with unequal S1-S4."""
+
+    def setUp(self):
+        self.m = build_manager()
+
+    def validated(self, protocol="AWG 3.1", trailers=True, **overrides):
+        return self.m.validate_transport_params(protocol, {**ISSUE_186, "RandomTrailers": trailers, **overrides})
+
+    def warnings(self, transport, protocol="AWG 3.1"):
+        return [w for w in self.m.transport_param_warnings(protocol, transport, 1420) if "trailers" in w]
+
+    def loss(self, transport):
+        value = self.m.trailer_loss("AWG 3.1", transport)
+        if value is None:
+            self.fail("expected a loss estimate")
+        return value
+
+    def test_the_issues_ranges_lose_what_it_measured(self):
+        transport = self.validated()
+        self.assertAlmostEqual(self.loss(transport), 0.16113, places=4)
+        [warning] = self.warnings(transport)
+        self.assertIn("about 16%", warning)
+        self.assertIn("amneziawg-go#186", warning)
+
+    def test_a_branch_reading_at_s4_loses_nothing(self):
+        # S1 = S4: the H1 branch reads the packet's own type field, an H4 value.
+        only_h2_h3 = 1 - (1 - 357528264 / 2**32) * (1 - 317644795 / 2**32)
+        self.assertAlmostEqual(self.loss(self.validated(S1=24)), only_h2_h3, places=6)
+
+    def test_narrow_ranges_still_warn_but_say_how_little(self):
+        narrow = self.validated(H1="1000000-1025000", H2="2000000-2025000", H3="3000000-3025000")
+        [warning] = self.warnings(narrow)
+        self.assertIn("under 0.01%", warning)
+
+    def test_no_warning_with_equal_s_trailers_off_or_another_protocol(self):
+        self.assertEqual(self.warnings(self.validated(S1=24, S2=24, S3=24)), [])
+        self.assertEqual(self.warnings(self.validated(trailers=False)), [])
+        self.assertEqual(self.warnings(self.validated("AWG 3.0"), "AWG 3.0"), [])
+        self.assertIsNone(self.m.trailer_loss("AWG 3.0", self.validated("AWG 3.0")))
 
 
 class GenerateRouteTests(unittest.TestCase):
@@ -164,6 +240,12 @@ class GenerateRouteTests(unittest.TestCase):
         self.assertIn("HeaderProtectionKey", data["transport_params"])
         self.assertIn("KeepaliveTimeout", data["client_defaults"])
         self.assertFalse(os.path.exists(self.manager.config_file))
+
+    def test_random_trailers_draw_equal_padding(self):
+        body = {"protocol": "AWG 3.1", "random_trailers": True}
+        for _ in range(20):
+            transport = self.client.post("/api/generate", json=body).get_json()["transport_params"]
+            self.assertEqual(len({transport[k] for k in ("S1", "S2", "S3", "S4")}), 1, transport)
 
     def test_defaults_and_bad_input(self):
         data = self.client.post("/api/generate", json={}).get_json()
