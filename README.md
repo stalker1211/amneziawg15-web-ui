@@ -8,7 +8,7 @@ Everything is configurable in the panel, including its own settings (⚙ in the
 header: sign-in, logging, GeoIP). An environment variable can
 pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
 
-Current version: **2.6**
+Current version: **2.7**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
@@ -33,6 +33,12 @@ Current version: **2.6**
   started (and since when): the kernel's counters for its interface, so a client
   suspended or deleted since still counts. A stop and start begins them again. A click
   opens the Traffic view, as on the graph.
+- **Activity** — what happened, newest first: changes to servers, clients and
+  settings (old → new for short values, never a key), clients coming online and going
+  offline (endpoint, country, how long, bytes), health problems and egress changes,
+  and failed sign-ins. From the header's clock button, or a server's ⋯ for that server
+  alone; filters per kind; live. Kept in memory (the last ~1000), and each event is
+  also a JSON line in `docker logs` (see [Logging](#-logging)).
 - **Signature packets from a profile** — in a client's drawer, **Generate** fills
   I1–I5 with packets shaped like a QUIC connection opening or a DNS lookup (or random
   ones), so a handshake is preceded by traffic that looks like something else.
@@ -64,9 +70,9 @@ Current version: **2.6**
 ## 📝 Logging
 
 There are two independent log streams, each set in **⚙ → Logging** (or pinned by its
-variable).
+variable), and the Activity events.
 
-**VPN daemon (`amneziawg-go`)** — `off`, `error` (the default: silent unless something
+**AWG daemon (`amneziawg-go`)** — `off`, `error` (the default: silent unless something
 fails) or `debug`, which adds every handshake and "Received message with unknown
 type": the only trace of a client with outdated parameters, or of a scanner. The
 daemon reads its level when a server starts, so the drawer offers to restart the
@@ -74,7 +80,7 @@ running servers. Variable: `AWG_LOG_LEVEL` (`verbose` means `debug`, `silent` me
 `off`); it reaches the daemon only, never the panel's own level. The file is
 `AWG_LOG_FILE` (default `/var/log/amnezia/amneziawg-go.log`).
 
-Use **⋯ → Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
+Use **⋯ → AWG Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
 
 **Web UI** — always on, written to `/var/log/webui/access.log` with timestamps,
 levels and module names. `ERROR`/`WARNING`/`INFO` (default)/`DEBUG`, applied at once.
@@ -83,6 +89,16 @@ Variable: `LOG_LEVEL`.
 ```
 2026-08-07 17:49:02 INFO    [services.amnezia_manager] Server myvpn started successfully
 ```
+
+**Activity events** — one JSON line each on the container's output, so `docker logs`
+(and Promtail/Loki) get them and nothing else of the panel's; supervisord writes its
+own lines there too, so the events carry `"src": "awg-webui"`:
+
+```
+{"seq": 42, "ts": "2026-10-02T19:32:52Z", "kind": "change", "event": "client.params", "server_id": "abc123", "server": "home", "client_id": "cl1", "client": "iphone", "detail": {"changes": [{"field": "MTU", "old": 1420, "new": 1380}]}, "src": "awg-webui"}
+```
+
+In Grafana: `{container="..."} | json | src="awg-webui"`.
 
 ## 🏗️ Architecture
 
@@ -199,7 +215,8 @@ Basic Auth credentials.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes and bit/s over the last 7 s, endpoint, handshake age), and a running server's `totals` since its interface came up (`received_bytes`, `sent_bytes`, `since`) |
-| GET | `/api/events` | live updates, a Server-Sent Events stream: `traffic_update` (every 7 s per running server: its time `at`, the same per-client shape as `traffic` above, and its `totals`), `server_status` (after a start or stop), `ping` (every 15 s when idle) |
+| GET | `/api/events` | live updates, a Server-Sent Events stream: `traffic_update` (every 7 s per running server: its time `at`, the same per-client shape as `traffic` above, and its `totals`), `server_status` (after a start or stop), `activity` (each new event, as in `/api/activity`), `ping` (every 15 s when idle) |
+| GET | `/api/activity` | the Activity events kept in memory: `{"events": [...newest first], "since": "<boot time>"}` |
 | GET | `/api/servers/<id>/traffic?range=1h\|6h\|24h` | the traffic history per client, in bit/s: every 7 s for `1h` (the default), per minute for `6h` and `24h`; `null` where there is no data; totals in bytes; `since`, when the history started |
 | POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `endpoint_host`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
 | DELETE | `/api/servers/<id>` | delete server and its clients |
@@ -357,7 +374,7 @@ Two kinds, and the distinction matters:
 | `H1`–`H4` | server | 1.5+ | Message header values. 2.0+ also accepts a range (`1200-1400`); ranges must not overlap |
 | `HeaderProtectionKey` | server | 3.0+ | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
 | `ContentPaddingAddition` | client | 3.0+ | Extra random bytes per data packet (`10-40`) |
-| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default |
+| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default. Keep RekeyAfterTime under 180: the server keeps WireGuard's timers and drops the session at 180 s (the form warns) |
 | `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends. Keep S1–S4 equal with it: otherwise amneziawg-go drops some data packets as false handshakes ([#186](https://github.com/amnezia-vpn/amneziawg-go/issues/186)). Randomize draws them equal while the switch is on, and the form warns with the estimated loss. Without the switch, equal S1–S4 get a warning instead: initiation and response keep WireGuard's 56-byte size difference |
 | `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
 | `MTU` | — | all | Interface MTU (1280–1440) |
