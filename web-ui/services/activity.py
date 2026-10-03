@@ -6,7 +6,8 @@ RING_SIZE, for GET /api/activity; a restart empties it, like the traffic history
 the page's live updates (an SSE `activity` event), and one JSON line on PID 1's
 stdout, which is supervisord (start.sh execs it), so `docker logs` and Promtail get
 the events and nothing else of the panel's, whose log stays in supervisord's files.
-The line adds `"src": "awg-webui"`, since supervisord writes its own lines there too.
+The line adds `"src": "awg-webui"`, since supervisord writes its own lines there too,
+and a `level` (`LEVELS`: info, warning or error), so Grafana shows it like any log.
 
 An event never carries a key, a password, I1-I5's content or a config: a *change*
 names the fields it touched, with old -> new only for the short, non-secret values
@@ -25,6 +26,9 @@ logger = get_logger(__name__)
 STDOUT = "/proc/1/fd/1"
 SOURCE = "awg-webui"
 RING_SIZE = 1000
+# The stdout line's `level`, for log tooling (Grafana colours only standard level names);
+# `kind` stays the category. Any other event is "info".
+LEVELS = {"health.problem": "error", "egress.change": "warning", "auth.fail": "warning"}
 
 # Fields whose old and new values an event may show; any other field goes by name
 # alone (I1-I5, HeaderProtectionKey, RandomTrailers, ContentPaddingAddition...).
@@ -119,7 +123,8 @@ class Activity:
         try:
             if self._file is None:
                 self._file = open(self._path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115 -- kept open
-            self._file.write(json.dumps({"src": SOURCE, **item}, ensure_ascii=False) + "\n")
+            line = {"src": SOURCE, "level": LEVELS.get(item["event"], "info"), **item}
+            self._file.write(json.dumps(line, ensure_ascii=False) + "\n")
         except OSError as e:
             # Logged once; the ring and the page still get every event.
             self._failed = True

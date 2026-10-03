@@ -55,10 +55,12 @@ class ActivityTests(unittest.TestCase):
         )  # fmt: skip
         self.activity.record("auth", "auth.fail", detail={"address": "192.0.2.1", "user": None, "count": 3})
         first, second = self.lines()
-        # The line is the event plus its source, so Grafana can tell it from supervisord's.
-        self.assertEqual(set(first), EVENT_KEYS | {"src"})
-        self.assertEqual(first, {"src": "awg-webui", **item})
+        # The line is the event plus its source, so Grafana can tell it from supervisord's,
+        # and a level, so Grafana shows it like any log.
+        self.assertEqual(set(first), EVENT_KEYS | {"src", "level"})
+        self.assertEqual(first, {"src": "awg-webui", "level": "info", **item})
         self.assertEqual((second["seq"], second["server_id"], second["client"]), (2, None, None))
+        self.assertEqual(second["level"], "warning")
         # The page gets the same object as an SSE `activity` event.
         self.assertEqual(self.events.published[0], ("activity", item))
         self.assertEqual(self.activity.payload()["since"], "2026-10-02T18:52:52Z")
@@ -201,7 +203,9 @@ class ChangeEventTests(unittest.TestCase):
         streamed = [data for name, data in self.manager.events.published if name == "activity"]
         self.assertEqual(streamed, self.events)
         lines = Path(self.manager.activity._path).read_text(encoding="utf-8").splitlines()
-        self.assertEqual([json.loads(line) for line in lines], [{"src": "awg-webui", **e} for e in self.events])
+        self.assertEqual(
+            [json.loads(line) for line in lines], [{"src": "awg-webui", "level": "info", **e} for e in self.events]
+        )
 
     def test_no_secret_in_any_event(self):
         from tests.test_http_api import SECRET_KEYS

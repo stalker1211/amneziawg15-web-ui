@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## Unreleased
+
+### Activity
+- **A level on each event in `docker logs`:** the JSON line now carries `level` —
+  `error` for `health.problem`, `warning` for `auth.fail` and `egress.change`, `info`
+  for the rest — so Grafana colours the events like any other log instead of showing
+  them as unknown. `kind` stays the category; the panel and `/api/activity` are
+  unchanged.
+
 ## Version 2.7 (2026-10-02)
 
 ### Activity

@@ -92,13 +92,26 @@ Variable: `LOG_LEVEL`.
 
 **Activity events** — one JSON line each on the container's output, so `docker logs`
 (and Promtail/Loki) get them and nothing else of the panel's; supervisord writes its
-own lines there too, so the events carry `"src": "awg-webui"`:
+own lines there too, so the events carry `"src": "awg-webui"`. Each also carries a
+`level` — `error` for `health.problem`, `warning` for `auth.fail` and `egress.change`,
+`info` for the rest — while `kind` stays the category:
 
 ```
-{"seq": 42, "ts": "2026-10-02T19:32:52Z", "kind": "change", "event": "client.params", "server_id": "abc123", "server": "home", "client_id": "cl1", "client": "iphone", "detail": {"changes": [{"field": "MTU", "old": 1420, "new": 1380}]}, "src": "awg-webui"}
+{"src": "awg-webui", "level": "info", "seq": 42, "ts": "2026-10-02T19:32:52Z", "kind": "change", "event": "client.params", "server_id": "abc123", "server": "home", "client_id": "cl1", "client": "iphone", "detail": {"changes": [{"field": "MTU", "old": 1420, "new": 1380}]}}
 ```
 
-In Grafana: `{container="..."} | json | src="awg-webui"`.
+In Grafana: `{container="..."} | json | src="awg-webui"`. To have Grafana colour the
+events by level like other logs, promote `level` (and `kind`) to labels in Promtail:
+
+```yaml
+pipeline_stages:
+  - docker: {}
+  - match:
+      selector: '{container="amnezia-web-ui"}'
+      stages:
+        - json: { expressions: { level: level, kind: kind, src: src } }
+        - labels: { level: , kind: , src: }
+```
 
 ## 🏗️ Architecture
 
