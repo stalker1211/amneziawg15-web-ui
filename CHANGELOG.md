@@ -1,5 +1,55 @@
 # CHANGELOG
 
+## Version 2.7 (2026-10-02)
+
+### Activity
+- **The Activity view:** what happened in the panel, newest first, with a heading per
+  day. Opened from the header's clock button, or from a server's ⋯ (then only that
+  server, which a select changes; deleted servers stay listed). Filters: All, Changes,
+  Sessions, Health and Sign-ins, each with its count. New events arrive live.
+- **What is recorded:** *changes*: a server created, deleted, started, stopped,
+  renamed or edited, a client added, deleted, suspended, resumed, renamed or edited,
+  the settings and the sign-in changed, with old → new for short values (MTU, port,
+  DNS, AllowedIPs, S/H/J, the timers) and field names alone for the rest, never a
+  key, a password or I1–I5's content. *Sessions*: a client online (endpoint, and
+  country with GeoIP on) and offline (how long, bytes each way). *Health*: a problem
+  that turns the container unhealthy appearing or clearing, and a server's egress IP
+  changing. *Sign-ins*: failed sign-ins from nginx's log, one entry per address per
+  minute with a count and the user typed. Kept in memory (the last ~1000); a restart
+  starts the list over.
+- **Events in `docker logs`:** each event is also one JSON line on the container's
+  output, marked `"src": "awg-webui"`, beside supervisord's own lines; the panel's
+  log stays in its files. Loki/Grafana: `{container="..."} | json | src="awg-webui"`.
+  In the API: `GET /api/activity` (`events`, newest first, and `since`, the boot), and
+  an `activity` event on the live stream.
+- **Online means a handshake within 300 s**, for every protocol, on the page, in the
+  history and in the session events.
+
+### Parameters
+- **Random trailers without packet loss:** with trailers on and S1–S4 different, the
+  daemon takes some data packets for handshakes and drops them (amneziawg-go#186;
+  28 % of pings in a measured case). Randomize with the trailers switch on now draws
+  one S for all four (15–32), and the form warns when they differ, with an estimate
+  of the share lost. The reverse warns too: equal S1–S4 without trailers keep
+  WireGuard's handshake size gap. Existing servers are left as they are.
+- **A timer warning:** an AWG 3.x client's RekeyAfterTime at 180 s or more warns. The
+  server keeps WireGuard's timers and drops the session at 180 s, so traffic stops for
+  about 15 s until the client handshakes again. Generate never draws one.
+
+### Interface
+- **Names:** a server's ⋯ "Logs" reads "AWG Logs", and the settings' "VPN daemon" log
+  level reads "AWG daemon".
+
+### Image
+- **No git in the provenance:** a published image no longer names the build's git
+  remote and commit in its provenance attestation. Tags pushed before keep theirs
+  until rebuilt.
+
+### Tooling
+- **The release checker** adds an AWG 3.1 server with random trailers and Generate's
+  S1–S4, through which 300 back-to-back pings at 56 and 1100 bytes must lose none,
+  and its Activity smoke check runs on its own data.
+
 ## Version 2.6 (2026-10-01)
 
 ### Traffic
