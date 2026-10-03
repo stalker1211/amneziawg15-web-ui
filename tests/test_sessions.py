@@ -110,39 +110,26 @@ class SessionTests(unittest.TestCase):
 
 
 class ThresholdTests(unittest.TestCase):
-    """Online is a handshake within 300 s, or twice an AWG 3.x client's RekeyAfterTime
-    top when that is longer: such a device handshakes only that often."""
+    """Online is a handshake within 300 s, for every protocol: an AWG 3.x client's long
+    RekeyAfterTime does not stretch it, since the server rekeys every 120 s itself."""
 
-    def setUp(self):
-        self.manager = build_manager()
-
-    def threshold(self, protocol, rekey_after):
-        server = {"protocol": protocol}
-        client = {"client_params": {"RekeyAfterTime": rekey_after} if rekey_after else {}}
-        return self.manager.active_within(server, client)
-
-    def test_the_threshold(self):
-        self.assertEqual(self.threshold("AWG 3.1", None), 300)  # unset: WireGuard's 120
-        self.assertEqual(self.threshold("AWG 3.1", "100-125"), 300)  # what Generate draws
-        self.assertEqual(self.threshold("AWG 3.0", "200-240"), 480)
-        self.assertEqual(self.threshold("AWG 3.1", "400"), 800)
-        # Below 3.0 the timers are not rendered, so the device keeps WireGuard's.
-        self.assertEqual(self.threshold("AWG 2.0", "400"), 300)
-
-    def test_sessions_and_the_page_agree_on_it(self):
-        server = self.manager.create_wireguard_server(
+    def test_the_page_and_the_status_use_300_s(self):
+        manager = build_manager()
+        server = manager.create_wireguard_server(
             {"name": "slow", "protocol": "AWG 3.1", "subnet": "10.8.0.0/24", "auto_start": False}
         )
-        client, _ = self.manager.add_wireguard_client(server["id"], "tablet")
-        stored = self.manager.get_client(client["id"])
-        stored["client_params"]["RekeyAfterTime"] = "200-240"
+        client, _ = manager.add_wireguard_client(server["id"], "tablet")
+        stored = manager.get_client(client["id"])
+        stored["client_params"]["RekeyAfterTime"] = "400-420"
         iface = server["interface"]
-        dump = "\n".join([interface_line(iface), peer_line(iface, client["client_public_key"], handshake=T0 - 450)])
-        self.manager.run_command = lambda args: dump
-        with mock.patch("services.amnezia_manager.time.time", return_value=T0):
-            self.manager.read_telemetry()
-        self.assertTrue(self.manager.get_traffic_for_server(server["id"])[client["id"]]["active"])
-        self.assertEqual(self.manager.client_status({**stored, "server_id": server["id"]}), "active")
+        for age, active in ((300, True), (301, False)):
+            dump = "\n".join([interface_line(iface), peer_line(iface, client["client_public_key"], handshake=T0 - age)])
+            manager.run_command = lambda args, dump=dump: dump
+            with mock.patch("services.amnezia_manager.time.time", return_value=T0):
+                manager.read_telemetry()
+            self.assertEqual(manager.get_traffic_for_server(server["id"])[client["id"]]["active"], active, age)
+            status = manager.client_status({**stored, "server_id": server["id"]})
+            self.assertEqual(status, "active" if active else "inactive", age)
 
 
 if __name__ == "__main__":

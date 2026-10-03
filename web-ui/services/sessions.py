@@ -2,8 +2,8 @@
 (DEVELOPMENT.md §10, 2.7 Activity part 2).
 
 No read of its own: each tick the manager hands over what the last `awg show all
-dump` said of every client -- online or not (a handshake within the client's
-threshold, `AmneziaManager.active_within`), and its peer's counters -- and gets back
+dump` said of every client -- online or not (a handshake within
+`AmneziaManager.ACTIVE_WITHIN_SECONDS`), and its peer's counters -- and gets back
 the clients that came online or went offline since the tick before.
 
 The first tick after boot is a baseline and reports nothing: a client online then

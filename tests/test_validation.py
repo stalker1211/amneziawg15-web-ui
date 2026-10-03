@@ -368,7 +368,13 @@ class ParamWarningTests(unittest.TestCase):
             ("RekeyAfterTime reaches 120, not below RejectAfterTime's start (14): "
              "the session can be rejected before it rekeys."),
         ])  # fmt: skip
-        self.assertEqual(len(warnings(RekeyAfterTime="150-200")), 1)
+        self.assertEqual(len(warnings(RekeyAfterTime="150-200")), 1)  # the client's own 180, not twice
+        # Its own RejectAfterTime later, but the server's is WireGuard's 180.
+        self.assertEqual(warnings(RekeyAfterTime="400-420", RejectAfterTime="500-520"), [
+            ("RekeyAfterTime reaches 420, not below the server's RejectAfterTime (180): the server drops "
+             "the session first, and traffic stops for ~15 s until the client handshakes again."),
+        ])  # fmt: skip
+        self.assertEqual(warnings(RekeyAfterTime="150-179", RejectAfterTime="300"), [])
         self.assertEqual(warnings(MaxHandshakeAttempts="1-3"), [])
 
 

@@ -115,8 +115,8 @@ class AmneziaManager:
     DEFAULT_ALLOWED_IPS = "0.0.0.0/0"
 
     # A client is online (and "active") after a handshake this recent; with keepalive
-    # 25 a connected device handshakes about every 2 minutes (RekeyAfterTime). An AWG
-    # 3.x client's own RekeyAfterTime can be longer: see active_within.
+    # 25 a connected device handshakes about every 2 minutes (RekeyAfterTime). Flat for
+    # AWG 3.x too: the server keeps WireGuard's timers and rekeys every 120 s itself.
     ACTIVE_WITHIN_SECONDS = 5 * 60
 
     # awg-quick runs amneziawg-go through this wrapper when the daemon logs, so its
@@ -1326,12 +1326,14 @@ AllowedIPs = {client["client_ip"]}/32
         return warnings
 
     def timing_warnings(self, client_params):
-        """The two AWG 3.x timer rules (timers.go), checked when any of them is set.
+        """The AWG 3.x timer rules (timers.go), checked when any of them is set.
 
         keyRefreshTimeoutReceiving = RejectAfterTime - KeepaliveTimeout.lo -
         RekeyTimeout.lo, clamped at 0, and at 0 every received packet counts as due
         for a rekey (receive.go). And a session rekeys before it is rejected only if
-        RekeyAfterTime ends before RejectAfterTime starts.
+        RekeyAfterTime ends before RejectAfterTime starts -- the client's own, and the
+        server's: its config has no timers, so WireGuard's 180 s. Past that the server
+        drops the client's packets until the client handshakes again (~15 s, measured).
         """
         involved = ("RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout")
         if not any(client_params.get(key) for key in involved):
@@ -1355,6 +1357,11 @@ AllowedIPs = {client["client_ip"]}/32
             warnings.append(
                 f"RekeyAfterTime reaches {rekey_after_hi}, not below RejectAfterTime's start ({reject_lo}): "
                 "the session can be rejected before it rekeys."
+            )
+        elif rekey_after_hi >= (server_reject := self.WG_DEFAULT_TIMINGS["RejectAfterTime"]):
+            warnings.append(
+                f"RekeyAfterTime reaches {rekey_after_hi}, not below the server's RejectAfterTime ({server_reject}): "
+                "the server drops the session first, and traffic stops for ~15 s until the client handshakes again."
             )
         return warnings
 
@@ -2029,7 +2036,7 @@ PersistentKeepalive = 25
         for server in self.config["servers"]:
             for client in server.get("clients", []):
                 info, seconds = self._peer_telemetry(server, client)
-                online = not client.get("suspended") and self.is_online(server, client, seconds)
+                online = not client.get("suspended") and self.is_online(seconds)
                 observed.append((client.get("id"), online, info.get("rx"), info.get("tx")))
                 where[client.get("id")] = (server, client, info)
         for event, client_id, detail in self.sessions.tick(self._telemetry["at"], observed):
@@ -2062,7 +2069,7 @@ PersistentKeepalive = 25
                 info, seconds = self._peer_telemetry(server, client)
                 if client.get("suspended"):
                     state = TrafficHistory.SUSPENDED
-                elif self.is_online(server, client, seconds):
+                elif self.is_online(seconds):
                     state = TrafficHistory.ONLINE
                 else:
                     state = TrafficHistory.OFFLINE
@@ -2076,22 +2083,9 @@ PersistentKeepalive = 25
         match = re.fullmatch(r"\[([^\]]+)\]:\d+|([^:]+):\d+", endpoint or "")
         return (match.group(1) or match.group(2)) if match else None
 
-    def active_within(self, server, client):
-        """How recent a handshake keeps the client online: ACTIVE_WITHIN_SECONDS, or
-        twice the top of an AWG 3.x client's RekeyAfterTime when that is longer -- the
-        device handshakes only that often, and its sessions would flap."""
-        top = 0
-        if self.protocol_supports_awg3(server.get("protocol")):
-            low, _, high = str((client.get("client_params") or {}).get("RekeyAfterTime") or "").partition("-")
-            try:
-                top = int(high or low)
-            except ValueError:
-                top = 0  # unset: WireGuard's 120
-        return max(self.ACTIVE_WITHIN_SECONDS, 2 * top)
-
-    def is_online(self, server, client, seconds):
-        """`seconds` since the client's last handshake (None: never) within its threshold."""
-        return seconds is not None and seconds <= self.active_within(server, client)
+    def is_online(self, seconds):
+        """`seconds` since the client's last handshake (None: never) within ACTIVE_WITHIN_SECONDS."""
+        return seconds is not None and seconds <= self.ACTIVE_WITHIN_SECONDS
 
     def _peer_telemetry(self, server, client):
         """(the client's dump entry or {}, seconds since its last handshake or None)."""
@@ -2124,7 +2118,7 @@ PersistentKeepalive = 25
                 "geo_country_code": geo_country_code,
                 "latest_handshake_at": info.get("handshake_at"),
                 "latest_handshake_seconds": seconds,
-                "active": self.is_online(server, client, seconds),
+                "active": self.is_online(seconds),
             }
         return traffic
 
@@ -2137,8 +2131,8 @@ PersistentKeepalive = 25
         return self.interface_totals(server["interface"])
 
     def client_status(self, client):
-        """'active' after a handshake within its threshold (active_within; last snapshot),
-        else 'inactive'."""
+        """'active' after a handshake within ACTIVE_WITHIN_SECONDS (last snapshot), else
+        'inactive'."""
         server = self.get_server(client.get("server_id")) or {}
         _, seconds = self._peer_telemetry(server, client)
-        return "active" if self.is_online(server, client, seconds) else "inactive"
+        return "active" if self.is_online(seconds) else "inactive"
