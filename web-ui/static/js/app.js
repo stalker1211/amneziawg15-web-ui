@@ -663,9 +663,9 @@ class AmneziaApp {
         if (!server) return;
         window.Ui.openMenu(anchor, [
             { label: 'Traffic', icon: 'activity', run: () => this.showServerTraffic(serverId) },
-            { label: 'Logs', icon: 'logs', run: () => this.showServerLogs(serverId, server.interface) },
             { label: 'Activity', icon: 'history', run: () => this.showActivity(serverId) },
             { label: 'Full config', icon: 'code', run: () => this.showRawServerConfig(serverId) },
+            { label: 'AWG Logs', icon: 'logs', run: () => this.showServerLogs(serverId, server.interface) },
             { label: 'Rename', icon: 'edit', run: () => this.renameServer(serverId, document.querySelector(`[data-name="${serverId}"]`)) },
             '-',
             { label: 'Delete server', icon: 'trash', danger: true, run: () => this.deleteServer(serverId) },

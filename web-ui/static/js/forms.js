@@ -900,7 +900,7 @@ class FormUi {
                     <p class="hint">Saving a new one signs other browsers out; this one keeps working.</p>`)}
                 ${this.formSection('Logging', `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        ${choose('awg_log_level', 'VPN daemon', [['off', 'Off'], ['error', 'Errors only'], ['debug', 'Debug']],
+                        ${choose('awg_log_level', 'AWG daemon', [['off', 'Off'], ['error', 'Errors only'], ['debug', 'Debug']],
                             'Debug adds every handshake and "unknown type" packets: the trace of a client with outdated parameters. Applies when a server starts.')}
                         ${choose('log_level', 'Web panel', [['ERROR', 'Errors'], ['WARNING', 'Warnings'], ['INFO', 'Info'], ['DEBUG', 'Debug']],
                             'Applies at once.')}
