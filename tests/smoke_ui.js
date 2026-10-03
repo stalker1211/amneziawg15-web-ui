@@ -213,6 +213,11 @@ function check(label, condition, detail) {
                 return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
             };
             const out = {};
+            // A client of its own, which never connects: suspending a connected one would
+            // end its session as well (the release checker's are all online).
+            const server = amneziaApp.lastServers[0];
+            const client = (await amneziaApp.postJson(`/api/servers/${server.id}/clients`, { name: 'smoke-activity' })).client;
+            await wait(700);
             let ring = (await amneziaApp.getJson('/api/activity')).events;
             document.getElementById('activityBtn').click();
             await wait(700);
@@ -224,7 +229,8 @@ function check(label, condition, detail) {
                 const button = document.querySelector(`#dialog [data-activity-kind="${kind}"]`);
                 button.click();
                 const want = ring.filter((e) => e.kind === kind).map((e) => e.seq);
-                kinds[kind] = want.length > 0 && JSON.stringify(seqsShown()) === JSON.stringify(want)
+                // A kind may have no events here (the release checker's ring has no health).
+                kinds[kind] = JSON.stringify(seqsShown()) === JSON.stringify(want)
                     && button.getAttribute('aria-checked') === 'true';
             }
             out.kinds = kinds;
@@ -236,15 +242,12 @@ function check(label, condition, detail) {
             const ground = luminance(getComputedStyle(document.getElementById('dialog')).backgroundColor);
             out.readable = dark ? text > 0.75 && ground < 0.25 : text < 0.25 && ground > 0.75;
 
-            // A stopped server's client: suspending an online one would end its session too.
-            const server = amneziaApp.lastServers.find((s) => s.status !== 'running' && (s.clients || []).length);
-            const client = server.clients[0];
             const before = seqsShown().length;
             for (let i = 0; i < 2; i++) await amneziaApp.postJson(`/api/servers/${server.id}/clients/${client.id}/suspend`, {});
             await wait(1500);
             const top = amneziaApp.activityView.events.slice(0, 2);
             out.live = seqsShown().length === before + 2 && new Set(seqsShown()).size === seqsShown().length
-                && top.map((e) => e.event).join() === (client.suspended ? 'client.suspend,client.resume' : 'client.resume,client.suspend')
+                && top.map((e) => e.event).join() === 'client.resume,client.suspend'
                 && top.every((e) => e.client_id === client.id);
             amneziaApp.receiveActivity(amneziaApp.activityView.events[0]);
             amneziaApp.receiveActivity(amneziaApp.activityView.events[3]);
@@ -266,6 +269,7 @@ function check(label, condition, detail) {
             select.dispatchEvent(new Event('change', { bubbles: true }));
             out.allServers = seqsShown().length === ring.length;
             window.Ui.closeDialog();
+            await amneziaApp.postJson(`/api/servers/${server.id}/clients/${client.id}`, {}, 'DELETE');
             return out;
         }, theme === 'dark');
         check('the Activity dialog: from the header, every filter, readable, live once, from ⋯ for its server',
