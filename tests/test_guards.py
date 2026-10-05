@@ -45,8 +45,10 @@ def _nginx_text():
 
 
 def _nginx_locations():
-    """Map each `location <path>` to its directives, comments stripped."""
-    return {m.group(1): m.group(2) for m in re.finditer(r"location\s+(\S+)\s*\{([^{}]*)\}", _nginx_text())}
+    """Map each `location <path>` to its directives (one nested block, such as an `if`,
+    included), comments stripped."""
+    pattern = r"location\s+(\S+)\s*\{((?:[^{}]|\{[^{}]*\})*)\}"
+    return {m.group(1): m.group(2) for m in re.finditer(pattern, _nginx_text())}
 
 
 class NginxAuthConfigTests(unittest.TestCase):
@@ -74,6 +76,21 @@ class NginxAuthConfigTests(unittest.TestCase):
         body = self.locations["/status"]
         self.assertIn("allow 127.0.0.1;", body)
         self.assertIn("deny all;", body)
+        # allow sees the realip address, which a trusted proxy's X-Forwarded-For sets;
+        # the connection's own address must be loopback too.
+        self.assertRegex(body, r'if \(\$realip_remote_addr != "127\.0\.0\.1"\) \{\s*return 403;\s*\}')
+
+    def test_per_setting_directives_come_from_the_generated_include(self):
+        # core/nginx_conf.py writes them (the access_log by the log level, error_log
+        # stderr, the trusted proxies); written here too, they would fight the settings.
+        server = _nginx_text().split("server {", 1)[1]
+        self.assertIn("include /etc/nginx/awg/settings.conf;", server)
+        for directive in ("set_real_ip_from", "access_log", "error_log stderr"):
+            self.assertNotIn(directive, _nginx_text(), directive)
+        # The gates the include picks from, and the error log file authlog reads.
+        for gate in ("$awg_log_debug", "$awg_log_warning", "$awg_log_error"):
+            self.assertIn(f'map "$awg_quiet$status" {gate}', _nginx_text())
+        self.assertIn("error_log /var/log/nginx/error.log warn;", server)
 
     def test_auth_is_never_switched_off(self):
         self.assertNotRegex(NGINX_CONF.read_text(encoding="utf-8"), r"auth_basic\s+off")

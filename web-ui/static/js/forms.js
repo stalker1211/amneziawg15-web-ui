@@ -897,13 +897,17 @@ class FormUi {
                             hint: passwordPinned ? this.pinnedHint('NGINX_PASSWORD') : 'At least 8 characters.' })}
                         ${this.formField('s-password2', 'Repeat new password', '', { type: 'password', attrs: `autocomplete="new-password" ${passwordPinned ? 'disabled' : ''}` })}
                     </div>
-                    <p class="hint">Saving a new one signs other browsers out; this one keeps working.</p>`)}
+                    <p class="hint">Saving a new one signs other browsers out; this one keeps working.</p>
+                    ${this.formField('s-trusted_proxies', 'Trusted proxies', values.trusted_proxies, { mono: true,
+                        placeholder: 'none', attrs: `spellcheck="false" autocomplete="off" ${pinned('trusted_proxies') ? 'disabled' : ''}`,
+                        hint: hint('trusted_proxies', 'Reverse proxies in front of the panel, IPs or CIDRs separated by commas. Their X-Forwarded-For names the client, '
+                            + 'so the logs and failed sign-ins show who connected, not the proxy.') })}`)}
                 ${this.formSection('Logging', `
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${choose('awg_log_level', 'AWG daemon', [['off', 'Off'], ['error', 'Errors only'], ['debug', 'Debug']],
                             'Debug adds every handshake and "unknown type" packets: the trace of a client with outdated parameters. Applies when a server starts.')}
                         ${choose('log_level', 'Web panel', [['ERROR', 'Errors'], ['WARNING', 'Warnings'], ['INFO', 'Info'], ['DEBUG', 'Debug']],
-                            'Applies at once.')}
+                            'Applies at once, to nginx\'s request lines too: Debug logs every request, Info and Warnings the failed ones, Errors only server errors.')}
                     </div>`)}
                 ${this.formSection('Privacy', `
                     <div class="flex flex-col">

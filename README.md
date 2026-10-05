@@ -91,17 +91,33 @@ Use **⋯ → AWG Logs** on a server card. The log view filters by the selected 
 2026-08-07 17:49:02 INFO    [services.amnezia_manager] Server myvpn started successfully
 ```
 
-**nginx** — one line per request, with a level from the status (`error` for 5xx,
-`warning` for 4xx, `info` otherwise; a 401 is `info`, since a browser's first request
-always gets one and failed sign-ins are Activity events). The Docker health check's
-`/status`, every 30 s, is left out. nginx's warnings and errors follow in its own
-format (a failed sign-in among them); they also stay in `/var/log/nginx/error.log`,
+**nginx** — one line per request, with a level from the status: `error` for 5xx,
+`warning` for other 4xx, `debug` for the rest and for a 401 (a browser's first request
+always gets one, and failed sign-ins are Activity events). Which requests are logged
+follows the **Web panel** level, applied at once:
+
+| Web panel level | Requests logged |
+|---|---|
+| Debug | every request |
+| Info, Warnings | the failed ones: 4xx (but 401) and 5xx |
+| Errors | 5xx |
+
+`/static/` (a dozen files per page load) and the Docker health check's `/status` are
+never logged. nginx's warnings and errors follow in its own format (a failed sign-in
+among them, or why a request got a 502); they also stay in `/var/log/nginx/error.log`,
 where the panel reads failed sign-ins.
 
 ```
-2026-10-05T18:04:21+00:00 info 200 POST /api/servers/a1b2c3/stop 192.168.1.50 user=admin bytes=21
+2026-10-05T18:04:21+00:00 debug 200 POST /api/servers/a1b2c3/stop 192.168.1.50 user=admin bytes=21
 2026/10/05 18:04:21 [error] 41#41: *11 user "admin": password mismatch, client: 192.168.1.50, ...
 ```
+
+**Behind a reverse proxy** (Caddy, Traefik, another nginx), every request comes from
+the proxy's address, in these lines and in failed sign-ins alike. List the proxy in
+**⚙ → Access → Trusted proxies** (or `TRUSTED_PROXIES`): nginx then takes the client
+from its `X-Forwarded-For`. The default, `172.17.0.0/16`, is Docker's default bridge.
+Trust only proxies that set that header themselves: whoever is trusted chooses the
+address logged. Saving reloads nginx; an open page reconnects within ~10 s.
 
 **supervisord** — process starts and exits. `reaped unknown pid … (exit status 0)` is
 an `amneziawg-go` daemon ending when its server stops: supervisord is the container's
@@ -363,7 +379,8 @@ today's environment.
 | `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in. Stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
 | `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
 | `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
-| `LOG_LEVEL` | `INFO` | The web panel's log |
+| `LOG_LEVEL` | `INFO` | The web panel's log, and which requests nginx logs |
+| `TRUSTED_PROXIES` | `172.17.0.0/16` | Reverse proxies whose `X-Forwarded-For` names the client (IPs or CIDRs, comma-separated; empty trusts none) |
 
 **Deployment.**
 

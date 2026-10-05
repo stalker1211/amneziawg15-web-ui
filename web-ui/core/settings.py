@@ -19,7 +19,9 @@ nginx reads directly (see Access).
 
 import grp
 import hmac
+import ipaddress
 import os
+import re
 import subprocess
 import tempfile
 
@@ -54,11 +56,32 @@ def _panel_level(raw):
     return value
 
 
+def _proxies(raw):
+    """Reverse proxies whose X-Forwarded-For nginx believes (set_real_ip_from): IPs or
+    CIDRs, comma or space separated, normalized and deduplicated; "" trusts none."""
+    networks = []
+    for item in re.split(r"[\s,]+", str(raw).strip()):
+        if not item:
+            continue
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(f"Trusted proxies: '{item}' is not an IP address or CIDR") from None
+        if network.prefixlen == 0:
+            raise ValueError(f"Trusted proxies: '{item}' trusts every address, so anyone could choose the one logged")
+        text = str(network.network_address) if network.num_addresses == 1 else str(network)
+        if text not in networks:
+            networks.append(text)
+    return ", ".join(networks)
+
+
 # key: (environment variable, parser, built-in default)
 FIELDS = {
     "geoip": ("ENABLE_GEOIP", _flag, True),
     "awg_log_level": ("AWG_LOG_LEVEL", _daemon_level, "error"),
     "log_level": ("LOG_LEVEL", _panel_level, "INFO"),
+    # Docker's default bridge: the panel's behaviour before this was a setting (2.7.2).
+    "trusted_proxies": ("TRUSTED_PROXIES", _proxies, "172.17.0.0/16"),
 }
 
 # Variables that no longer do anything. A container that still sets one is told so at

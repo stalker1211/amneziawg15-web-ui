@@ -451,7 +451,7 @@ def main():
         events=EventBroadcaster(), auto_start_servers=False, dns_servers=["1.1.1.1", "9.9.9.9"],
         default_enable_nat=True, default_block_lan_cidrs=True, config_dir=tmp, enable_geoip=True,
         default_mtu=1420, default_subnet="10.10.0.0/24", default_port=51820, settings=settings,
-        activity_path=os.path.join(tmp, "activity.log"), auth_log_path=None,
+        activity_path=os.path.join(tmp, "activity.log"), auth_log_path=None, nginx_include_path=None,
     )  # fmt: skip
     if not args.empty:
         seed(manager)

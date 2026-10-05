@@ -52,6 +52,11 @@ else
     echo "WARNING: Basic Auth is $user/changeme (no NGINX_PASSWORD, nothing stored): change it in Settings"
 fi
 
+# nginx's part of the panel settings (the request lines by the log level, the trusted
+# proxies), from web_config.json and the environment, before nginx reads it. A save in
+# the drawer rewrites it and reloads nginx (web-ui/core/nginx_conf.py).
+(cd /app/web-ui && python3 -m core.nginx_conf)
+
 nginx -t
 
 echo "=== AmneziaWG runtime binaries ==="

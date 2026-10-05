@@ -37,6 +37,7 @@ import time
 import uuid
 from typing import Any, ClassVar
 
+from core import nginx_conf
 from core.helpers import is_valid_ip, sanitize_config_value, to_bool
 from core.logging_setup import get_logger
 
@@ -143,6 +144,7 @@ class AmneziaManager:
         settings=None,
         activity_path=activity.STDOUT,
         auth_log_path=authlog.ERROR_LOG,
+        nginx_include_path=nginx_conf.INCLUDE,
     ):
         # Request handlers and the traffic monitor are separate threads; config
         # writes go through this one at a time (see save_config).
@@ -183,6 +185,8 @@ class AmneziaManager:
             enable_geoip=enable_geoip,
         )
         self.awg_log_level = awg_log_level if awg_log_level in self.DAEMON_LOG_LEVELS else "off"
+        # nginx's part of the settings (core/nginx_conf.py); None in the tests and the demo.
+        self.nginx_include_path = nginx_include_path
 
         self.config = self.load_config()
         # Stored settings, pinned by the environment (core/settings.py): GeoIP and the
@@ -339,12 +343,16 @@ class AmneziaManager:
                     self.activity.record("health", event, server=server, detail={"problem": line})
 
     def apply_settings(self):
-        """Take GeoIP and the daemon's log level from the settings."""
+        """Take GeoIP and the daemon's log level from the settings, and give nginx its
+        part (the request lines by log_level, the trusted proxies): rewritten and
+        reloaded only when it differs from what start.sh or the last save wrote."""
         if self.settings is None:
             return
         values = self.settings.values
         self.netinfo.enable_geoip = values["geoip"]
         self.awg_log_level = values["awg_log_level"]
+        if self.nginx_include_path:
+            nginx_conf.write(values, self.nginx_include_path, self.run_command)
 
     def auto_start_servers(self):
         """At boot, restore each server's last start/stop state.

@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## Version 2.7.2 (2026-10-05)
+
+### Logging
+- **nginx's request lines follow the Web panel level** (⚙ → Logging, applied at once):
+  Debug logs every request, Info and Warnings only the failed ones (4xx but 401, and
+  5xx), Errors only 5xx. A successful request (and a 401) is now `debug`, not `info`.
+- **`/static/` is no longer logged** (a dozen lines per page load), beside `/status`.
+
+### Access
+- **Trusted proxies** (⚙ → Access, or `TRUSTED_PROXIES`): the reverse proxies whose
+  `X-Forwarded-For` names the client, so the request lines and failed sign-ins show who
+  connected rather than the proxy. Default `172.17.0.0/16`, Docker's default bridge (as
+  before, when it was fixed); a `/0` is refused. Saving reloads nginx; an open page
+  reconnects within ~10 s.
+- **`/status` answers only the container itself:** a trusted proxy forwarding
+  `X-Forwarded-For: 127.0.0.1` used to pass its localhost-only rule.
+
 ## Version 2.7.1 (2026-10-05)
 
 ### Logging

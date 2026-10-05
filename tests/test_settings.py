@@ -89,6 +89,21 @@ class ResolveTests(unittest.TestCase):
         values, errors = settings.check({"geoip": "off", "awg_log_level": "verbose", "log_level": " info "})
         self.assertEqual((values, errors), ({"geoip": False, "awg_log_level": "debug", "log_level": "INFO"}, []))
 
+    def test_trusted_proxies_are_normalized_and_checked(self):
+        settings = Settings({})
+        settings.resolve({})
+        self.assertEqual(settings.values["trusted_proxies"], "172.17.0.0/16")  # the default: Docker's bridge
+        values, errors = settings.check({"trusted_proxies": " 192.168.1.10/32,10.1.2.3/8  fd00::1 192.168.1.10 "})
+        self.assertEqual(errors, [])
+        self.assertEqual(values["trusted_proxies"], "192.168.1.10, 10.0.0.0/8, fd00::1")
+        self.assertEqual(settings.check({"trusted_proxies": ""}), ({"trusted_proxies": ""}, []))  # trusts none
+        for bad in ("192.168.1.300", "caddy", "0.0.0.0/0", "::/0"):
+            _, errors = settings.check({"trusted_proxies": bad})
+            self.assertEqual(len(errors), 1, bad)
+        pinned = Settings({"TRUSTED_PROXIES": "192.168.1.10"})
+        pinned.resolve({})
+        self.assertEqual((pinned.values["trusted_proxies"], pinned.sources["trusted_proxies"]), ("192.168.1.10", "env"))
+
 
 @unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
 class RetiredVariableTests(unittest.TestCase):
@@ -200,7 +215,7 @@ class SettingsRouteTests(unittest.TestCase):
 
     def test_get_shows_values_sources_and_never_the_password(self):
         payload = self.http.get("/api/settings").get_json()
-        self.assertEqual(sorted(payload["values"]), ["awg_log_level", "geoip", "log_level"])
+        self.assertEqual(sorted(payload["values"]), ["awg_log_level", "geoip", "log_level", "trusted_proxies"])
         self.assertEqual((payload["values"]["geoip"], payload["sources"]["geoip"]), (True, "env"))
         self.assertEqual(payload["env"]["geoip"], "ENABLE_GEOIP")
         self.assertTrue(payload["access"]["password_is_default"])
@@ -216,6 +231,21 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertEqual(self.manager.awg_log_level, "debug")
         self.assertEqual(logging.getLogger().level, logging.WARNING)
         self.assertEqual(self.stored()["log_level"], "WARNING")
+
+    def test_nginx_gets_its_part_and_is_reloaded(self):
+        self.addCleanup(logging.getLogger().setLevel, logging.getLogger().level)
+        include = os.path.join(self.manager.config_dir, "nginx", "settings.conf")
+        self.manager.nginx_include_path = include
+        ran = []
+        with mock.patch.object(self.manager, "run_command", side_effect=lambda args, env=None: ran.append(args) or ""):
+            self.post({"settings": {"log_level": "DEBUG", "trusted_proxies": "192.168.1.10"}})
+            text = Path(include).read_text(encoding="utf-8")
+            self.assertIn("set_real_ip_from 192.168.1.10;", text)
+            self.assertIn("if=$awg_log_debug;", text)
+            self.assertEqual(ran, [["nginx", "-t"], ["nginx", "-s", "reload"]])
+            ran.clear()
+            self.post({"settings": {"geoip": True}})  # nothing nginx reads changed: no reload
+            self.assertEqual(ran, [])
 
     def test_invalid_or_pinned_changes_apply_nothing(self):
         self.post({"settings": {"log_level": "WARNING", "geoip": False}}, status=400)  # geoip is pinned

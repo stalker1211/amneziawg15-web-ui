@@ -137,7 +137,7 @@ COPY --from=awg_tools_builder /out/usr/ /usr/
 RUN ln -sf /usr/bin/awg /usr/bin/wg \
     && ln -sf /usr/bin/awg-quick /usr/bin/wg-quick
 
-RUN mkdir -p /app/web-ui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg /run/nginx
+RUN mkdir -p /app/web-ui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg /run/nginx /etc/nginx/awg
 
 COPY web-ui /app/web-ui/
 COPY --from=css_builder /src/web-ui/static/css/tailwind.css /app/web-ui/static/css/tailwind.css
@@ -149,6 +149,7 @@ ARG BUILD_LABEL=""
 RUN if [ -n "${BUILD_LABEL}" ]; then printf '%s\n' "${BUILD_LABEL}" > /app/web-ui/BUILD; fi
 
 COPY config/nginx.conf /etc/nginx/http.d/default.conf
+COPY config/nginx-main.conf /etc/nginx/conf.d/awg-main.conf
 COPY config/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 COPY scripts/ /app/scripts/

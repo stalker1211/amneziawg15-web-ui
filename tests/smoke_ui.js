@@ -597,6 +597,28 @@ function check(label, condition, detail) {
         return saved.values.log_level === level.value ? 'saved' : `stored ${saved.values.log_level}`;
     });
     check('saving settings stores the change (and the New servers section is gone)', settingsSaved === 'saved', settingsSaved);
+    // Trusted proxies (2.7.2): checked by the server as typed, saved normalized.
+    const proxiesSaved = await page.evaluate(async () => {
+        await amneziaApp.openSettings();
+        await new Promise((r) => setTimeout(r, 600));
+        const field = document.getElementById('s-trusted_proxies');
+        if (!field || field.disabled) return 'field missing or pinned';
+        const type = async (text) => {
+            field.value = text;
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 900));
+        };
+        await type('0.0.0.0/0');
+        if (!document.getElementById('drawerPrimary').disabled) return 'a /0 armed Save';
+        if (!/every address/.test(document.getElementById('checks').textContent)) return 'no error for a /0';
+        await type('192.0.2.10/32, 198.51.100.0/24');
+        if (document.getElementById('drawerPrimary').disabled) return `save not armed: ${document.getElementById('checks').textContent}`;
+        document.getElementById('drawerForm').requestSubmit();
+        await new Promise((r) => setTimeout(r, 900));
+        const saved = await amneziaApp.getJson('/api/settings');
+        return saved.values.trusted_proxies === '192.0.2.10, 198.51.100.0/24' ? 'saved' : `stored ${saved.values.trusted_proxies}`;
+    });
+    check('trusted proxies: a /0 is refused as typed, a list is saved normalized', proxiesSaved === 'saved', proxiesSaved);
     check('the credential needs its repeat and the current password', await page.evaluate(async () => {
         await amneziaApp.openSettings();
         await new Promise((r) => setTimeout(r, 600));
