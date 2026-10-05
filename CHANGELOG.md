@@ -1,13 +1,21 @@
 # CHANGELOG
 
-## Unreleased
+## Version 2.7.1 (2026-10-05)
 
-### Activity
-- **A level on each event in `docker logs`:** the JSON line now carries `level` —
-  `error` for `health.problem`, `warning` for `auth.fail` and `egress.change`, `info`
-  for the rest — so Grafana colours the events like any other log instead of showing
-  them as unknown. `kind` stays the category; the panel and `/api/activity` are
-  unchanged.
+### Logging
+- **The whole log in `docker logs`:** the web UI's log, nginx's requests and errors
+  and supervisord now go to the container's output beside the Activity events, so
+  Promtail/Loki (or any log driver) see the panel, not only its events. Before, all but
+  the events stayed in files inside the container, lost when it was re-created. The
+  AWG daemon's log stays in its file, where ⋯ → AWG Logs reads it.
+- **nginx's access lines carry a level** (`error` for 5xx, `warning` for 4xx, `info`
+  otherwise and for a 401), and the Docker health check's `/status`, 95 % of the old
+  access log, is left out. nginx's error log also stays in its file, where the panel
+  reads failed sign-ins.
+- **No `CRIT Supervisor is running as root` at every start** (`user=root` is set).
+- The README shows a Promtail `match` that rewrites all of these into one shape with
+  `src` and `level` labels, like the events.
+- Removed: `/var/log/webui/` and `/var/log/supervisor/` (nothing writes there now).
 
 ## Version 2.7 (2026-10-02)
 
@@ -31,6 +39,11 @@
   log stays in its files. Loki/Grafana: `{container="..."} | json | src="awg-webui"`.
   In the API: `GET /api/activity` (`events`, newest first, and `since`, the boot), and
   an `activity` event on the live stream.
+- **A level on each event in `docker logs`:** the JSON line also carries `level` —
+  `error` for `health.problem`, `warning` for `auth.fail` and `egress.change`, `info`
+  for the rest — so Grafana colours the events like any other log instead of showing
+  them as unknown. `kind` stays the category; the panel and `/api/activity` are
+  unchanged.
 - **Online means a handshake within 300 s**, for every protocol, on the page, in the
   history and in the session events.
 

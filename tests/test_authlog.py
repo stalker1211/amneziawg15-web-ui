@@ -1,5 +1,5 @@
-"""Tests for the failed sign-ins (services/authlog.py, DEVELOPMENT.md §10 2.7 Activity
-part 3): nginx's error-log records parsed, read incrementally across rotation and
+"""Tests for the failed sign-ins (services/authlog.py, DEVELOPMENT.md §3
+Activity events): nginx's error-log records parsed, read incrementally across rotation and
 truncation, and grouped into one `auth.fail` per address per minute.
 """
 

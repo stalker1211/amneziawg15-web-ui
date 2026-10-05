@@ -1,13 +1,13 @@
 """Activity: the panel's events -- a server started, a client edited, a session, a
-failed sign-in -- dozens a day, not the log (DEVELOPMENT.md §10, 2.7 Activity).
+failed sign-in -- dozens a day, not the log (DEVELOPMENT.md §3, Activity events).
 
 Each event goes three ways, the same object in each: a ring in memory (the newest
 RING_SIZE, for GET /api/activity; a restart empties it, like the traffic history),
 the page's live updates (an SSE `activity` event), and one JSON line on PID 1's
 stdout, which is supervisord (start.sh execs it), so `docker logs` and Promtail get
-the events and nothing else of the panel's, whose log stays in supervisord's files.
-The line adds `"src": "awg-webui"`, since supervisord writes its own lines there too,
-and a `level` (`LEVELS`: info, warning or error), so Grafana shows it like any log.
+them. The line adds `"src": "awg-webui"`, since the panel's log, nginx and supervisord
+write their own lines there too (2.7.1), and a `level` (`LEVELS`: info, warning or
+error), so Grafana shows it like any log.
 
 An event never carries a key, a password, I1-I5's content or a config: a *change*
 names the fields it touched, with old -> new only for the short, non-secret values

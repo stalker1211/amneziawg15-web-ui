@@ -1,9 +1,9 @@
 """Logging configuration.
 
-Everything goes to stdout, which supervisord captures into
-/var/log/webui/access.log (and stderr into error.log). Adding timestamps and levels
-means those files are usable on their own, without reading the source to work out
-what a bare message meant.
+Everything goes to stdout, which supervisord passes on to the container's output
+(`docker logs`, since 2.7.1; before, /var/log/webui/access.log). Adding timestamps
+and levels means the lines are usable on their own, without reading the source to
+work out what a bare message meant.
 
 Level is set by LOG_LEVEL (default INFO); use DEBUG when chasing a problem.
 """

@@ -1,5 +1,5 @@
-"""Tests for the *session* Activity events (services/sessions.py, DEVELOPMENT.md §10
-2.7 part 2): client.online / client.offline from the monitor's snapshots.
+"""Tests for the *session* Activity events (services/sessions.py, DEVELOPMENT.md §3
+Activity events): client.online / client.offline from the monitor's snapshots.
 
 Each tick is an `awg show all dump` in the layout amneziawg-tools v3.1 prints, the
 recorded sample of tests/test_traffic_parsing.py, run through the manager's own

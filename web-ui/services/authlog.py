@@ -1,5 +1,5 @@
 """Failed sign-ins, from nginx's error log: the *auth* Activity events
-(DEVELOPMENT.md §10, 2.7 Activity part 3).
+(DEVELOPMENT.md §3, Activity events).
 
 nginx (Basic Auth, config/nginx.conf) writes a failure to /var/log/nginx/error.log
 (`error_log ... warn` in Alpine's /etc/nginx/nginx.conf), one record each:

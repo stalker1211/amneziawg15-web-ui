@@ -136,7 +136,7 @@ COPY --from=awg_tools_builder /out/usr/ /usr/
 RUN ln -sf /usr/bin/awg /usr/bin/wg \
     && ln -sf /usr/bin/awg-quick /usr/bin/wg-quick
 
-RUN mkdir -p /app/web-ui /var/log/supervisor /var/log/webui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg /run/nginx
+RUN mkdir -p /app/web-ui /var/log/amnezia /var/log/nginx /etc/amnezia/amneziawg /run/nginx
 
 COPY web-ui /app/web-ui/
 COPY --from=css_builder /src/web-ui/static/css/tailwind.css /app/web-ui/static/css/tailwind.css

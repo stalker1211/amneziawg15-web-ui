@@ -471,8 +471,8 @@ class ModalUi {
         Object.assign(tip.style, { left: `${Math.max(0, Math.min(tipLeft, block.clientWidth - tipW))}px`, top: '6px' });
     }
 
-    // What the panel recorded since it started (GET /api/activity; DEVELOPMENT.md §10,
-    // the Activity contract), newest first, filtered here by kind and server: from the
+    // What the panel recorded since it started (GET /api/activity; DEVELOPMENT.md §3,
+    // Activity events), newest first, filtered here by kind and server: from the
     // header for all of it, from a server's ⋯ for that server. While open, each SSE
     // `activity` event is prepended (receiveActivity), and a stream that (re)opens loads
     // it again (loadActivity), since a restarted panel counts seq from 1 again.

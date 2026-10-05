@@ -1,4 +1,4 @@
-"""Tests for the Activity events (services/activity.py, DEVELOPMENT.md §10 2.7): the
+"""Tests for the Activity events (services/activity.py, DEVELOPMENT.md §3): the
 ring, the stdout line, the stream, and the *change* events the panel's actions record.
 """
 

@@ -1,5 +1,5 @@
 """Client sessions from the monitor's ticks: the *session* Activity events
-(DEVELOPMENT.md §10, 2.7 Activity part 2).
+(DEVELOPMENT.md §3, Activity events).
 
 No read of its own: each tick the manager hands over what the last `awg show all
 dump` said of every client -- online or not (a handshake within

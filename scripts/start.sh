@@ -1,7 +1,7 @@
 #!/bin/sh
 
-mkdir -p /var/log/amnezia /var/log/nginx /var/log/supervisor
-chmod 755 /var/log/amnezia /var/log/nginx /var/log/supervisor
+mkdir -p /var/log/amnezia /var/log/nginx
+chmod 755 /var/log/amnezia /var/log/nginx
 chmod -R 755 /app/web-ui/
 
 if [ -n "$NGINX_PORT" ] && [ "$NGINX_PORT" != "80" ]; then

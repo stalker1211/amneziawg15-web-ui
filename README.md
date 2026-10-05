@@ -8,7 +8,7 @@ Everything is configurable in the panel, including its own settings (⚙ in the
 header: sign-in, logging, GeoIP). An environment variable can
 pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
 
-Current version: **2.7**
+Current version: **2.7.1**
 
 <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 
@@ -69,8 +69,10 @@ Current version: **2.7**
 
 ## 📝 Logging
 
-There are two independent log streams, each set in **⚙ → Logging** (or pinned by its
-variable), and the Activity events.
+Everything except the AWG daemon's log goes to the container's output, so `docker logs`
+(and Promtail/Loki) see it all: the web UI's log, nginx's requests and errors,
+supervisord, and the Activity events. Two levels are set in **⚙ → Logging** (or pinned
+by their variables): the daemon's and the web UI's.
 
 **AWG daemon (`amneziawg-go`)** — `off`, `error` (the default: silent unless something
 fails) or `debug`, which adds every handshake and "Received message with unknown
@@ -82,17 +84,35 @@ running servers. Variable: `AWG_LOG_LEVEL` (`verbose` means `debug`, `silent` me
 
 Use **⋯ → AWG Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
 
-**Web UI** — always on, written to `/var/log/webui/access.log` with timestamps,
-levels and module names. `ERROR`/`WARNING`/`INFO` (default)/`DEBUG`, applied at once.
-Variable: `LOG_LEVEL`.
+**Web UI** — always on, with timestamps, levels and module names.
+`ERROR`/`WARNING`/`INFO` (default)/`DEBUG`, applied at once. Variable: `LOG_LEVEL`.
 
 ```
 2026-08-07 17:49:02 INFO    [services.amnezia_manager] Server myvpn started successfully
 ```
 
-**Activity events** — one JSON line each on the container's output, so `docker logs`
-(and Promtail/Loki) get them and nothing else of the panel's; supervisord writes its
-own lines there too, so the events carry `"src": "awg-webui"`. Each also carries a
+**nginx** — one line per request, with a level from the status (`error` for 5xx,
+`warning` for 4xx, `info` otherwise; a 401 is `info`, since a browser's first request
+always gets one and failed sign-ins are Activity events). The Docker health check's
+`/status`, every 30 s, is left out. nginx's warnings and errors follow in its own
+format (a failed sign-in among them); they also stay in `/var/log/nginx/error.log`,
+where the panel reads failed sign-ins.
+
+```
+2026-10-05T18:04:21+00:00 info 200 POST /api/servers/a1b2c3/stop 192.168.1.50 user=admin bytes=21
+2026/10/05 18:04:21 [error] 41#41: *11 user "admin": password mismatch, client: 192.168.1.50, ...
+```
+
+**supervisord** — process starts and exits. `reaped unknown pid … (exit status 0)` is
+an `amneziawg-go` daemon ending when its server stops: supervisord is the container's
+PID 1, which collects every exited process, and the daemon is not one it started.
+
+Docker keeps a container's output without a size limit unless told otherwise; with
+`/status` left out it is small (about a hundred lines a day besides the events),
+but `--log-opt max-size=10m --log-opt max-file=3` (or `logging:` in Compose) caps it.
+
+**Activity events** — one JSON line each, marked `"src": "awg-webui"` to tell them
+from the lines above. Each also carries a
 `level` — `error` for `health.problem`, `warning` for `auth.fail` and `egress.change`,
 `info` for the rest — while `kind` stays the category:
 
@@ -100,17 +120,70 @@ own lines there too, so the events carry `"src": "awg-webui"`. Each also carries
 {"src": "awg-webui", "level": "info", "seq": 42, "ts": "2026-10-02T19:32:52Z", "kind": "change", "event": "client.params", "server_id": "abc123", "server": "home", "client_id": "cl1", "client": "iphone", "detail": {"changes": [{"field": "MTU", "old": 1420, "new": 1380}]}}
 ```
 
-In Grafana: `{container="..."} | json | src="awg-webui"`. To have Grafana colour the
-events by level like other logs, promote `level` (and `kind`) to labels in Promtail:
+In Grafana, as JSON: `{container="..."} | json | src="awg-webui"`. To read them like
+other logs instead, have Promtail rewrite each event into a plain line with a `level`
+label (the line is then text, so `| json` no longer applies):
+
+```
+awg-webui client.offline server="home" client="iphone" duration=0h50m down=670.70MiB up=21.06MiB
+```
 
 ```yaml
 pipeline_stages:
   - docker: {}
+  - json: { expressions: { src: src, level: level, event: event, server: server, client: client, detail: detail, ts: ts } }
+  - labels: { src: }
   - match:
-      selector: '{container="amnezia-web-ui"}'
+      selector: '{src="awg-webui"}'
       stages:
-        - json: { expressions: { level: level, kind: kind, src: src } }
-        - labels: { level: , kind: , src: }
+        - labels: { level: }
+        - timestamp: { source: ts, format: RFC3339 }
+        - template:
+            source: message
+            template: |-
+              awg-webui {{ .event }}
+              {{- with .server }} server={{ printf "%q" . }}{{ end }}
+              {{- with .client }} client={{ printf "%q" . }}{{ end }}
+              {{- $d := .detail | fromJson }}
+              {{- if eq .event "client.online" }} endpoint={{ $d.endpoint }} country={{ $d.country }}{{ end }}
+              {{- if eq .event "client.offline" }} duration={{ printf "%dh%02dm" (div $d.duration_s 3600) (mod (div $d.duration_s 60) 60) }} down={{ printf "%.2fMiB" (divf $d.sent_bytes 1048576) }} up={{ printf "%.2fMiB" (divf $d.received_bytes 1048576) }}{{ end }}
+        - output: { source: message }
+```
+
+`down`/`up` are the device's (`sent_bytes` is the server's tx). Other events' `detail`
+(`changes`, `problem`, `address`...) can be added to the template the same way. Keep
+Promtail's `positions.filename` on persistent storage: if it is lost, Promtail re-reads
+the whole container log, and a changed template stores every old event again.
+
+The other lines can take the same shape (`webui [services.amnezia_manager] Server
+myvpn stopped successfully`), with `src` and `level` labels, by a second `match` after
+the first. Each format starts with its time, which is dropped (Docker's is kept); the
+regex has no `$`, because the `docker` stage leaves the line's newline on:
+
+```yaml
+  - match:
+      selector: '{container="amnezia-web-ui"} |~ "^\\d{4}[-/]\\d\\d[-/]\\d\\d[ T]\\d\\d:"'
+      stages:
+        - regex:
+            expression: '^(?:\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (?P<py_lvl>[A-Z]+) +(?P<py_msg>.*)|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ (?P<sv_lvl>[A-Z]+) (?P<sv_msg>.*)|\d{4}/\d\d/\d\d \d\d:\d\d:\d\d \[(?P<ng_lvl>[a-z]+)\] \d+#\d+: (?:\*\d+ )?(?P<ng_msg>.*)|\d{4}-\d\d-\d\dT\S+ (?P<ac_lvl>[a-z]+) (?P<ac_msg>.*))'
+        - template:
+            source: src
+            template: '{{ if .py_lvl }}webui{{ else if .sv_lvl }}supervisord{{ else if or .ng_lvl .ac_lvl }}nginx{{ end }}'
+        - template:
+            source: level
+            template: >-
+              {{- $l := lower (or .py_lvl .sv_lvl .ng_lvl .ac_lvl) -}}
+              {{- if hasPrefix "warn" $l }}warning
+              {{- else if hasPrefix "err" $l }}error
+              {{- else if has $l (list "crit" "critical" "alert" "emerg") }}critical
+              {{- else if hasPrefix "deb" $l }}debug
+              {{- else if eq $l "notice" }}info
+              {{- else }}{{ $l }}{{ end -}}
+        - template:
+            source: message
+            template: '{{ .src }} {{ or .py_msg .sv_msg .ng_msg .ac_msg }}'
+        - labels: { src: , level: }
+        - output: { source: message }
 ```
 
 ## 🏗️ Architecture
@@ -422,13 +495,12 @@ drawn by the server, and nothing is generated for a client unless you press Gene
 ## 🔍 Logs, backup and debugging
 
 ```bash
-# Web UI (timestamps, levels, module names) — note: webui, not web-ui
-docker exec amnezia-web-ui tail -f /var/log/webui/access.log
-docker exec amnezia-web-ui tail -f /var/log/webui/error.log
+# Web UI, nginx, supervisord and the Activity events, together
+docker logs -f amnezia-web-ui
+docker logs amnezia-web-ui 2>&1 | grep -E ' (ERROR|WARNING) |\[(error|warn)\]| (error|warning) [0-9]{3} '
 
-# nginx / supervisor
-docker exec amnezia-web-ui tail -f /var/log/nginx/error.log
-docker exec amnezia-web-ui tail -f /var/log/supervisor/supervisord.log
+# The AWG daemon's log (also ⋯ → AWG Logs)
+docker exec amnezia-web-ui tail -f /var/log/amnezia/amneziawg-go.log
 
 # Backup: config plus every generated .conf
 docker cp amnezia-web-ui:/etc/amnezia ./amnezia-backup/
