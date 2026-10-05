@@ -17,6 +17,12 @@
   `src` and `level` labels, like the events.
 - Removed: `/var/log/webui/` and `/var/log/supervisor/` (nothing writes there now).
 
+### Build
+- **Every Python package pinned:** `requirements.txt` is now generated
+  (`uv pip compile`) from `requirements.in` and pins Flask's six dependencies too, so
+  a rebuild never changes a version by itself and the image runs the versions the
+  tests ran. MarkupSafe 3.0.3 → 3.0.4.
+
 ## Version 2.7 (2026-10-02)
 
 ### Activity

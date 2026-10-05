@@ -59,7 +59,8 @@ RUN apk add --no-cache python3 py3-pip
 
 RUN python3 -m venv /opt/venv
 
-# Versions are pinned in web-ui/requirements.txt so builds are reproducible.
+# Every package is pinned in web-ui/requirements.txt (generated from requirements.in,
+# DEVELOPMENT.md §11), so builds are reproducible and run what the tests ran.
 COPY web-ui/requirements.txt /tmp/requirements.txt
 
 # pip/wheel/setuptools are build-time only: the app imports none of them, so they
