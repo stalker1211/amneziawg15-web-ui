@@ -290,9 +290,22 @@ def seed_activity(manager, home, travel, clients):
 OFFLINE = ("-", 0.0, 0.0)
 
 
+# Seconds added to the clock before reading the invented day's hour (--day-time), so a
+# screenshot shows the same traffic whenever it is taken. 0: the local time of day.
+DAY_SHIFT = 0
+
+
 def _hour(at):
-    local = time.localtime(at)
+    local = time.localtime(at + DAY_SHIFT)
     return local.tm_hour + local.tm_min / 60 + local.tm_sec / 3600
+
+
+def day_shift(hhmm, now=None):
+    """The DAY_SHIFT that makes `now` read as HH:MM in the invented day."""
+    hours, _, minutes = hhmm.partition(":")
+    target = int(hours) * 3600 + int(minutes or 0) * 60
+    local = time.localtime(time.time() if now is None else now)
+    return (target - (local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec)) % 86400
 
 
 def _within(h, a, b):
@@ -431,7 +444,11 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="address to listen on; 0.0.0.0 for the LAN (no sign-in!)")
     parser.add_argument("--empty", action="store_true", help="start with no servers")
     parser.add_argument("--label", default="demo (example data)", help="build label under the heading")
+    parser.add_argument("--day-time", metavar="HH:MM", help="play the invented day as if it were HH:MM now (screenshots)")
     args = parser.parse_args()
+    if args.day_time:
+        global DAY_SHIFT  # pylint: disable=global-statement
+        DAY_SHIFT = day_shift(args.day_time)
 
     tmp = tempfile.mkdtemp(prefix="awg-demo-")
     web_ui = REPO / "web-ui"

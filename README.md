@@ -10,7 +10,10 @@ pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-onl
 
 Current version: **2.7.1**
 
-<img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="screenshot-light.png">
+  <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
+</picture>
 
 ## 🚀 Features
 

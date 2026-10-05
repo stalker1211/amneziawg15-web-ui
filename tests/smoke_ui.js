@@ -2,22 +2,21 @@
 // themes and asserts the fields that matter are present and wired. There is no JS unit-test framework in this
 // project on purpose; this script is the frontend safety net.
 //
-// Needs a running panel with at least one server: a container with the source
-// bind-mounted, or tests/demo_server.py (then pass its URL, e.g.
-// http://127.0.0.1:8099, and run node with puppeteer on NODE_PATH). Usage:
+// Needs a running panel with at least one server: tests/demo_server.py (the default
+// URL), or a container with the source bind-mounted (pass its URL, user and password).
+// Local Node with puppeteer (tests/browser.js finds a global `npm i -g puppeteer`):
+//
+//   node tests/smoke_ui.js                                   # the demo, http://127.0.0.1:8099
 //
 //   docker run -d --name awg --cap-add NET_ADMIN --device /dev/net/tun \
 //     -e NGINX_USER=admin -e NGINX_PASSWORD=pw -p 18093:80 \
 //     -v "$PWD/web-ui":/app/web-ui:ro amneziawg-web-ui:local
-//
-//   docker run --rm --add-host host.docker.internal:host-gateway \
-//     -v "$PWD/tests/smoke_ui.js":/home/pptruser/s.js:ro -w /home/pptruser \
-//     ghcr.io/puppeteer/puppeteer:latest node s.js http://host.docker.internal:18093 admin pw
+//   node tests/smoke_ui.js http://127.0.0.1:18093 admin pw
 //
 // Exits non-zero if any check fails or the page logs an uncaught error.
-const puppeteer = require('puppeteer');
+const puppeteer = require('./browser');
 
-const BASE = process.argv[2] || 'http://host.docker.internal:18093';
+const BASE = process.argv[2] || 'http://127.0.0.1:8099';
 const USER = process.argv[3] || 'admin';
 const PASS = process.argv[4] || 'pw';
 

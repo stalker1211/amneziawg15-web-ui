@@ -20,7 +20,8 @@
    awg-quick in a second container from the same image, handshakes and pings; through
    the trailers server, 300 back-to-back pings at 56 and 1100 bytes lose none.
 7. The smoke tests (smoke_ui, smoke_events, smoke_signin last: it changes the
-   password) in the puppeteer image, on the panel's network.
+   password) with local Node against the published port (puppeteer: tests/browser.js,
+   a global `npm i -g puppeteer`).
 8. With --scan, `publish_dockerhub.sh --scan`.
 
 It reports and never publishes. It stops unless Docker is a local socket (whichever
@@ -37,6 +38,7 @@ import base64
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -48,7 +50,6 @@ REPO = Path(__file__).resolve().parent.parent
 IMAGE, NAME, CLIENT, PORT = "amneziawg-web-ui:check", "awg-release-check", "awg-release-client", 18099
 HOST = "awg.check"  # the panel's alias on its network: what client configs dial
 BASE = f"http://127.0.0.1:{PORT}"
-PUPPETEER = "ghcr.io/puppeteer/puppeteer:latest"
 failures = []
 
 
@@ -219,11 +220,13 @@ def main():
                     lost = re.search(r"(\d+)% packet loss", ping.stdout)
                     check(f"{protocol}: no loss at {size} bytes", lost and lost.group(1) == "0", ping.stdout[-200:])
 
-        print("7. Smoke tests (in the puppeteer image, on the container's network)", flush=True)
+        print("7. Smoke tests (local Node, on the published port)", flush=True)
+        node = shutil.which("node")
         for script in ("smoke_ui.js", "smoke_events.js", "smoke_signin.js"):  # signin last: it changes the password
-            run = subprocess.run(["docker", "run", "--rm", "--network", f"container:{NAME}", "-v",
-                                  f"{REPO / 'tests' / script}:/home/pptruser/s.js:ro", "-w", "/home/pptruser",
-                                  PUPPETEER, "node", "s.js", "http://127.0.0.1", "admin", "changeme"],
+            if not node:
+                check(script, False, "no node on PATH: install Node and `npm i -g puppeteer`")
+                continue
+            run = subprocess.run([node, str(REPO / "tests" / script), BASE, "admin", "changeme"],
                                  capture_output=True, text=True, check=False)  # fmt: skip
             failed = [line.strip() for line in run.stdout.splitlines() if line.strip().startswith("FAIL")]
             check(script, run.returncode == 0, failed or (run.stdout + run.stderr)[-300:])

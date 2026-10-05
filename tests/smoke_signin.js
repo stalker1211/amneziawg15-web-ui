@@ -12,8 +12,8 @@
 // It CHANGES THE PASSWORD, twice: run it against a throwaway container on a fresh volume.
 //
 //   docker run -d --name awgpw --cap-add NET_ADMIN --device /dev/net/tun -p 18080:80 amneziawg-web-ui:local
-//   NODE_PATH=<dir with puppeteer>/node_modules node tests/smoke_signin.js http://127.0.0.1:18080
-const puppeteer = require('puppeteer');
+//   node tests/smoke_signin.js http://127.0.0.1:18080
+const puppeteer = require('./browser');
 
 const BASE = (process.argv[2] || 'http://127.0.0.1:18080').replace(/\/$/, '');
 const USER = process.argv[3] || 'admin';

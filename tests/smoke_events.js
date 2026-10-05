@@ -10,13 +10,12 @@
 // Usage, against tests/demo_server.py (no login) or a container with the source
 // mounted (then pass the user and password):
 //
-//   NODE_PATH=<dir with puppeteer>/node_modules node tests/smoke_events.js http://127.0.0.1:8099
-//   RESTART_CMD='docker restart awg' NODE_PATH=... \
-//     node tests/smoke_events.js http://127.0.0.1:8080 admin pw
+//   node tests/smoke_events.js http://127.0.0.1:8099
+//   RESTART_CMD='docker restart awg' node tests/smoke_events.js http://127.0.0.1:8080 admin pw
 //
 // Exits non-zero on any failed check.
 const { execSync } = require('child_process');
-const puppeteer = require('puppeteer');
+const puppeteer = require('./browser');
 
 const BASE = (process.argv[2] || 'http://127.0.0.1:8099').replace(/\/$/, '');
 const USER = process.argv[3];
