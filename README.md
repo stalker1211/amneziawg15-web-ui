@@ -8,7 +8,7 @@ Everything is configurable in the panel, including its own settings (⚙ in the
 header: sign-in, logging, GeoIP). An environment variable can
 pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
 
-Current version: **2.7.1**
+Current version: **2.7.2**
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="screenshot-light.png">
