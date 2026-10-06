@@ -18,9 +18,9 @@ from unittest import mock
 # tests.support puts web-ui on sys.path. Tests exercise internals on purpose and use
 # self-describing method names.
 # pylint: disable=missing-function-docstring,missing-class-docstring,wrong-import-order
-from services import signatures
-
 from tests.support import build_app, build_manager
+
+from services import signatures  # isort: skip -- after tests.support, which puts web-ui on the path
 
 DRAWS = 200
 TAG = re.compile(r"<(\w+)(?: ([^>]*))?>")

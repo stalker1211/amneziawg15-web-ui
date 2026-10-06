@@ -14,9 +14,9 @@ from unittest import mock
 # tests.support puts web-ui on sys.path. Tests exercise internals on purpose and use
 # self-describing method names.
 # pylint: disable=missing-function-docstring,missing-class-docstring,protected-access,wrong-import-order
-from services import generator
-
 from tests.support import build_app, build_manager
+
+from services import generator  # isort: skip -- after tests.support, which puts web-ui on the path
 
 DRAWS = 300
 
