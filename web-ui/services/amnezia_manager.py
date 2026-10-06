@@ -1851,6 +1851,8 @@ PersistentKeepalive = 25
                     enable_nat=server.get("enable_nat"),
                     block_lan_cidrs=server.get("block_lan_cidrs"),
                 )
+                # What the old daemon answered stays [ASSURED] and hides an old config.
+                self.probe.forget_flows(server["port"])
 
                 server["status"] = "running"
                 self.save_config()

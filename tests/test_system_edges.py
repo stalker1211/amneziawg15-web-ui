@@ -112,8 +112,10 @@ class StartStopTests(_Base):
         server = self._server(enable_nat=False, block_lan_cidrs=True)
         self.assertTrue(self.manager.start_server(server["id"]))
 
-        up, setup, dump = self.fake.calls
+        up, setup, flows, dump = self.fake.calls
         self.assertEqual(up["args"], ["/usr/bin/awg-quick", "up", server["interface"]])
+        # Nothing listed to its port, so nothing to delete (conntrack -D fails on none).
+        self.assertEqual(flows["args"], ["conntrack", "-L", "-p", "udp", "--orig-port-dst", str(server["port"])])
         # The status push after a start reads telemetry first, so the reload sees it.
         self.assertEqual(dump["args"], ["/usr/bin/awg", "show", "all", "dump"])
         self.assertEqual(setup["args"], ["/app/scripts/setup_iptables.sh", server["interface"], server["subnet"]])
@@ -137,7 +139,7 @@ class StartStopTests(_Base):
         server = self._server()
         self.manager.awg_log_level = "debug"
         self.assertTrue(self.manager.start_server(server["id"]))
-        up, setup, _dump = self.fake.calls
+        up, setup, _flows, _dump = self.fake.calls
         self.assertEqual(up["env"]["LOG_LEVEL"], "debug")
         self.assertEqual(up["env"]["WG_QUICK_USERSPACE_IMPLEMENTATION"], "/usr/local/bin/amneziawg-go-logged")
         self.assertEqual(setup["args"][0], "/app/scripts/setup_iptables.sh")
@@ -156,8 +158,21 @@ class StartStopTests(_Base):
         with self.assertLogs(MODULE, "WARNING"):
             self.assertTrue(self.manager.start_server(server["id"]))
         self.assertEqual(
-            self.fake.argvs(), [["/usr/bin/awg-quick", "up", server["interface"]], ["/usr/bin/awg", "show", "all", "dump"]]
+            [argv[0] for argv in self.fake.argvs()], ["/usr/bin/awg-quick", "conntrack", "/usr/bin/awg"], self.fake.argvs()
         )
+
+    def test_start_forgets_the_flows_the_old_daemon_answered(self):
+        # A device left on an old config keeps its [ASSURED] flow alive by retrying,
+        # which hides it from the probe's T1 (services/probe.py, forget_flows).
+        server = self._server()
+        port = str(server["port"])
+        self.fake.respond(
+            ["conntrack", "-L"],
+            f"udp      17 118 src=192.168.97.3 dst=192.168.97.2 sport=35808 dport={port} "
+            f"src=192.168.97.2 dst=192.168.97.3 sport={port} dport=35808 [ASSURED] mark=0 use=1",
+        )
+        self.assertTrue(self.manager.start_server(server["id"]))
+        self.assertIn(["conntrack", "-D", "-p", "udp", "--orig-port-dst", port], self.fake.argvs())
 
     def test_stop_cleans_iptables_before_taking_the_interface_down(self):
         server = self._server(enable_nat=True, block_lan_cidrs=False)

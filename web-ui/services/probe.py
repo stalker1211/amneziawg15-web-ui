@@ -10,7 +10,10 @@ Two triggers pick a source worth a capture:
   only when a packet refreshed the flow since the last reading (it is new, or its
   timeout fell by less than the time elapsed): an unreplied flow stays listed 30 s,
   so a scanner's one datagram is listed for four ticks but refreshed on one. Two
-  ticks running trigger.
+  ticks running trigger. A flow the daemon answered stays `[ASSURED]` for as long as
+  its device keeps sending, after a change of parameters too, so a server's start
+  deletes its port's flows (`forget_flows`): a device left on the old config is
+  unreplied again from its next datagram.
 - T2, maybe blocked: a client whose handshake did not move while its rx grew by whole
   initiations (148 bytes each, padding and trailers stripped) up to 2048 bytes, on
   two ticks running. The server reads and answers these; data adds 32 + 16k bytes
@@ -32,9 +35,11 @@ Every I/O is injected (`run_command`, the capture, `start_background_task`, the 
 lookup, the event callback), so the tests run it inline.
 """
 
+import ctypes
 import ipaddress
 import re
 import socket
+import struct
 import time
 
 from core.logging_setup import get_logger
@@ -82,14 +87,59 @@ def parse_conntrack(text):
     return flows
 
 
+SO_ATTACH_FILTER = 26  # Linux; not in Python's socket module
+
+
+def bpf_program(family, source, sport, port):
+    """A classic BPF program, as (code, jt, jf, k) rows, that keeps only UDP from
+    `source`:`sport` to `port`. The kernel runs it on the raw socket, so a large transfer
+    through the server costs no Python and fills no buffer (measured: in Python, a 10 s
+    capture beside a 4 Gbit/s transfer took 3.5 s of CPU and lost half the device's
+    datagrams). An IPv4 packet starts at its IP header (the address, then the UDP header
+    after IHL; a later fragment has no UDP header), an IPv6 one at the UDP header."""
+    keep, drop = (0x06, 0, 0, 0x40000), (0x06, 0, 0, 0)
+    if family == socket.AF_INET6:
+        return [
+            (0x28, 0, 0, 0),  # ldh [0]: the source port
+            (0x15, 0, 2, sport),
+            (0x28, 0, 0, 2),  # ldh [2]: the destination port
+            (0x15, 1, 0, port),
+            drop,
+            keep,
+        ]
+    return [
+        (0x20, 0, 0, 12),  # ld [12]: the source address
+        (0x15, 0, 7, int.from_bytes(source.packed, "big")),
+        (0x28, 0, 0, 6),  # ldh [6]: flags and fragment offset
+        (0x45, 5, 0, 0x1FFF),
+        (0xB1, 0, 0, 0),  # ldxb 4*([0]&0xf): the IP header's length
+        (0x48, 0, 0, 0),  # ldh [x+0]: the source port
+        (0x15, 0, 2, sport),
+        (0x48, 0, 0, 2),  # ldh [x+2]: the destination port
+        (0x15, 1, 0, port),
+        drop,
+        keep,
+    ]
+
+
+def attach_filter(raw, program):
+    """SO_ATTACH_FILTER: a struct sock_fprog pointing at the program; the kernel copies
+    it, so the buffer only has to outlive the call."""
+    rows = ctypes.create_string_buffer(b"".join(struct.pack("HBBI", *row) for row in program))
+    raw.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, struct.pack("HL", len(program), ctypes.addressof(rows)))
+
+
 def capture(port, src, sport, seconds, limit):
     """The UDP payloads from `src`:`sport` to `port` that arrive within `seconds`, at
-    most `limit`, read by a raw socket and filtered here. Raises PermissionError
-    without CAP_NET_RAW. IPv4 packets come with their IP header, IPv6 ones without."""
+    most `limit`, read by a raw socket. The kernel filters (`bpf_program`); Python
+    checks again, for what was queued before the filter was attached. Raises
+    PermissionError without CAP_NET_RAW. IPv4 packets come with their IP header, IPv6
+    ones without."""
     family = socket.AF_INET6 if ":" in src else socket.AF_INET
     source = ipaddress.ip_address(src)
     payloads, deadline = [], time.monotonic() + seconds
     with socket.socket(family, socket.SOCK_RAW, socket.IPPROTO_UDP) as raw:
+        attach_filter(raw, bpf_program(family, source, sport, port))
         while len(payloads) < limit:
             left = deadline - time.monotonic()
             if left <= 0:
@@ -131,6 +181,19 @@ class Probe:
         self._resting = {}  # (port, src, sport) -> until
         self._job = None  # the capture in flight, or done and waiting for the next tick
         self._verdicts = {}  # client id -> {server_id, handshake_at, source, rx_base, diagnosis}
+        # client id -> the last handshake seen: a server's restart (every change of its
+        # parameters) zeroes its daemon's, and its device did connect before.
+        self._handshakes = {}
+
+    def forget_flows(self, port):
+        """A server (re)started on `port`: conntrack forgets the flows to it, which the
+        daemon may have answered with the parameters it had before. Listed first, since
+        `conntrack -D` fails when nothing matches."""
+        if not self.conntrack:
+            return
+        flows = parse_conntrack(self.run_command([*CONNTRACK, "--orig-port-dst", str(port)]))
+        if any(flow["dport"] == port for flow in flows):
+            self.run_command(["conntrack", "-D", "-p", "udp", "--orig-port-dst", str(port)])
 
     def diagnosis(self, client_id):
         """The client's verdict in the API's shape (DEVELOPMENT.md §10, 2.8,
@@ -151,6 +214,11 @@ class Probe:
             for client in server.get("clients", []):
                 clients[client.get("id")] = (server, client, peers.get(client.get("client_public_key")) or {})
 
+        known = {client.get("id") for server in servers for client in server.get("clients", [])}
+        self._handshakes = {cid: value for cid, value in self._handshakes.items() if cid in known}
+        for client_id, (_server, _client, info) in clients.items():
+            if info.get("handshake_at"):
+                self._handshakes[client_id] = info["handshake_at"]
         self._end_verdicts(at, clients)
         refreshed = self._watch_flows(at, running)
         grew = self._watch_clients(at, clients)
@@ -320,7 +388,7 @@ class Probe:
             if held is not None:  # the same device from a new port
                 held["source"] = job["source"]
                 held["diagnosis"]["endpoint"] = format_endpoint(*job["source"][1:])
-                held["diagnosis"]["last_attempt"] = at
+                held["diagnosis"]["last_attempt"] = int(at)
                 continue
             handshake_at = info.get("handshake_at")
             if handshake_at != job["handshakes"].get(client_id):
@@ -336,11 +404,12 @@ class Probe:
             if attempts is None:
                 attempts = max(0, (info.get("rx") or 0) - rx_base) // ATTEMPT
             changed_at = server.get("transport_changed_at")
+            last_handshake = handshake_at or self._handshakes.get(client_id)
             device = initiation.describe(initiations[0], params)
             device["trailers"] = any(one.trailer for one in initiations)  # one may be 0 bytes
             diagnosis = {
                 "verdict": verdict,
-                "since": job["since"],
+                "since": int(job["since"]),
                 "last_attempt": self._last_attempt(at, client_id, job["source"]),
                 "attempts": attempts,
                 "endpoint": format_endpoint(*job["source"][1:]),
@@ -348,8 +417,8 @@ class Probe:
                 "device": device,
                 "server": initiation.server_view(params),
                 "mismatch": names,
-                "last_handshake": handshake_at,
-                "params_changed_at": changed_at if changed_at and changed_at > (handshake_at or 0) else None,
+                "last_handshake": last_handshake,
+                "params_changed_at": changed_at if changed_at and changed_at > (last_handshake or 0) else None,
             }
             self._verdicts[client_id] = {
                 "server_id": server["id"],
@@ -365,7 +434,7 @@ class Probe:
         """The last tick the trigger held: the flow refreshed or the rx grew."""
         flow, state = self._flows.get(source) or {}, self._clients.get(client_id) or {}
         seen = [value for value in (flow.get("seen_at"), state.get("grew_at")) if value]
-        return max(seen) if seen else at
+        return int(max(seen) if seen else at)
 
     def _end_verdicts(self, at, clients):
         """A moved handshake recovers a verdict; a suspend, a delete or a server stop
@@ -389,7 +458,7 @@ class Probe:
         for client_id, verdict in self._verdicts.items():
             diagnosis = verdict["diagnosis"]
             if verdict["source"] in refreshed or client_id in grew:
-                diagnosis["last_attempt"] = at
+                diagnosis["last_attempt"] = int(at)
             rx = clients[client_id][2].get("rx")
             if diagnosis["verdict"] == "maybe_blocked" and rx is not None:
                 if rx < verdict["rx_base"]:  # the counter started over

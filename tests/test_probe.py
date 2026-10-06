@@ -9,6 +9,7 @@ inline unless a test holds them, and the GeoIP lookup always says US. Ticks are 
 apart, as in the traffic monitor.
 """
 
+import ipaddress
 import json
 import socket
 import unittest
@@ -171,6 +172,7 @@ class FakeRawSocket:
     def __init__(self, packets):
         self.packets = list(packets)
         self.opened = []
+        self.options = []
 
     def __call__(self, family, kind, proto):
         self.opened.append((family, kind, proto))
@@ -185,10 +187,38 @@ class FakeRawSocket:
     def settimeout(self, seconds):
         self.timeout = seconds
 
+    def setsockopt(self, level, option, value):
+        self.options.append((level, option, len(value)))
+
     def recvfrom(self, size):
         if not self.packets:
             raise TimeoutError
         return self.packets.pop(0)
+
+
+def run_bpf(program, packet):
+    """The classic BPF instructions bpf_program uses, run on one packet: what the kernel
+    keeps of it (0 drops it)."""
+    a = x = pc = 0
+    while True:
+        code, jt, jf, k = program[pc]
+        pc += 1
+        if code == 0x20:
+            a = int.from_bytes(packet[k : k + 4], "big")
+        elif code == 0x28:
+            a = int.from_bytes(packet[k : k + 2], "big")
+        elif code == 0x48:
+            a = int.from_bytes(packet[x + k : x + k + 2], "big")
+        elif code == 0xB1:
+            x = 4 * (packet[k] & 0x0F)
+        elif code == 0x15:
+            pc += jt if a == k else jf
+        elif code == 0x45:
+            pc += jt if a & k else jf
+        elif code == 0x06:
+            return k
+        else:
+            raise AssertionError(f"unexpected BPF code {code:#x}")
 
 
 def udp(sport, dport, payload):
@@ -219,6 +249,28 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(payloads, [b"one", b"two"])
         self.assertEqual(raw.opened, [(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)])
         self.assertLessEqual(raw.timeout, 10)
+        # The kernel filters first: a sock_fprog (16 bytes) attached before any read.
+        self.assertEqual(raw.options, [(socket.SOL_SOCKET, probe.SO_ATTACH_FILTER, 16)])
+
+    def test_the_kernel_filter_keeps_the_same_packets(self):
+        program = probe.bpf_program(socket.AF_INET, ipaddress.ip_address("192.168.97.3"), 50980, 51820)
+        fragment = bytearray(ipv4("192.168.97.3", 50980, 51820, b"later fragment")[0])
+        fragment[6:8] = (0x00B9).to_bytes(2, "big")  # a fragment offset: no UDP header here
+        cases = {
+            ipv4("192.168.97.3", 50980, 51820, b"one")[0]: True,
+            ipv4("192.168.97.3", 50980, 51820, b"options", options=bytes(8))[0]: True,
+            ipv4("192.168.97.9", 50980, 51820, b"other address")[0]: False,
+            ipv4("192.168.97.3", 50981, 51820, b"other source port")[0]: False,
+            ipv4("192.168.97.3", 50980, 51821, b"other server")[0]: False,
+            bytes(fragment): False,
+        }
+        for packet, kept in cases.items():
+            self.assertEqual(run_bpf(program, packet) > 0, kept, packet)
+        # IPv6: no IP header, so ports only (the address is checked in Python).
+        program = probe.bpf_program(socket.AF_INET6, ipaddress.ip_address("2001:db8::5"), 50980, 51820)
+        self.assertGreater(run_bpf(program, udp(50980, 51820, b"v6")), 0)
+        self.assertEqual(run_bpf(program, udp(50981, 51820, b"v6")), 0)
+        self.assertEqual(run_bpf(program, udp(50980, 51821, b"v6")), 0)
 
     def test_stops_at_the_limit(self):
         packets = [ipv4("192.168.97.3", 50980, 51820, bytes([n])) for n in range(5)]
@@ -503,6 +555,24 @@ class MaybeBlockedTests(unittest.TestCase):
             h.tick(at)
         self.assertEqual(h.probe.diagnosis("a")["params_changed_at"], 2000)
 
+    def test_the_last_handshake_outlives_the_daemons_restart(self):
+        # A change of parameters restarts the server, which zeroes its peers' handshakes;
+        # the device did connect (seen in the release check: "never completed").
+        h = Harness()
+        h.set_peer("a", handshake_at=1000)
+        h.tick(-7)
+        h.set_peer("a", handshake_at=None)
+        h.server("s0")["transport_changed_at"] = 2000
+        for at in (0, 7, 14):
+            h.flows(flow_line(A, 29))
+            h.tick(at)
+        diagnosis = h.probe.diagnosis("a")
+        self.assertEqual((diagnosis["last_handshake"], diagnosis["params_changed_at"]), (1000, 2000))
+        # A deleted client is forgotten.
+        h.server("s0")["clients"].pop(0)
+        h.tick(21)
+        self.assertNotIn("a", h.probe._handshakes)
+
 
 class EndTests(unittest.TestCase):
     def old_config(self):
@@ -725,7 +795,7 @@ class ManagerTickTests(unittest.TestCase):
             self.loop(self.manager)
 
     def test_old_config_from_the_loop_to_the_payload(self):
-        for at in (1_791_244_500, 1_791_244_507):
+        for at in (1_791_244_500.4, 1_791_244_507.4):  # the clock's fractions, as in a container
             self.tick(at)
         # One dump and one conntrack per tick, the capture on the second.
         dump = ["/usr/bin/awg", "show", "all", "dump"]
@@ -733,13 +803,15 @@ class ManagerTickTests(unittest.TestCase):
         self.assertEqual(self.captures, [(51820, "192.168.97.3", 50980, probe.CAPTURE_SECONDS, probe.CAPTURE_LIMIT)])
         self.assertIsNone(self.manager.get_traffic_for_server(self.server["id"])[self.client["id"]]["diagnosis"])
 
-        self.tick(1_791_244_514)  # judges it
+        self.tick(1_791_244_514.4)  # judges it
         diagnosis = self.manager.get_traffic_for_server(self.server["id"])[self.client["id"]]["diagnosis"]
         self.assertEqual(set(diagnosis), DIAGNOSIS_KEYS)
         self.assertEqual(
             (diagnosis["verdict"], diagnosis["since"], diagnosis["endpoint"], diagnosis["mismatch"]),
             ("old_config", 1_791_244_500, endpoint(A), ["S1", "H1", "RandomTrailers"]),
         )
+        # Whole seconds, as the Contract shows them.
+        self.assertEqual((type(diagnosis["since"]), type(diagnosis["last_attempt"])), (int, int))
         # A *session* event, at warning, without `since`; and in the tick's traffic_update.
         event = self.manager.activity.payload()["events"][0]
         self.assertEqual(
