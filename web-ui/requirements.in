@@ -1,13 +1,15 @@
 # Runtime dependencies for the AmneziaWG Web UI: what we choose, edited by hand.
 #
-# Flask is the only direct one: live updates are Server-Sent Events and outbound
-# HTTPS is the standard library's. requirements.txt is generated from this file and
-# pins every package Flask brings, so the image and the tests run the same versions
-# and a rebuild never changes one by itself. Never edit requirements.txt by hand;
-# bump with (DEVELOPMENT.md §11):
+# Flask serves the panel (live updates are Server-Sent Events, outbound HTTPS is the
+# standard library's); cryptography reads devices' handshake initiations
+# (services/initiation.py: X25519, ChaCha20-Poly1305). requirements.txt is generated
+# from this file and pins every package these bring, so the image and the tests run
+# the same versions and a rebuild never changes one by itself. Never edit
+# requirements.txt by hand; bump with (DEVELOPMENT.md §11):
 #
 #   uv pip compile web-ui/requirements.in -o web-ui/requirements.txt \
 #       --python-version 3.14 --python-platform linux --upgrade
 #
 # (--upgrade-package <name> for one; without either, the existing pins are kept.)
 flask
+cryptography
