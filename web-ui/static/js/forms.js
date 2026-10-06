@@ -478,6 +478,7 @@ class FormUi {
                         ${this.formSwitch('f-autostart', 'Start after creating', 'Brings the interface up right away.', true)}
                         ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', base.enable_nat !== false)}
                         ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server, nor this panel.', base.block_lan_cidrs !== false)}
+                        ${this.formSwitch('f-analyzer', 'Connection analyzer', 'Detects clients that cannot connect: wrong config or blocked. Uses some CPU.', false)}
                     </div>`)}
                 ${this.formSection('Protocol and transport', this.transportFieldsHtml(protocol, transport),
                     '<button type="button" class="btn btn-secondary btn-sm" data-action="randomize">Randomize</button>')}`,
@@ -498,6 +499,7 @@ class FormUi {
                         auto_start: !!document.getElementById('f-autostart')?.checked,
                         enable_nat: !!document.getElementById('f-nat')?.checked,
                         block_lan_cidrs: !!document.getElementById('f-lan')?.checked,
+                        connection_analyzer: !!document.getElementById('f-analyzer')?.checked,
                     };
                     const server = await this.postJson('/api/servers', payload);
                     window.Ui.closeDrawer();
@@ -582,10 +584,11 @@ class FormUi {
         const collect = () => ({
             nat: !!document.getElementById('s-nat')?.checked,
             lan: !!document.getElementById('s-lan')?.checked,
+            analyzer: !!document.getElementById('s-analyzer')?.checked,
             host: endpointHost(),
             ...this.collectTransportForm(),
         });
-        const transportOnly = (state) => { const { nat: _n, lan: _l, host: _h, ...rest } = state; return rest; };
+        const transportOnly = (state) => { const { nat: _n, lan: _l, analyzer: _a, host: _h, ...rest } = state; return rest; };
 
         const ctx = {
             snapshot: null,
@@ -622,7 +625,7 @@ class FormUi {
             submit: async () => {
                 const now = collect();
                 const before = JSON.parse(ctx.snapshot);
-                const networkChanged = now.nat !== before.nat || now.lan !== before.lan;
+                const networkChanged = now.nat !== before.nat || now.lan !== before.lan || now.analyzer !== before.analyzer;
                 const transportChanged = JSON.stringify(transportOnly(now)) !== JSON.stringify(transportOnly(before));
                 const hostChanged = now.host !== before.host;
                 let restarted = false;
@@ -630,7 +633,9 @@ class FormUi {
                     await this.postJson(`/api/servers/${info.id}/endpoint-host`, { endpoint_host: now.host });
                 }
                 if (networkChanged) {
-                    const data = await this.postJson(`/api/servers/${info.id}/networking`, { enable_nat: now.nat, block_lan_cidrs: now.lan });
+                    const data = await this.postJson(`/api/servers/${info.id}/networking`, {
+                        enable_nat: now.nat, block_lan_cidrs: now.lan, connection_analyzer: now.analyzer,
+                    });
                     if (data.iptables === 'failed') this.showTempMessage('Networking saved, but reapplying iptables failed.', 'error');
                 }
                 if (transportChanged) {
@@ -674,8 +679,9 @@ class FormUi {
                     <div class="flex flex-col">
                         ${this.formSwitch('s-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', info.enable_nat)}
                         ${this.formSwitch('s-lan', 'Block private LAN ranges', 'Clients cannot reach private networks behind the server, nor this panel.', info.block_lan_cidrs)}
+                        ${this.formSwitch('s-analyzer', 'Connection analyzer', 'Detects clients that cannot connect: wrong config or blocked. Uses some CPU.', info.connection_analyzer)}
                     </div>
-                    <p class="hint">Applied to iptables immediately while the server is running.</p>`)}
+                    <p class="hint">NAT and LAN are applied to iptables immediately while the server is running.</p>`)}
                 ${this.formSection('Protocol and transport', `
                     <div id="impact">${this.formCallout(this.escapeHtml(defaultImpact))}</div>
                     ${this.transportFieldsHtml(info.protocol, info.transport_params || {})}`,

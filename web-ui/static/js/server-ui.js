@@ -84,6 +84,13 @@ class ServerUi {
             `<span>NAT ${server.enable_nat ? 'on' : 'off'}</span>`,
             `<span>LAN ${server.block_lan_cidrs ? 'blocked' : 'allowed'}</span>`,
         ].join(sep);
+        // The Connection analyzer, after the status pill: a tap opens the drawer where
+        // its switch is (a title shows nothing on a touch screen).
+        const analyzer = server.connection_analyzer ? 'on' : 'off';
+        const analyzerIcon = `<button type="button" data-action="server-settings" data-server="${id}"
+            class="flex-none -my-1 p-1 rounded-md hover:bg-gray-100 dark:hover:bg-[#273449] focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-400 dark:focus-visible:ring-[#a855f7] ${
+                server.connection_analyzer ? 'text-purple-700 dark:text-[#c084fc]' : 'text-gray-500 dark:text-[#8391a7]'}"
+            title="Connection analyzer ${analyzer}" aria-label="Connection analyzer ${analyzer}">${icon('radar', 'w-4 h-4')}</button>`;
 
         const probe = server.egress_probe && typeof server.egress_probe === 'object' ? server.egress_probe : null;
         let egress;
@@ -139,6 +146,7 @@ class ServerUi {
                             <span class="track"></span>
                         </label>
                         ${status}
+                        ${analyzerIcon}
                     </div>
                     <div class="flex items-center gap-1">
                         <button type="button" class="btn btn-secondary btn-sm" data-action="add-client" data-server="${id}">${icon('userPlus', 'w-3.5 h-3.5')}Client</button>

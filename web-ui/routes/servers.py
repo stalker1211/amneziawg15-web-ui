@@ -291,6 +291,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
                 "client_defaults": server.get("client_defaults", {}),
                 "enable_nat": server.get("enable_nat", amnezia_manager.default_enable_nat),
                 "block_lan_cidrs": server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs),
+                "connection_analyzer": bool(server.get("connection_analyzer")),
                 "clients_count": len(server["clients"]),
                 "created_at": server["created_at"],
                 "public_key": server["server_public_key"],
@@ -349,18 +350,25 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
         old = {
             "NAT": server.get("enable_nat", amnezia_manager.default_enable_nat),
             "Block LAN": server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs),
+            "Connection analyzer": bool(server.get("connection_analyzer")),
         }
-        server["enable_nat"] = to_bool(data.get("enable_nat"), server.get("enable_nat", amnezia_manager.default_enable_nat))
-        server["block_lan_cidrs"] = to_bool(
-            data.get("block_lan_cidrs"), server.get("block_lan_cidrs", amnezia_manager.default_block_lan_cidrs)
-        )
+        server["enable_nat"] = to_bool(data.get("enable_nat"), old["NAT"])
+        server["block_lan_cidrs"] = to_bool(data.get("block_lan_cidrs"), old["Block LAN"])
+        # Panel-only (services/probe.py): no iptables, no restart, not in any .conf.
+        server["connection_analyzer"] = to_bool(data.get("connection_analyzer"), old["Connection analyzer"])
         amnezia_manager.save_config()
-        changes = field_changes(old, {"NAT": server["enable_nat"], "Block LAN": server["block_lan_cidrs"]})
+        new = {
+            "NAT": server["enable_nat"],
+            "Block LAN": server["block_lan_cidrs"],
+            "Connection analyzer": server["connection_analyzer"],
+        }
+        changes = field_changes(old, new)
         if changes:
             amnezia_manager.activity.change("server.networking", server=server, changes=changes)
 
         iptables_status = "skipped"
-        if amnezia_manager.get_server_status(server_id) == "running":
+        firewall = (old["NAT"], old["Block LAN"]) != (new["NAT"], new["Block LAN"])
+        if firewall and amnezia_manager.get_server_status(server_id) == "running":
             iptables_status = "reapplied" if amnezia_manager.reapply_iptables_for_server(server) else "failed"
             # NAT decides where the clients' traffic exits: check it again.
             amnezia_manager.probe_egress_later(server_id)
@@ -371,6 +379,7 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
                 "server_id": server_id,
                 "enable_nat": server["enable_nat"],
                 "block_lan_cidrs": server["block_lan_cidrs"],
+                "connection_analyzer": server["connection_analyzer"],
                 "iptables": iptables_status,
             }
         )

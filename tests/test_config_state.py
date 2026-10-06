@@ -71,6 +71,9 @@ class LegacyConfigMigrationTests(unittest.TestCase):
     def test_unversioned_protocol_becomes_awg15(self):
         self.assertEqual(self.server["protocol"], "AWG 1.5")
 
+    def test_the_connection_analyzer_loads_off(self):
+        self.assertIs(self.server["connection_analyzer"], False)
+
     def test_transport_params_lifted_from_obfuscation_params(self):
         transport = self.server["transport_params"]
         self.assertEqual(

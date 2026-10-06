@@ -30,6 +30,8 @@ trigger: it connected; a suspended client counts as nobody). A source whose capt
 named nobody (a stranger, a scanner) rests 5 minutes; a client's source is not
 captured again while its verdict holds. A verdict holds until the client's handshake moves
 (`client.recovered`) and ends silently at a suspend, a delete or a server stop.
+A server whose `connection_analyzer` is off counts as stopped (off by default): no
+trigger, no capture, no verdict, and with none on no `conntrack -L` at all.
 
 Every I/O is injected (`run_command`, the capture, `start_background_task`, the GeoIP
 lookup, the event callback), so the tests run it inline.
@@ -207,18 +209,24 @@ class Probe:
         if not self.enabled or not snapshot.get("read"):
             return
         interfaces = snapshot.get("interfaces") or {}
-        running = {server["id"]: server for server in servers if server.get("interface") in interfaces}
+        live = [server for server in servers if server.get("interface") in interfaces]
+        known = {client.get("id") for server in servers for client in server.get("clients", [])}
+        self._handshakes = {cid: value for cid, value in self._handshakes.items() if cid in known}
+        for server in live:
+            peers = interfaces[server["interface"]]
+            for client in server.get("clients", []):
+                handshake_at = (peers.get(client.get("client_public_key")) or {}).get("handshake_at")
+                if handshake_at:
+                    self._handshakes[client.get("id")] = handshake_at
+
+        # A server with its Connection analyzer off counts as stopped; only the last
+        # handshakes above are kept for it, for its dialog once it is switched on.
+        running = {server["id"]: server for server in live if server.get("connection_analyzer")}
         clients = {}  # client id -> (server, client, its dump entry or {})
         for server in running.values():
             peers = interfaces[server["interface"]]
             for client in server.get("clients", []):
                 clients[client.get("id")] = (server, client, peers.get(client.get("client_public_key")) or {})
-
-        known = {client.get("id") for server in servers for client in server.get("clients", [])}
-        self._handshakes = {cid: value for cid, value in self._handshakes.items() if cid in known}
-        for client_id, (_server, _client, info) in clients.items():
-            if info.get("handshake_at"):
-                self._handshakes[client_id] = info["handshake_at"]
         self._end_verdicts(at, clients)
         refreshed = self._watch_flows(at, running)
         grew = self._watch_clients(at, clients)

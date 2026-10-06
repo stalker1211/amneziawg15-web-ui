@@ -44,6 +44,7 @@ VALUE_FIELDS = frozenset(
     ("Protocol", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "Jc", "Jmin", "Jmax")
     + ("RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout", "MaxHandshakeAttempts")
     + ("MTU", "Port", "Subnet", "DNS", "AllowedIPs", "Endpoint host", "NAT", "Block LAN", "Name")
+    + ("Connection analyzer",)
 )
 
 

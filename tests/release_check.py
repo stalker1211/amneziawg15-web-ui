@@ -23,8 +23,11 @@
    regenerated under its connected device gives Old config naming the old and new;
    (b) its replies dropped (iptables in the client container) give Maybe blocked, and
    the rule removed client.recovered; (c) trailers off in a device's config, on in its
-   server's, give Old config, RandomTrailers; (d) the others never get one. Then a 10 s
-   capture's CPU beside a large transfer through a tunnel.
+   server's, give Old config, RandomTrailers; (d) the others never get one; each
+   with the Connection analyzer switched on first (off by default). (e) Switched off,
+   a standing verdict ends with no event; the panel's CPU over 2 idle minutes with
+   every server's analyzer on, then off. Then a 10 s capture's CPU beside a large
+   transfer through a tunnel.
 8. The smoke tests (smoke_ui, smoke_events, smoke_signin last: it changes the
    password) with local Node against the published port (puppeteer: tests/browser.js,
    a global `npm i -g puppeteer`).
@@ -145,10 +148,32 @@ def in_range(value, spec):
     return int(low) <= value <= int(high or low)
 
 
+def analyzer(case, on):
+    """Switch a server's Connection analyzer (2.8, part 6): never iptables."""
+    reply = api("POST", f"/api/servers/{case['sid']}/networking", {"connection_analyzer": on})
+    return reply["connection_analyzer"] is on and reply["iptables"] == "skipped"
+
+
+def panel_cpu():
+    """The panel's CPU seconds so far, with its reaped children (conntrack, awg)."""
+    pid = in_container("pgrep", "-f", "/app/web-ui/app.py").stdout.split()[0]
+    stat = in_container("cat", f"/proc/{pid}/stat").stdout
+    return sum(int(field) for field in stat.rsplit(")", 1)[1].split()[11:15]) / 100  # utime..cstime, USER_HZ
+
+
+def idle_cpu(seconds=120):
+    start = panel_cpu()
+    time.sleep(seconds)
+    return panel_cpu() - start
+
+
 def diagnoses(configs):
-    """Step 7: real daemons, real devices (DEVELOPMENT.md §10, 2.8, part 5)."""
+    """Step 7: real daemons, real devices (DEVELOPMENT.md §10, 2.8, parts 5 and 6)."""
     by_label = {case["label"].split(",")[0]: case for case in configs.values()}
     untouched = [by_label["AWG 1.5"], by_label["AWG 3.1"]]
+    # Off by default, it would see nothing.
+    switched = [analyzer(case, True) for case in configs.values()]  # every one, then the check
+    check("the Connection analyzer switched on everywhere, no iptables touched", all(switched))
     for case in configs.values():
         case["before"] = {e["seq"] for e in api("GET", "/api/activity")["events"] if e["client_id"] == case["cid"]}
     # The probe has seen every device connected: step 6 takes a few seconds, and the API
@@ -208,6 +233,29 @@ def diagnoses(configs):
                    if e["client_id"] == case["cid"] and e["seq"] not in case["before"] and e["kind"] == "session"
                    and e["event"] in ("client.old_config", "client.maybe_blocked")]  # fmt: skip
         check(f"(d) {case['label']}: no verdict", diagnosis(case) is None and not flagged, flagged)
+
+    # (e) Switched off, (c)'s standing verdict ends silently, as at a server stop.
+    case = by_label["AWG 3.1 + trailers"]
+    standing = diagnosis(case) is not None
+    analyzer(case, False)
+    start = time.time()
+    ended = wait(lambda: diagnosis(case) is None, 30)
+    check(f"(e) switched off: (c)'s verdict ends in {time.time() - start:.0f} s, no client.recovered",
+          standing and ended and not events("client.recovered", case))  # fmt: skip
+    # Its device back on the issued config, so every device is connected while idle.
+    conf = f"/tmp/{case['device']}.conf"
+    in_container("awg-quick", "down", conf, name=CLIENT)
+    in_container("sh", "-c", f"cat > {conf}", name=CLIENT,
+                 stdin="\n".join(line for line in case["conf"].splitlines() if not line.startswith("DNS")))  # fmt: skip
+    in_container("awg-quick", "up", conf, name=CLIENT)
+    analyzer(case, True)
+    time.sleep(15)
+    on = idle_cpu()
+    for each in configs.values():
+        analyzer(each, False)
+    off = idle_cpu()
+    check(f"(e) the panel's CPU over 2 idle minutes: {on:.2f} s with the analyzer on, {off:.2f} s off",
+          on < 12 and off < 12 and all(diagnosis(each) is None for each in configs.values()))  # fmt: skip
 
 
 def capture_cost(configs):

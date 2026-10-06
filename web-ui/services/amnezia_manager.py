@@ -737,6 +737,8 @@ class AmneziaManager:
             server.setdefault("mtu", 1420)
             server.setdefault("enable_nat", self.default_enable_nat)
             server.setdefault("block_lan_cidrs", self.default_block_lan_cidrs)
+            # 2.8: the Connection analyzer (services/probe.py), off unless switched on.
+            server.setdefault("connection_analyzer", False)
             server.setdefault("egress_probe", None)
             server.setdefault("endpoint_host", "")
             # Display values that GET /api/servers and /info used to write into state;
@@ -903,6 +905,8 @@ class AmneziaManager:
         auto_start = to_bool(server_data.get("auto_start"), True)
         enable_nat = to_bool(server_data.get("enable_nat"), self.default_enable_nat)
         block_lan_cidrs = to_bool(server_data.get("block_lan_cidrs"), self.default_block_lan_cidrs)
+        # Off unless asked for: never copied from another server (DEVELOPMENT.md §10, 2.8).
+        connection_analyzer = to_bool(server_data.get("connection_analyzer"), False)
 
         # Every client config's Endpoint; a guess here would be baked into all of them.
         public_ip = self.public_ip or self.detect_public_ip()
@@ -948,6 +952,7 @@ class AmneziaManager:
             "client_defaults": client_defaults,
             "enable_nat": enable_nat,
             "block_lan_cidrs": block_lan_cidrs,
+            "connection_analyzer": connection_analyzer,
             "egress_probe": None,
             "dns": dns_servers,  # Store DNS servers
             "clients": [],

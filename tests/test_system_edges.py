@@ -378,9 +378,9 @@ class BackgroundTaskTests(_Base):
         ):
             AmneziaManager.start_traffic_monitoring(self.manager)
 
-        # One dump per tick, whatever the number of servers, and the probe's conntrack
-        # (services/probe.py); never a config write.
-        self.assertEqual(self.fake.argvs(), [["/usr/bin/awg", "show", "all", "dump"], ["conntrack", "-L", "-p", "udp"]])
+        # One dump per tick, whatever the number of servers; no conntrack, since the
+        # Connection analyzer is off by default (services/probe.py); never a config write.
+        self.assertEqual(self.fake.argvs(), [["/usr/bin/awg", "show", "all", "dump"]])
         save.assert_not_called()
         self.assertEqual([(event, data["server_id"]) for event, data in events.published], [("traffic_update", up["id"])])
         self.assertEqual(events.published[0][1]["traffic"][client["id"]]["received_bytes"], 0)

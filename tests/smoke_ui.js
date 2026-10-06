@@ -268,6 +268,44 @@ function check(label, condition, detail) {
         check('a verdict: its pill and tint, patched live, opening the evidence; gone with it',
             Object.values(diagnosis).every(Boolean), diagnosis);
 
+        // The Connection analyzer (2.8): an icon on every card, coloured on and grey off,
+        // whose tap opens the drawer at its switch; switched there, the card follows (and
+        // it is switched back, so a container ends as it was).
+        const analyzer = await page.evaluate(async () => {
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const iconOf = (s) => document.querySelector(`article[data-server-id="${s.id}"] [aria-label^="Connection analyzer"]`);
+            const shows = (s, on) => {
+                const button = iconOf(s);
+                if (!button || button.dataset.action !== 'server-settings' || !button.querySelector('svg')) return false;
+                const [r, g, b] = getComputedStyle(button).color.match(/\d+/g).map(Number);
+                const label = `Connection analyzer ${on ? 'on' : 'off'}`;
+                return button.getAttribute('aria-label') === label && button.title === label
+                    && (on ? b - g > 60 : Math.max(r, g, b) - Math.min(r, g, b) < 40);
+            };
+            const out = { icons: amneziaApp.lastServers.every((s) => shows(s, !!s.connection_analyzer)) };
+            const toggle = async (server) => {
+                iconOf(server).click();
+                await wait(900);
+                const box = document.getElementById('s-analyzer');
+                const was = !!box?.checked;
+                const opened = !document.getElementById('drawerRoot').hidden && was === !!server.connection_analyzer;
+                box.click();
+                await wait(300);
+                const armed = !document.getElementById('drawerPrimary').disabled;
+                document.getElementById('drawerPrimary').click();
+                await wait(1200);
+                const fresh = amneziaApp.lastServers.find((s) => s.id === server.id);
+                return opened && armed && document.getElementById('drawerRoot').hidden
+                    && fresh.connection_analyzer === !was && shows(fresh, !was);
+            };
+            const server = amneziaApp.lastServers[0];
+            out.switched = await toggle(server);
+            out.back = await toggle(amneziaApp.lastServers.find((s) => s.id === server.id));
+            return out;
+        });
+        check('the analyzer icon: on or off per server, opening the drawer whose switch the card follows',
+            Object.values(analyzer).every(Boolean), analyzer);
+
         // Activity (2.7): from the header, every filter, a live event shown once, a seq
         // it already has skipped, a reload adding nothing; from ⋯, filtered to that
         // server. A suspend and a resume of a client make the live events (it ends as it was).
@@ -494,6 +532,8 @@ function check(label, condition, detail) {
             return { ok: JSON.stringify(form) === JSON.stringify(want) && sub.includes(`copied from ${newest.name}`), form, want, newest: newest.name };
         });
         check('create form starts from the newest server (MTU, DNS, NAT, LAN) and says so', startsFrom.ok, startsFrom);
+        check('create form starts with the Connection analyzer off, whatever the newest has', await page.evaluate(() =>
+            document.getElementById('f-analyzer')?.checked === false));
         check('create form offers all four protocols', await page.evaluate(() =>
             [...document.getElementById('t-protocol').options].map((o) => o.value).join(',') === 'AWG 1.5,AWG 2.0,AWG 3.0,AWG 3.1'));
         check('create form opens with generated parameters, not a fixed set', await page.evaluate(() => {

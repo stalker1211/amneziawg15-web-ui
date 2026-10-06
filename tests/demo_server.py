@@ -228,10 +228,12 @@ class DemoManager(AmneziaManager):
 def seed(manager):
     """The mockup's example: two running servers, one stopped, one outdated client."""
 
-    def server(name, protocol, port, subnet, *, mtu=1420, dns="1.1.1.1, 9.9.9.9", transport, lan=True):
+    # The Connection analyzer is on where the verdicts are (Home, Travel), off on Lab.
+    def server(name, protocol, port, subnet, *, mtu=1420, dns="1.1.1.1, 9.9.9.9", transport, lan=True, analyzer=True):
         return manager.create_wireguard_server(
             {"name": name, "protocol": protocol, "port": port, "subnet": subnet, "mtu": mtu, "dns": dns,
-             "transport_params": transport, "auto_start": False, "enable_nat": True, "block_lan_cidrs": lan}
+             "transport_params": transport, "auto_start": False, "enable_nat": True, "block_lan_cidrs": lan,
+             "connection_analyzer": analyzer}
         )  # fmt: skip
 
     home = server("Home NL", "AWG 2.0", 51820, "10.10.0.0/24",
@@ -241,7 +243,7 @@ def seed(manager):
                     transport={"S1": 64, "S2": 88, "S3": 24, "S4": 16, "H1": "120000-130000",
                                "H2": "230000-240000", "H3": "340000-350000", "H4": "450000-460000",
                                "HeaderProtectionKey": random_key(), "RandomTrailers": True})  # fmt: skip
-    lab = server("Lab", "AWG 1.5", 51830, "10.30.0.0/24", dns="9.9.9.9",
+    lab = server("Lab", "AWG 1.5", 51830, "10.30.0.0/24", dns="9.9.9.9", analyzer=False,
                  transport={"S1": 30, "S2": 45, "H1": "1182367", "H2": "2295734", "H3": "3348912", "H4": "4417281"})  # fmt: skip
 
     params = {"Jc": 8, "Jmin": 40, "Jmax": 70}

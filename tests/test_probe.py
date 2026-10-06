@@ -71,15 +71,16 @@ def endpoint(source):
 
 class Harness:
     """Two servers as stored (s0 on 51820 with clients a, c, e; s1 on 51821 with b),
-    both running, every peer in the dump, never connected."""
+    both running with the Connection analyzer on, every peer in the dump, never
+    connected."""
 
     def __init__(self, params0=None, params1=None):
         self.servers = [
             {"id": "s0", "interface": "awg0", "port": 51820, "server_private_key": KEYS["servers"]["51820"]["priv"],
-             "transport_params": dict(params0 or CUR0),
+             "transport_params": dict(params0 or CUR0), "connection_analyzer": True,
              "clients": [self.client(name) for name in "ace"]},
             {"id": "s1", "interface": "awg1", "port": 51821, "server_private_key": KEYS["servers"]["51821"]["priv"],
-             "transport_params": dict(params1 or CUR1), "clients": [self.client("b")]},
+             "transport_params": dict(params1 or CUR1), "connection_analyzer": True, "clients": [self.client("b")]},
         ]  # fmt: skip
         self.peers = {
             "awg0": {PUB[name]: self.peer() for name in "ACE"},
@@ -711,6 +712,69 @@ class CaptureFlowTests(unittest.TestCase):
 HPKS = [K1, *(KEYS["servers"][port]["priv"] for port in ("51820", "51821")), KEYS["clients"]["A"]]
 
 
+class AnalyzerSwitchTests(unittest.TestCase):
+    """A server whose Connection analyzer is off counts as stopped (2.8, *Switch*)."""
+
+    def test_a_server_off_gets_no_capture(self):
+        h = Harness(params0=OLD_A)
+        h.server("s0")["connection_analyzer"] = False
+        for at in (0, 7, 14):  # T1
+            h.flows(flow_line(A, 29))
+            h.tick(at)
+        h.flows()
+        attempt(h, 148, ticks=4, start=21)  # T2
+        self.assertEqual(h.captures, [])
+        self.assertIsNone(h.probe.diagnosis("a"))
+        self.assertEqual(h.events, [])
+
+    def test_no_conntrack_call_while_the_only_running_server_is_off(self):
+        h = Harness()
+        del h.peers["awg1"]
+        h.server("s0")["connection_analyzer"] = False
+        for at in (0, 7, 14):
+            h.flows(flow_line(A, 29))
+            h.tick(at)
+        self.assertEqual((h.run_calls, h.captures), ([], []))
+
+    def test_switched_off_its_verdict_ends_silently_and_the_handshake_is_kept(self):
+        h = Harness()
+        h.set_peer("a", handshake_at=1000)
+        h.tick(-7)
+        h.set_peer("a", handshake_at=None)  # the restart a change of parameters makes
+        for at in (0, 7, 14):
+            h.flows(flow_line(A, 29))
+            h.tick(at)
+        self.assertEqual(h.probe.diagnosis("a")["last_handshake"], 1000)
+        h.events.clear()
+        h.server("s0")["connection_analyzer"] = False
+        h.set_peer("e", handshake_at=1010)  # seen while off
+        h.tick(21)
+        self.assertIsNone(h.probe.diagnosis("a"))
+        self.assertEqual(h.events, [])
+        self.assertEqual((h.probe._handshakes["a"], h.probe._handshakes["e"]), (1000, 1010))
+
+    def test_switched_on_again_a_verdict_comes_within_two_ticks(self):
+        h = Harness()
+        h.set_peer("a", handshake_at=1000)
+        h.server("s0")["connection_analyzer"] = False
+        h.tick(-7)
+        h.set_peer("a", handshake_at=None)
+        for at in (0, 7):
+            h.flows(flow_line(A, 29))
+            h.tick(at)
+        self.assertEqual(h.captures, [])
+        h.server("s0")["connection_analyzer"] = True
+        for at in (14, 21):  # two ticks running: the capture
+            h.flows(flow_line(A, 29))
+            h.tick(at)
+        self.assertEqual(h.captures, [A])
+        h.flows(flow_line(A, 29))
+        h.tick(28)  # judged
+        diagnosis = h.probe.diagnosis("a")
+        self.assertEqual((diagnosis["verdict"], diagnosis["since"]), ("old_config", 14))
+        self.assertEqual(diagnosis["last_handshake"], 1000)  # kept while it was off
+
+
 class StoreTests(unittest.TestCase):
     """What update_server_transport_params keeps for the probe: the replaced
     HeaderProtectionKeys and when the parameters last changed (2.8, *Store*)."""
@@ -769,6 +833,7 @@ class ManagerTickTests(unittest.TestCase):
         client, _ = self.manager.add_wireguard_client(server["id"], "u_a")
         # The fixture's server and device A, which still uses OLD_A.
         server.update(server_private_key=KEYS["servers"]["51820"]["priv"], transport_params=dict(CUR0))
+        server["connection_analyzer"] = True
         client["client_public_key"] = PUB["A"]
         self.server, self.client = server, client
         self.paths.interfaces.add(server["interface"])

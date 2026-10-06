@@ -446,7 +446,7 @@ class RouteNotFoundTests(_RealSystemApp):
 # hashes a config that holds the client's private key.
 SECRET_KEYS = {"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"}
 SERVER_KEYS = {
-    "block_lan_cidrs", "client_defaults", "clients", "config_path", "created_at", "dns", "endpoint_host",
+    "block_lan_cidrs", "client_defaults", "clients", "config_path", "connection_analyzer", "created_at", "dns", "endpoint_host",
     "egress_probe", "enable_nat", "id", "interface", "mtu", "name", "port", "protocol", "public_ip",
     "public_ip_geo", "public_ip_geo_country_code", "server_ip", "server_public_key", "status", "subnet",
     "totals", "traffic", "transport_params",
@@ -558,7 +558,7 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(
             set(info),
             {
-                "block_lan_cidrs", "client_defaults", "clients_count", "config_path", "created_at", "dns",
+                "block_lan_cidrs", "client_defaults", "clients_count", "config_path", "connection_analyzer", "created_at", "dns",
                 "enable_nat", "endpoint_host", "id", "interface", "mtu", "name", "port", "protocol", "public_ip", "public_key",
                 "server_ip", "status", "subnet", "transport_params",
             },
@@ -617,13 +617,22 @@ class TrafficHistoryRouteTests(unittest.TestCase):
 class ServerListTests(unittest.TestCase):
     """GET /api/servers: what the panel polls. Pinned before it stops writing to disk."""
 
+    def test_the_connection_analyzer_starts_off_unless_sent_on(self):
+        # Never copied from another server, unlike NAT and Block LAN (the form's choice).
+        app, _ = build_app()
+        client = app.test_client()
+        on = _create_server(client, name="on", connection_analyzer=True)
+        off = _create_server(client, name="off", subnet="10.62.0.0/24", port=51962)
+        self.assertEqual((on["connection_analyzer"], off["connection_analyzer"]), (True, False))
+
     def test_defaults_for_fields_an_older_config_lacks(self):
         first = build_manager()
         server = first.create_wireguard_server(
             {"name": "old", "protocol": "AWG 2.0", "subnet": "10.62.0.0/24", "port": 51962, "auto_start": False}
         )
         stored = json.loads(Path(first.config_file).read_text(encoding="utf-8"))
-        for key in ("mtu", "enable_nat", "block_lan_cidrs", "egress_probe", "protocol", "transport_params", "client_defaults"):
+        for key in ("mtu", "enable_nat", "block_lan_cidrs", "connection_analyzer", "egress_probe", "protocol",
+                    "transport_params", "client_defaults"):  # fmt: skip
             stored["servers"][0].pop(key, None)
         Path(first.config_file).write_text(json.dumps(stored), encoding="utf-8")
 
@@ -634,9 +643,10 @@ class ServerListTests(unittest.TestCase):
 
         self.assertEqual(listed["id"], server["id"])
         self.assertEqual(
-            {key: listed[key] for key in ("mtu", "enable_nat", "block_lan_cidrs", "egress_probe", "protocol", "status")},
-            {"mtu": 1420, "enable_nat": True, "block_lan_cidrs": True, "egress_probe": None, "protocol": "AWG 1.5",
-             "status": "stopped"},
+            {key: listed[key] for key in ("mtu", "enable_nat", "block_lan_cidrs", "connection_analyzer", "egress_probe",
+                                          "protocol", "status")},
+            {"mtu": 1420, "enable_nat": True, "block_lan_cidrs": True, "connection_analyzer": False, "egress_probe": None,
+             "protocol": "AWG 1.5", "status": "stopped"},
         )  # fmt: skip
         self.assertIsInstance(listed["transport_params"], dict)
         self.assertIsInstance(listed["client_defaults"], dict)
@@ -717,16 +727,33 @@ class ServerRouteTests(_RealSystemApp):
         self.assertEqual(
             response.get_json(),
             {"status": "updated", "server_id": self.server["id"], "enable_nat": False, "block_lan_cidrs": True,
-             "iptables": "skipped"},
+             "connection_analyzer": False, "iptables": "skipped"},
         )  # fmt: skip
         stored = json.loads(Path(self.manager.config_file).read_text(encoding="utf-8"))["servers"][0]
         self.assertEqual((stored["enable_nat"], stored["block_lan_cidrs"]), (False, True))
 
         self.paths.interfaces.add(self.server["interface"])
-        self.assertEqual(self.client.post(self._url("networking"), json={}).get_json()["iptables"], "reapplied")
+        post = lambda body: self.client.post(self._url("networking"), json=body).get_json()["iptables"]
+        self.assertEqual(post({}), "skipped")  # nothing changed
+        self.assertEqual(post({"enable_nat": True}), "reapplied")
         self.fake.respond(["/app/scripts/setup_iptables.sh"], 1)
         with self.assertLogs("services.amnezia_manager", "ERROR"):
-            self.assertEqual(self.client.post(self._url("networking"), json={}).get_json()["iptables"], "failed")
+            self.assertEqual(post({"block_lan_cidrs": False}), "failed")
+
+    def test_the_connection_analyzer_alone_touches_no_iptables_and_no_egress(self):
+        self.paths.interfaces.add(self.server["interface"])
+        self.fake.calls.clear()
+        with mock.patch.object(self.manager, "probe_egress_later") as later:
+            response = self.client.post(self._url("networking"), json={"connection_analyzer": True}).get_json()
+        later.assert_not_called()
+        self.assertEqual((response["connection_analyzer"], response["iptables"]), (True, "skipped"))
+        self.assertEqual(self.fake.argvs(), [])
+        self.assertIs(self.manager.get_server(self.server["id"])["connection_analyzer"], True)
+        events = self.client.get("/api/activity").get_json()["events"]
+        self.assertEqual(
+            (events[0]["event"], events[0]["detail"]),
+            ("server.networking", {"changes": [{"field": "Connection analyzer", "old": False, "new": True}]}),
+        )
 
     def test_a_networking_change_checks_a_running_servers_egress_again(self):
         # NAT decides where the clients' traffic exits; a stopped server has no exit.
