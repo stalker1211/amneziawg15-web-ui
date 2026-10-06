@@ -478,7 +478,7 @@ class FormUi {
                         ${this.formSwitch('f-autostart', 'Start after creating', 'Brings the interface up right away.', true)}
                         ${this.formSwitch('f-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', base.enable_nat !== false)}
                         ${this.formSwitch('f-lan', 'Block private LAN ranges', 'Clients cannot reach 10/8, 172.16/12 or 192.168/16 behind the server, nor this panel.', base.block_lan_cidrs !== false)}
-                        ${this.formSwitch('f-analyzer', 'Connection analyzer', 'Detects clients that cannot connect: wrong config or blocked. Uses some CPU.', false)}
+                        ${this.formSwitch('f-analyzer', 'Connection analyzer (experimental)', 'Detects clients that cannot connect: wrong config or blocked. Uses some CPU.', false)}
                     </div>`)}
                 ${this.formSection('Protocol and transport', this.transportFieldsHtml(protocol, transport),
                     '<button type="button" class="btn btn-secondary btn-sm" data-action="randomize">Randomize</button>')}`,
@@ -679,7 +679,7 @@ class FormUi {
                     <div class="flex flex-col">
                         ${this.formSwitch('s-nat', 'NAT (masquerade)', 'Clients reach the internet through this host.', info.enable_nat)}
                         ${this.formSwitch('s-lan', 'Block private LAN ranges', 'Clients cannot reach private networks behind the server, nor this panel.', info.block_lan_cidrs)}
-                        ${this.formSwitch('s-analyzer', 'Connection analyzer', 'Detects clients that cannot connect: wrong config or blocked. Uses some CPU.', info.connection_analyzer)}
+                        ${this.formSwitch('s-analyzer', 'Connection analyzer (experimental)', 'Detects clients that cannot connect: wrong config or blocked. Uses some CPU.', info.connection_analyzer)}
                     </div>
                     <p class="hint">NAT and LAN are applied to iptables immediately while the server is running.</p>`)}
                 ${this.formSection('Protocol and transport', `
