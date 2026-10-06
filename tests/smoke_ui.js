@@ -201,6 +201,73 @@ function check(label, condition, detail) {
         check('the Traffic dialog: from the band, every range, the readout, highlight, pin, from ⋯ and from the totals',
             Object.values(dialog).every((v) => (typeof v === 'object' ? Object.values(v).every(Boolean) : v)), dialog);
 
+        // Why a client cannot connect (2.8): rows loaded with a verdict show its pill (the
+        // demo has one of each); a tick with a diagnosis tints a row and adds the pill, which
+        // opens the evidence; a tick without takes both away; focus survives. Synchronous
+        // from each tick to its checks, so a live tick cannot slip in between.
+        const diagnosis = await page.evaluate((dark) => {
+            const out = {};
+            const luminance = (css) => {
+                const [r, g, b] = css.match(/[\d.]+/g).map(Number);
+                return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+            };
+            const cellOf = (c) => document.querySelector(`li[data-client-id="${c.id}"] [data-cell="diagnosis"]`);
+            out.rendered = amneziaApp.lastServers.every((s) => (s.clients || []).every((c) => {
+                const verdict = s.traffic?.[c.id]?.diagnosis?.verdict || '';
+                const cell = cellOf(c);
+                return !!cell && cell.dataset.verdict === verdict && !!cell.querySelector('[data-action="client-diagnosis"]') === !!verdict;
+            }));
+            const server = amneziaApp.lastServers.find((s) => s.status === 'running'
+                && (s.clients || []).some((c) => !c.suspended && !s.traffic?.[c.id]?.diagnosis));
+            if (!server) return { server: false };
+            const client = server.clients.find((c) => !c.suspended && !server.traffic?.[c.id]?.diagnosis);
+            const row = () => document.querySelector(`#clients-${server.id} li[data-client-id="${client.id}"]`);
+            const pill = () => row().querySelector('[data-action="client-diagnosis"]');
+            const now = Math.floor(Date.now() / 1000);
+            const tick = (d) => amneziaApp.updateServerTraffic(server.id, { ...server.traffic, [client.id]: { ...(server.traffic[client.id] || {}), diagnosis: d } });
+            const evidence = () => document.querySelector('#dialog [data-diagnosis="evidence"]')?.textContent.replace(/\s+/g, ' ') || '';
+            const edit = [...row().querySelectorAll('button')].find((b) => /Edit/.test(b.textContent));
+            edit.focus();
+
+            tick({ verdict: 'old_config', since: now - 60, last_attempt: now, attempts: 5, endpoint: '192.0.2.10:31784', country: 'US',
+                device: { S1: 31, H1: 500284, trailers: true, key: 'current' }, server: { S1: 40, H1: '100000-100999', trailers: false, key: true },
+                mismatch: ['S1', 'H1', 'RandomTrailers'], last_handshake: null, params_changed_at: null });
+            out.oldPill = /Old config/.test(pill()?.textContent || '') && row().classList.contains('bg-red-50')
+                && edit.isConnected && document.activeElement === edit;
+            out.pillReadable = Math.abs(luminance(getComputedStyle(pill()).color) - luminance(getComputedStyle(pill()).backgroundColor)) > 0.4;
+            out.rowTinted = getComputedStyle(row()).backgroundColor !== 'rgba(0, 0, 0, 0)';
+            pill().click();
+            const old = evidence();
+            out.oldDialog = /^Old config/.test(document.getElementById('dialogTitle')?.textContent.trim())
+                && old.includes('S1 31 (server 40), H1 500284 (server 100000–100999), trailers on (server off)')
+                && old.includes('from 192.0.2.10 (') && old.includes('5 handshakes captured name it') && old.includes('never completed')
+                && document.querySelectorAll('#dialog [data-diagnosis="params"] tr[data-differs]').length === 3
+                && /Re-import its config/.test(document.getElementById('dialog').textContent)
+                && !!document.querySelector('#dialog [data-action="client-qr"]');
+            window.Ui.closeDialog();
+
+            tick({ verdict: 'maybe_blocked', since: now - 120, last_attempt: now, attempts: 9, endpoint: '[2001:db8::7]:41822', country: 'RU',
+                device: { S1: 40, H1: 100500, trailers: false, key: 'current' }, server: { S1: 40, H1: '100000-100999', trailers: false, key: true },
+                mismatch: [], last_handshake: now - 1800, params_changed_at: now - 600 });
+            out.blockedPill = /Maybe blocked/.test(pill()?.textContent || '') && row().classList.contains('bg-orange-50') && !row().classList.contains('bg-red-50');
+            pill().click();
+            const blocked = evidence();
+            out.blockedDialog = /^Maybe blocked/.test(document.getElementById('dialogTitle')?.textContent.trim())
+                && blocked.includes('answered 9 handshakes from 2001:db8::7 (') && blocked.includes('none completed')
+                && blocked.includes('Last completed handshake')
+                && /parameters changed at .+the device may still have the old config/.test(document.getElementById('dialog').textContent)
+                && !document.querySelector('#dialog [data-diagnosis="params"]');
+            window.Ui.closeDialog();
+
+            tick(null);
+            out.cleared = !pill() && row().className === window.ServerUi.ROW_CLASS && edit.isConnected;
+            out.dark = dark === document.body.classList.contains('dark');
+            return out;
+        }, theme === 'dark');
+        await page.evaluate(() => amneziaApp.loadServers());
+        check('a verdict: its pill and tint, patched live, opening the evidence; gone with it',
+            Object.values(diagnosis).every(Boolean), diagnosis);
+
         // Activity (2.7): from the header, every filter, a live event shown once, a seq
         // it already has skipped, a reload adding nothing; from ⋯, filtered to that
         // server. A suspend and a resume of a client make the live events (it ends as it was).

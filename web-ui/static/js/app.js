@@ -210,6 +210,7 @@ class AmneziaApp {
             'client-qr': (el) => { window.Ui.closeDrawer(); this.showClientQRCode(...ids(el)); },
             'client-edit': (el) => this.showClientParamsModal(...ids(el)),
             'client-menu': (el) => this.openClientMenu(...ids(el), el),
+            'client-diagnosis': (el) => this.showClientDiagnosis(...ids(el)),
             'randomize': () => this.generateRandomParams(),
             'generate-key': () => this.fillHeaderProtectionKey('t-HeaderProtectionKey'),
             'generate-signatures': () => this.generateSignaturePackets(),

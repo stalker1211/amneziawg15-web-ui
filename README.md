@@ -38,7 +38,8 @@ Current version: **2.7.2**
   opens the Traffic view, as on the graph.
 - **Activity** — what happened, newest first: changes to servers, clients and
   settings (old → new for short values, never a key), clients coming online and going
-  offline (endpoint, country, how long, bytes), health problems and egress changes,
+  offline (endpoint, country, how long, bytes), a device on an old config or maybe
+  blocked and connecting again, health problems and egress changes,
   and failed sign-ins. From the header's clock button, or a server's ⋯ for that server
   alone; filters per kind; live. Kept in memory (the last ~1000), and each event is
   also a JSON line in `docker logs` (see [Logging](#-logging)).
@@ -52,6 +53,14 @@ Current version: **2.7.2**
   marks a client **Re-import** when its config has changed since (new transport
   parameters, new client parameters, a new public IP). Server settings say how many
   devices a change affects before you save.
+- **Why a device can't connect** — a client's row turns red with **Old config** when
+  its device knocks with parameters the server no longer uses (S1, H1, the header
+  protection key, random trailers): the panel reads the handshake with the server's
+  key, so it names the client even when the Re-import mark was cleared by a QR the
+  device never scanned. **Maybe blocked** (orange) when the server reads and answers
+  the device's handshakes and none completes, so packets are lost on the way. The
+  pill opens the evidence: what the device sent against what the server expects, from
+  where, since when. A device whose packets never reach the server looks switched off.
 - **Split tunnelling and a stable endpoint** — each client's AllowedIPs is editable
   (all IPv4 by default; a narrower list for split tunnelling), and each server can
   give its clients a DNS name to dial (e.g. dynamic DNS), so a new public IP needs no
@@ -132,8 +141,10 @@ but `--log-opt max-size=10m --log-opt max-file=3` (or `logging:` in Compose) cap
 
 **Activity events** — one JSON line each, marked `"src": "awg-webui"` to tell them
 from the lines above. Each also carries a
-`level` — `error` for `health.problem`, `warning` for `auth.fail` and `egress.change`,
-`info` for the rest — while `kind` stays the category:
+`level` — `error` for `health.problem`, `warning` for `auth.fail`, `egress.change`,
+`client.old_config` and `client.maybe_blocked` (a device that cannot connect, so a
+Loki alert can catch it), `info` for the rest (`client.recovered` among them) — while
+`kind` stays the category:
 
 ```
 {"src": "awg-webui", "level": "info", "seq": 42, "ts": "2026-10-02T19:32:52Z", "kind": "change", "event": "client.params", "server_id": "abc123", "server": "home", "client_id": "cl1", "client": "iphone", "detail": {"changes": [{"field": "MTU", "old": 1420, "new": 1380}]}}

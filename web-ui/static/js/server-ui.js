@@ -232,9 +232,29 @@ class ServerUi {
         return `${header}<ul class="divide-y divide-gray-300 dark:divide-[#2b3647]">${rows}</ul>`;
     }
 
+    // The 2.8 verdicts (a client's `diagnosis` in its traffic entry): the pill, which opens
+    // the evidence (ModalUi.showClientDiagnosis), and the row's tint.
+    static DIAGNOSES = {
+        old_config: {
+            label: 'Old config',
+            pill: 'bg-red-100 text-red-800 hover:bg-red-200 dark:bg-[#3b1219] dark:text-[#fca5a5] dark:hover:bg-[#5c1a26]',
+            row: 'bg-red-50 dark:bg-[#2a1c24]',
+            title: 'Its handshakes carry parameters this server no longer uses. Show the evidence.',
+        },
+        maybe_blocked: {
+            label: 'Maybe blocked',
+            pill: 'bg-orange-100 text-orange-800 hover:bg-orange-200 dark:bg-[#431407] dark:text-[#fdba74] dark:hover:bg-[#5c1d0a]',
+            row: 'bg-orange-50 dark:bg-[#29221e]',
+            title: 'The server answers its handshakes and none completes. Show the evidence.',
+        },
+    };
+
+    // `last:rounded-b-xl`: a tinted last row keeps the card's rounded corners.
+    static ROW_CLASS = 'last:rounded-b-xl px-4 sm:px-5 py-3 grid gap-x-4 gap-y-1.5 grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_8rem_auto] items-center';
+
     // What the telemetry-driven cells of a row show; shared by the render and the patch.
     // An online row gets a third line under its totals: its last hour (`spark`) and its
-    // rate now; any other row has none.
+    // rate now; any other row has none. A row with a verdict is tinted and gets its pill.
     static liveCells({ server, client, clientTraffic, spark = null, safe, isClientActiveFromTraffic }) {
         const suspended = !!client.suspended;
         const on = ServerUi.isOnline(server, client, clientTraffic, isClientActiveFromTraffic);
@@ -242,7 +262,15 @@ class ServerUi {
         const cc = String(clientTraffic.geo_country_code || '').toUpperCase();
         const where = [cc, clientTraffic.geo].filter(Boolean).join(' / ');
         const age = ServerUi.since(clientTraffic.latest_handshake_seconds);
+        const verdict = clientTraffic.diagnosis?.verdict;
+        const diagnosis = ServerUi.DIAGNOSES[verdict] || null;
         return {
+            rowClass: `${ServerUi.ROW_CLASS}${diagnosis ? ` ${diagnosis.row}` : ''}`,
+            verdict: diagnosis ? verdict : '',
+            diagnosis: diagnosis
+                ? `<button type="button" class="pill flex-none ${diagnosis.pill}" data-action="client-diagnosis"
+                       data-server="${safe(server.id)}" data-client="${safe(client.id)}" title="${diagnosis.title}">${window.Ui.icon('alert', 'w-3 h-3')}${diagnosis.label}</button>`
+                : '',
             dotClass: `w-2.5 h-2.5 rounded-full flex-none ${suspended ? 'bg-amber-400'
                 : on ? 'bg-green-500' : 'ring-1 ring-inset ring-gray-400 dark:ring-[#64748b]'}`,
             dotTitle: suspended ? 'Suspended' : on ? 'Online: handshake in the last 5 minutes' : 'Offline',
@@ -287,14 +315,14 @@ class ServerUi {
             : '';
 
         return `
-        <li class="px-4 sm:px-5 py-3 grid gap-x-4 gap-y-1.5 grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_8rem_auto] items-center" data-client-id="${cid}">
+        <li class="${cells.rowClass}" data-client-id="${cid}">
             <div class="col-span-2 md:col-span-1 flex items-center gap-2 min-w-0 ${dim}">
                 <span data-cell="dot" class="${cells.dotClass}" title="${cells.dotTitle}"></span>
                 <span class="text-sm font-medium text-sky-700 dark:text-[#7dd3fc] truncate" data-name="${cid}">${safe(client.name)}</span>
                 <span class="font-mono text-xs text-gray-700 dark:text-[#bac5d4]">${safe(client.client_ip)}</span>
             </div>
             <div class="col-span-2 md:col-span-1 flex flex-col items-start gap-0.5 text-xs text-gray-800 dark:text-[#d7dee9] min-w-0">
-                <span class="flex items-center gap-2 min-w-0 max-w-full">${reimportPill}${suspendedPill}<span data-cell="place" class="min-w-0 truncate ${dim}">${cells.place}</span></span>
+                <span class="flex items-center gap-2 min-w-0 max-w-full"><span data-cell="diagnosis" class="contents" data-verdict="${cells.verdict}">${cells.diagnosis}</span>${reimportPill}${suspendedPill}<span data-cell="place" class="min-w-0 truncate ${dim}">${cells.place}</span></span>
                 <span data-cell="handshake" class="text-gray-700 dark:text-[#bac5d4] ${dim}"${cells.handshake ? '' : ' hidden'}>${safe(cells.handshake)}</span>
             </div>
             <div class="flex flex-col whitespace-nowrap text-xs font-mono tabular-nums text-gray-800 dark:text-[#d7dee9] md:text-right ${dim}">
@@ -330,6 +358,12 @@ class ServerUi {
             const before = previous[client.id] || {};
             const cells = ServerUi.liveCells({ server, client, clientTraffic: now, spark: sparks[client.id], safe, isClientActiveFromTraffic });
             const cell = (name) => row.querySelector(`[data-cell="${name}"]`);
+            if (row.className !== cells.rowClass) row.className = cells.rowClass;
+            const diagnosis = cell('diagnosis');
+            if (diagnosis && diagnosis.dataset.verdict !== cells.verdict) { // only on a change: keeps the pill's focus
+                diagnosis.dataset.verdict = cells.verdict;
+                diagnosis.innerHTML = cells.diagnosis;
+            }
             const dot = cell('dot');
             if (dot) {
                 dot.className = cells.dotClass;

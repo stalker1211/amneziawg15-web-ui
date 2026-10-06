@@ -1,5 +1,6 @@
-// AmneziaWG Web UI - the views, shown as centred dialogs: a client's QR code, a
-// server's traffic history, its daemon log and its raw .conf, and the Activity events.
+// AmneziaWG Web UI - the views, shown as centred dialogs: a client's QR code, why it
+// cannot connect, a server's traffic history, its daemon log and its raw .conf, and the
+// Activity events.
 //
 // Methods of AmneziaApp, installed onto its prototype at the bottom of this file
 // (like forms.js), so `this` is the app. Every interpolated value is escaped.
@@ -78,6 +79,105 @@ class ModalUi {
         } catch (error) {
             console.error('Could not record the config as handed out:', error);
         }
+    }
+
+    // Why a client cannot connect: the evidence behind its row's Old config or Maybe
+    // blocked pill (its `diagnosis`, DEVELOPMENT.md §10, 2.8 *Contract*), as it stood
+    // when the dialog opened.
+    showClientDiagnosis(serverId, clientId) {
+        const server = (this.lastServers || []).find((s) => s.id === serverId) || {};
+        const client = (server.clients || []).find((c) => c.id === clientId) || {};
+        const d = (server.traffic || {})[clientId]?.diagnosis;
+        const kind = window.ServerUi.DIAGNOSES[d?.verdict];
+        if (!kind) {
+            this.showTempMessage(`${client.name || 'This client'} has no connection problem now`, 'info');
+            return;
+        }
+        const safe = (v) => this.escapeHtml(v ?? '');
+        const old = d.verdict === 'old_config';
+        const t = ModalUi.diagnosisText(d);
+        const cc = String(d.country || '').toUpperCase();
+        const from = `${t.host ? ` from <span class="font-mono">${safe(t.host)}</span>` : ''}${cc ? ` (${window.ServerUi.flag(cc)} ${safe(cc)})` : ''}`;
+        const handshakes = (n) => `${n} handshake${n === 1 ? '' : 's'}`;
+        const lastDone = t.lastHandshake ? `Last completed handshake ${safe(t.lastHandshake)}.` : 'It has never completed a handshake.';
+        const evidence = old
+            ? `<strong class="font-semibold">${safe(client.name)}</strong> is trying with parameters this server no longer uses${
+                t.items.length ? `: ${t.items.map(safe).join(', ')}` : ''}. Seen since ${safe(t.since)}${from}${
+                t.lastAttempt && t.lastAttempt !== t.since ? `, last at ${safe(t.lastAttempt)}` : ''}; ${handshakes(t.attempts)} captured name it. ${lastDone}`
+            : `The server read and answered ${handshakes(t.attempts)}${from} since ${safe(t.since)}; none completed, so its replies or the device's next packets are lost on the way. ${lastDone}`;
+        const changed = t.paramsChanged
+            ? `<p>The server's parameters changed at ${safe(t.paramsChanged)}, after that: the device may still have the old config.</p>` : '';
+        const table = old ? `
+            <table class="w-full text-sm tabular-nums" data-diagnosis="params">
+                <thead><tr class="text-xs text-gray-700 dark:text-[#bac5d4]">
+                    <th class="pb-1 pr-3 text-left font-medium">Parameter</th>
+                    <th class="pb-1 pr-3 text-left font-medium">Device sends</th>
+                    <th class="pb-1 text-left font-medium">Server expects</th>
+                </tr></thead>
+                <tbody>${t.rows.map(([label, device, expected, differs]) => `
+                    <tr class="border-t border-gray-200 dark:border-[#334155]"${differs ? ' data-differs' : ''}>
+                        <th scope="row" class="py-1.5 pr-3 text-left font-medium">${safe(label)}</th>
+                        <td class="py-1.5 pr-3 font-mono${differs ? ' font-semibold text-red-700 dark:text-[#fca5a5]' : ''}">${safe(device)}</td>
+                        <td class="py-1.5 font-mono">${safe(expected)}</td>
+                    </tr>`).join('')}</tbody>
+            </table>
+            <p class="rounded-lg border px-3 py-2 callout-red"><strong class="font-semibold">Re-import its config:</strong> showing the QR is not enough.</p>` : '';
+        window.Ui.openDialog(`
+            ${window.Ui.dialogHeader(`${kind.label} · ${safe(client.name)}`, `<span class="font-mono">${safe(client.client_ip)}</span> · ${safe(server.name)} · ${safe(server.protocol)}`)}
+            <div class="px-5 pb-5 flex flex-col gap-3 text-sm text-gray-800 dark:text-[#d7dee9]" data-diagnosis="${safe(d.verdict)}">
+                <p data-diagnosis="evidence">${evidence}</p>
+                ${changed}
+                ${table}
+                <div class="flex flex-wrap justify-end gap-2">
+                    ${old ? `<button type="button" class="btn btn-primary" data-action="client-qr" data-server="${safe(serverId)}" data-client="${safe(clientId)}">${window.Ui.icon('qr')}Show the config</button>` : ''}
+                    <button type="button" class="btn btn-secondary" data-close="dialog">Close</button>
+                </div>
+            </div>`, { size: 'max-w-lg' });
+    }
+
+    // A diagnosis in words, for the dialog. Times read "23:55" today, else "3 Oct, 23:55";
+    // `items` are the evidence's "S1 31 (server 40)", `rows` the parameter table's: S1 and
+    // H1 always, trailers and the key when either side has one or they differ.
+    static diagnosisText(d) {
+        const when = (ts) => {
+            const n = Number(ts);
+            if (!ts || !Number.isFinite(n)) return '';
+            const stamp = window.ServerUi.stamp(n);
+            return new Date(n * 1000).toDateString() === new Date().toDateString() ? stamp.split(', ')[1] : stamp;
+        };
+        const endpoint = String(d.endpoint || '');
+        const host = (endpoint.match(/^\[(.+)\]:\d+$/) || endpoint.match(/^([^:]+):\d+$/) || [null, endpoint])[1];
+        const dev = d.device || {};
+        const srv = d.server || {};
+        const mismatch = Array.isArray(d.mismatch) ? d.mismatch : [];
+        const onOff = (v) => (v ? 'on' : 'off');
+        const range = (v) => String(v ?? '—').replace('-', '–');
+        const keyItem = dev.key === 'none' ? 'no header protection key (server has one)'
+            : srv.key ? 'an old header protection key (server has a newer one)' : 'a header protection key (server has none)';
+        const items = {
+            S1: `S1 ${dev.S1} (server ${srv.S1})`,
+            H1: `H1 ${dev.H1} (server ${range(srv.H1)})`,
+            RandomTrailers: `trailers ${onOff(dev.trailers)} (server ${onOff(srv.trailers)})`,
+            HeaderProtectionKey: keyItem,
+        };
+        const rows = [
+            ['S1', dev.S1 ?? '—', srv.S1 ?? '—', true],
+            ['H1', dev.H1 ?? '—', range(srv.H1), true],
+            ['RandomTrailers', onOff(dev.trailers), onOff(srv.trailers), dev.trailers || srv.trailers],
+            ['HeaderProtectionKey', { current: 'current', previous: 'an old one', none: 'none' }[dev.key] || '—',
+                srv.key ? 'set' : 'none', (dev.key && dev.key !== 'none') || srv.key],
+        ].filter(([label, , , shown]) => shown || mismatch.includes(label))
+            .map(([label, device, expected]) => [label, String(device), String(expected), mismatch.includes(label)]);
+        return {
+            host,
+            since: when(d.since),
+            lastAttempt: when(d.last_attempt),
+            lastHandshake: when(d.last_handshake),
+            paramsChanged: when(d.params_changed_at),
+            attempts: Math.max(0, Math.round(Number(d.attempts) || 0)),
+            items: mismatch.map((m) => items[m] || m),
+            rows,
+        };
     }
 
     async downloadClientConfig(serverId, clientId) {
@@ -665,6 +765,9 @@ class ModalUi {
             ? `${safe(c.field)} ${mono(value(c.old))} → ${mono(value(c.new))}` : safe(c.field)).join(' · ');
         const duration = (s) => (s < 60 ? `${Math.max(0, Math.round(s))} s` : window.ServerUi.uptime(s));
         const bytes = window.ServerUi.bytes;
+        const where = d.endpoint ? `${mono(d.endpoint)}${d.country ? ` ${window.ServerUi.flag(d.country)} ${safe(d.country)}` : ''}` : '';
+        const from = where ? `from ${where} · ` : '';
+        const count = (n, noun) => `${Number(n) || 0} ${noun}${Number(n) === 1 ? '' : 's'}`;
         const table = {
             'server.create': ['plus', tones.change, `Server ${server} created`],
             'server.delete': ['trash', tones.change, `Server ${server} deleted`],
@@ -683,9 +786,15 @@ class ModalUi {
             'settings.save': ['gear', tones.change, 'Panel settings saved'],
             'access.change': ['key', tones.warn, d.user_changed ? 'Sign-in user and password changed' : 'Sign-in password changed'],
             'client.online': ['activity', tones.good, `${client} came online${onServer}`,
-                d.endpoint ? `from ${mono(d.endpoint)}${d.country ? ` ${window.ServerUi.flag(d.country)} ${safe(d.country)}` : ''}` : ''],
+                where ? `from ${where}` : ''],
             'client.offline': ['activity', tones.quiet, `${client} went offline${onServer}`,
                 `after ${duration(Number(d.duration_s) || 0)} · ↓ ${bytes(d.sent_bytes)} ↑ ${bytes(d.received_bytes)}`],
+            'client.old_config': ['alert', tones.bad, `${client} is trying with an old config${onServer}`,
+                `${from}${safe((Array.isArray(d.mismatch) ? d.mismatch : []).join(', ') || 'Parameters')} differ · ${count(d.attempts, 'handshake')} captured`],
+            'client.maybe_blocked': ['alert', tones.warn, `${client} may be blocked${onServer}`,
+                `${from}${count(d.attempts, 'handshake')} answered, none completed`],
+            'client.recovered': ['check', tones.good, `${client} connects again${onServer}`,
+                `${safe(window.ServerUi.DIAGNOSES[d.verdict]?.label || d.verdict)} cleared after ${duration(Number(d.duration_s) || 0)}`],
             'health.problem': ['alert', tones.warn, 'Health check failing', safe(d.problem)],
             'health.clear': ['check', tones.good, 'Health problem cleared', safe(d.problem)],
             'egress.change': ['globe', tones.net, `Egress IP of ${server} changed`,

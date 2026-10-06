@@ -6,7 +6,8 @@ and its `awg show all dump` parser) except the system edges of the manager: keys
 iptables, GeoIP and the egress probe are answered here. Addresses come from the
 documentation ranges and keys are random, so nothing real can leak into a screenshot.
 The traffic history starts with an invented day (seed_history), recorded through the
-history's own path, so the Traffic dialog has 24 hours to show at once.
+history's own path, so the Traffic dialog has 24 hours to show at once. Two clients carry
+a diagnosis (2.8), one of each verdict, as the probe would report them (DEMO_DIAGNOSES).
 
     uv run --no-project --python 3.14 --with-requirements web-ui/requirements.txt \
         tests/demo_server.py [--port 8099]
@@ -53,6 +54,7 @@ GEO = {
     "198.51.100.17": ("Amsterdam", "NL"),
     "198.51.100.61": ("Frankfurt am Main", "DE"),
     "198.51.100.23": ("Rotterdam", "NL"),
+    "203.0.113.140": ("Moscow", "RU"),
 }
 MiB, GiB = 1024**2, 1024**3
 
@@ -93,6 +95,7 @@ class DemoManager(AmneziaManager):
         self.peers = {}  # client public key -> {endpoint, handshake_at, rx, tx, read_at}
         self._live_rngs = {}  # client name -> its live traffic's random.Random
         self._public_ip_calls = 0
+        self.diagnoses = {}  # client id -> the probe's diagnosis (seed_diagnoses), its times relative
         super().__init__(**kwargs)
         # Replaced before the seed: until then the traffic loop has no server to look up.
         self.netinfo = DemoNetInfo(
@@ -196,6 +199,24 @@ class DemoManager(AmneziaManager):
                                         f"{client['client_ip']}/32", str(handshake), str(rx), str(tx), "off"]))  # fmt: skip
         return "\n".join(lines)
 
+    def get_traffic_for_server(self, server_id):
+        """The real entries, with each client's `diagnosis` (the 2.8 contract) from
+        `self.diagnoses` in place of the probe's: the attempts carry on every 5 s."""
+        traffic = super().get_traffic_for_server(server_id)
+        if traffic is None:
+            return None
+        now = int(time.time())
+        for client_id, entry in traffic.items():
+            found = self.diagnoses.get(client_id)
+            if found is None:
+                entry.setdefault("diagnosis", None)
+                continue
+            diagnosis = {**found, "last_attempt": now - now % 5}
+            if diagnosis["verdict"] == "maybe_blocked":
+                diagnosis["attempts"] = (diagnosis["last_attempt"] - diagnosis["since"]) // 5
+            entry["diagnosis"] = diagnosis
+        return traffic
+
     # --- network lookups ------------------------------------------------------
     def detect_public_ip(self):
         ip = PUBLIC_IPS[self._public_ip_calls % 2]
@@ -229,10 +250,13 @@ def seed(manager):
         "MacBook": ("203.0.113.88:61022", 184, 802.1 * MiB, 6.59 * GiB),
         "iPad": ("198.51.100.40:50112", 3 * 86400 + 7260, 38.9 * MiB, 412.3 * MiB),
         "Pixel": ("203.0.113.201:40211", 47, 101.7 * MiB, 922.4 * MiB),
+        # The two with a diagnosis (seed_diagnoses): last connected before it began.
+        "Tablet": ("203.0.113.140:41822", 26 * 60, 2.1 * MiB, 15.4 * MiB),
+        "Galaxy": ("198.51.100.40:50991", 6 * 3600 + 540, 61.2 * MiB, 734.8 * MiB),
     }
     clients = {}
-    for srv, names in ((home, ("iPhone", "MacBook", "iPad", "Router")), (travel, ("Pixel", "Work laptop")),
-                       (lab, ("test-peer",))):  # fmt: skip
+    for srv, names in ((home, ("iPhone", "MacBook", "iPad", "Router", "Tablet")),
+                       (travel, ("Pixel", "Work laptop", "Galaxy")), (lab, ("test-peer",))):  # fmt: skip
         for name in names:
             extra = {"ContentPaddingAddition": "8-24"} if name == "Pixel" else {}
             client, _ = manager.add_wireguard_client(srv["id"], name, client_params={**params, **extra})
@@ -261,7 +285,30 @@ def seed(manager):
     manager.started[home["interface"]] = now - (3 * 86400 + 4 * 3600)
     manager.started[travel["interface"]] = now - 5 * 3600
     seed_history(manager)
+    seed_diagnoses(manager, home, travel, clients)
     seed_activity(manager, home, travel, clients)
+
+
+def seed_diagnoses(manager, home, travel, clients):
+    """One client of each 2.8 verdict, as the probe reports them (DEVELOPMENT.md §10,
+    2.8 *Contract*). The Galaxy got its QR this morning and was never re-imported, so no
+    Re-import pill: its handshakes still carry Travel's S1 and H1 from before a Randomize.
+    The Tablet's handshakes are read and answered on Home, and none completes."""
+    now = int(time.time())
+    manager.diagnoses[clients["Galaxy"]["id"]] = {
+        "verdict": "old_config", "since": now - 140, "last_attempt": now, "attempts": 5,
+        "endpoint": "203.0.113.150:31784", "country": "DE",
+        "device": {"S1": 52, "H1": 1873220, "trailers": True, "key": "current"},
+        "server": {"S1": 64, "H1": "120000-130000", "trailers": True, "key": True},
+        "mismatch": ["S1", "H1"], "last_handshake": now - (6 * 3600 + 540), "params_changed_at": None,
+    }  # fmt: skip
+    manager.diagnoses[clients["Tablet"]["id"]] = {
+        "verdict": "maybe_blocked", "since": now - 4 * 60, "last_attempt": now, "attempts": 48,
+        "endpoint": "203.0.113.140:41822", "country": "RU",
+        "device": {"S1": 50, "H1": 1187, "trailers": False, "key": "none"},
+        "server": {"S1": 50, "H1": "1000-1400", "trailers": False, "key": False},
+        "mismatch": [], "last_handshake": now - 26 * 60, "params_changed_at": now - 41 * 60,
+    }  # fmt: skip
 
 
 def seed_activity(manager, home, travel, clients):
@@ -273,6 +320,11 @@ def seed_activity(manager, home, travel, clients):
     record = manager.activity.record
     record("session", "client.offline", server=home, client=clients["iPad"],
            detail={"duration_s": 2 * 3600 + 14 * 60, "received_bytes": int(38.9 * MiB), "sent_bytes": int(412.3 * MiB)})  # fmt: skip
+    record("session", "client.recovered", server=travel, client=clients["Pixel"],
+           detail={"verdict": "maybe_blocked", "duration_s": 6 * 60 + 20})  # fmt: skip
+    for srv, name in ((travel, "Galaxy"), (home, "Tablet")):
+        detail = {k: v for k, v in manager.diagnoses[clients[name]["id"]].items() if k != "since"}
+        record("session", f"client.{detail['verdict']}", server=srv, client=clients[name], detail=detail)
     manager.netinfo.egress[home["server_ip"]] = "198.51.100.23"
     manager.probe_server_egress_ip(home["id"])
     line = "Travel 443: the daemon has 1 peer, the panel 2"
