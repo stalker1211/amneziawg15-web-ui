@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## Version 2.8 (2026-10-06)
+
+### Why a device can't connect (experimental)
+- **Old config** (red, on the client's row): the device knocks with parameters the
+  server no longer uses: S1, H1, the header protection key or random trailers. The
+  panel reads the handshake with the server's key, so it names the client even when
+  its Re-import mark was cleared by a QR the device never scanned.
+- **Maybe blocked** (orange): the server reads and answers the device's handshakes,
+  and none completes, so packets are lost on the way.
+- **The evidence:** the pill opens a dialog with what the device sent against what the
+  server expects, from where (address and country), since when, how many attempts, the
+  last completed handshake, and whether the server's parameters changed after it. A
+  verdict ends when the device connects. A device whose packets never reach the server
+  still looks switched off.
+- **The Connection analyzer**, per server and **off by default**: a switch in the
+  server's ⚙ → Networking and in the New server form, and a radar icon after the
+  status pill (coloured on, grey off; a tap opens the drawer). It reads only a failing
+  device's handshake packets, in a capture of at most 10 s filtered in the kernel,
+  never the tunnel's traffic. Measured: about 0.2 % of a CPU core idle with six
+  servers on.
+- **Activity:** `client.old_config` and `client.maybe_blocked` (level `warning`, so a
+  Loki alert can catch them) and `client.recovered` (`info`). In the API, `diagnosis`
+  on each client in `GET /api/servers` and `traffic_update`, null when none.
+
+### Networking
+- **A server's start clears its port's conntrack flows,** so a device still retrying
+  with an old config is seen as unanswered rather than as the session the old daemon
+  had answered.
+- **Saving Networking** reapplies iptables and re-checks the egress only when NAT or
+  LAN blocking changed, not for the analyzer's switch.
+
+### Image
+- **New dependencies:** `cryptography` (to read a handshake) and `conntrack-tools`.
+  The capture uses a raw socket, which needs `CAP_NET_RAW`, in Docker's default set;
+  without it the analyzer stays off with one warning in the log.
+
+### Docs
+- **The README starts with what the panel is,** a quick start and short features;
+  the reference sections follow, shorter.
+
 ## Version 2.7.2 (2026-10-05)
 
 ### Logging

@@ -1,112 +1,238 @@
 # AmneziaWG Web UI
 
-A web UI for running [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go) VPN
-servers — WireGuard with obfuscation that resists DPI-based blocking. Create servers,
-manage clients, hand out configs, and watch traffic live, all from one container.
+A web panel for [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-go): WireGuard
+with obfuscation that DPI cannot easily recognise. Servers, clients and their configs
+are fully managed from the browser with a clean GUI: live traffic per client, history
+for 1, 6 and 24 hours, configs as QR codes, a mark on every device whose config is
+out of date, an activity log, and the reason a device cannot connect. All in one
+Docker container.
 
-Everything is configurable in the panel, including its own settings (⚙ in the
-header: sign-in, logging, GeoIP). An environment variable can
-pin a setting; only `NGINX_PORT`, `WAN_IF` and `AWG_LOG_FILE` are deployment-only. See [Environment variables](#environment-variables).
-
-Current version: **2.7.2**
+Current version: **2.8**
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="screenshot-light.png">
   <img src="screenshot.png" alt="Web UI screenshot" width="50%"/>
 </picture>
 
-## 🚀 Features
+## 🚀 Quick start
 
-- **Servers and clients from the browser** — create, start/stop, rename, delete; add
-  clients and hand out configs as `.conf`, text or QR code. A new server starts from
-  the newest one's MTU, DNS, NAT and LAN blocking.
-- **AWG 1.5 / 2.0 / 3.0 / 3.1**, with only the relevant fields shown per protocol.
-  AWG 3.0 adds header protection, content padding and tunable timings; 3.1 adds
-  random packet trailers and optional cookie-reply suppression.
-- **Live monitoring** — per-client traffic, endpoint and handshake age, pushed to the
-  page as it changes (Server-Sent Events), with country flags for endpoint / public /
-  egress IPs. A server's egress (where its clients' traffic leaves) is checked again
-  after each start and each NAT or LAN-block change.
-- **Traffic graphs** — every running server's last hour on its card and each online
-  client's in its row, with the rates now; a server's Traffic view shows 1 h, 6 h or
-  24 h, per client, with when each was online or suspended. Kept in the panel's memory
-  (every 7 s for an hour, per minute for a day), so a restart starts it over; nothing is
-  written to disk. Download (↓) and upload (↑) are from the device's side.
-- **Server totals** — beside the graph, what a running server has carried since it
-  started (and since when): the kernel's counters for its interface, so a client
-  suspended or deleted since still counts. A stop and start begins them again. A click
-  opens the Traffic view, as on the graph.
-- **Activity** — what happened, newest first: changes to servers, clients and
-  settings (old → new for short values, never a key), clients coming online and going
-  offline (endpoint, country, how long, bytes), a device on an old config or maybe
-  blocked and connecting again, health problems and egress changes,
-  and failed sign-ins. From the header's clock button, or a server's ⋯ for that server
-  alone; filters per kind; live. Kept in memory (the last ~1000), and each event is
-  also a JSON line in `docker logs` (see [Logging](#-logging)).
-- **Signature packets from a profile** — in a client's drawer, **Generate** fills
-  I1–I5 with packets shaped like a QUIC connection opening or a DNS lookup (or random
-  ones), so a handshake is preceded by traffic that looks like something else.
-- **Health check** — Docker marks the container `unhealthy` when a server that should
-  run is down, or has drifted from the panel: a device the panel suspended or deleted
-  still let in, or firewall rules that are not what its switches call for.
-- **Re-import marks** — the panel remembers which config each device received and
-  marks a client **Re-import** when its config has changed since (new transport
-  parameters, new client parameters, a new public IP). Server settings say how many
-  devices a change affects before you save.
-- **Why a device can't connect** — a client's row turns red with **Old config** when
-  its device knocks with parameters the server no longer uses (S1, H1, the header
-  protection key, random trailers): the panel reads the handshake with the server's
-  key, so it names the client even when the Re-import mark was cleared by a QR the
-  device never scanned. **Maybe blocked** (orange) when the server reads and answers
-  the device's handshakes and none completes, so packets are lost on the way. The
-  pill opens the evidence: what the device sent against what the server expects, from
-  where, since when. A device whose packets never reach the server looks switched off.
-- **Split tunnelling and a stable endpoint** — each client's AllowedIPs is editable
-  (all IPv4 by default; a narrower list for split tunnelling), and each server can
-  give its clients a DNS name to dial (e.g. dynamic DNS), so a new public IP needs no
-  re-import.
-- **Client suspend** — revoke access without deleting; keys are preserved.
-- **Automatic networking** — iptables NAT and optional private-LAN blocking per
-  server (which also keeps its clients off the panel); a container restart brings back exactly the servers that were running;
-  smart port/subnet/IP proposals.
-- **Panel settings** (⚙) — the sign-in credential, the daemon's and the panel's log
-  levels, and GeoIP, stored with the servers.
-- **Forms checked as you type** by the server, in a side drawer; toasts and in-app
-  confirmations instead of browser pop-ups; works down to phone width.
-- **Dark theme** (the OS preference picks the first one), collapsible help, inline rename.
-- **Self-contained UI** — no CDN: the page loads nothing from other hosts, so it works
-  without internet access and never tells a third party where your panel is.
-- Behind nginx HTTP Basic Auth; the web UI itself listens on loopback only, and the
-  page runs no inline script (CSP `script-src 'self'`).
+```bash
+docker run -d --name amnezia-web-ui \
+  --cap-add NET_ADMIN --device /dev/net/tun \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
+  -p 8080:80 -p 51820:51820/udp \
+  -v amnezia-data:/etc/amnezia \
+  --restart unless-stopped \
+  stalker1211/amneziawg15-web-ui:latest
+```
+
+Open `http://<host>:8080` (`admin` / `changeme`), change the password in **⚙ → Access**,
+add a server. The first server gets port 51820; publish a UDP port for each further
+one. Compose and variables: [Docker Deployment](#-docker-deployment).
+
+## ✨ Features
+
+- Servers and clients: create, start/stop, rename, suspend, delete
+- Configs as QR code, `.conf` or text
+- AWG 1.5, 2.0, 3.0, 3.1; random parameters per server
+- I1–I5 packets shaped like QUIC or DNS
+- Live traffic per client; graphs for 1 h, 6 h, 24 h; server totals
+- Re-import marks for outdated configs
+- Old config / Maybe blocked: why a device can't connect (experimental)
+- Activity log, also in `docker logs`
+- Docker health check on drift
+- Split tunnelling, DNS endpoint, NAT, LAN blocking
+- Panel settings (sign-in, log levels, GeoIP) in **⚙**; any can be pinned by a variable
+- No CDN, dark theme, phone width
+
+## 🩺 Connection analyzer (experimental)
+
+Says why a client's device cannot connect, on the client's row. Experimental: tested
+against real daemons in containers, not yet over time on real networks, so a verdict
+may be missed or wrong.
+
+- **Old config** (red): the device knocks with parameters the server no longer uses
+  (S1, H1, the header protection key, random trailers). The panel reads the handshake
+  with the server's key, so it names the client even when its Re-import mark was
+  cleared by a QR the device never scanned.
+- **Maybe blocked** (orange): the server reads and answers the device's handshakes,
+  and none completes, so packets are lost on the way.
+
+The pill opens the evidence: what the device sent against what the server expects,
+from where, since when. A verdict ends when the device connects.
+
+Off by default, per server: switch it on in the server's **⚙ → Networking →
+Connection analyzer**. The radar icon after the status pill shows whether it is on.
+It reads only a failing device's handshake packets (a capture of at most 10 s), never
+the tunnel's traffic; idle, it costs about 0.2 % of a CPU core. It needs `CAP_NET_RAW`,
+which Docker grants by default. A device whose packets never reach the server looks
+switched off, and is not detected.
+
+## 📈 Traffic and Activity
+
+Download (↓) and upload (↑) are from the device's side. The traffic history lives in
+the panel's memory (every 7 s for an hour, per minute for a day), so a restart starts
+it over. A server's totals are its interface's kernel counters since it started, so
+clients deleted since still count.
+
+Activity lists what happened, newest first: changes to servers, clients and settings
+(old → new, never a key), clients online and offline, Old config / Maybe blocked and
+recovery, health problems, egress changes, failed sign-ins. Open it from the header's
+clock button, or a server's ⋯ for that server alone. The last ~1000 are kept in memory;
+each is also a JSON line in `docker logs` ([Logging](#-logging)).
+
+## 📊 Obfuscation Parameters
+
+- **Server-side**: identical on both ends, written into the server config *and* every
+  client config, so changing one means clients must re-import. The server settings
+  say how many devices a change affects before you save.
+- **Client-side**: may differ per client; only in client configs.
+
+| Parameter | Side | Protocol | Notes |
+| --- | --- | --- | --- |
+| `Jc` | client | 1.5+ | Junk packets sent before each handshake (4–12 typical; 0 sends none) |
+| `Jmin` / `Jmax` | client | 1.5+ | Junk packet size range; `Jmin` ≤ `Jmax`, keep `Jmax` < MTU or packets fragment |
+| `I1`–`I5` | client | 1.5+ | Custom signature packets (below). Empty values are omitted |
+| `S1` | server | 1.5+ | Padding of the handshake initiation message. `S1 + 56 ≠ S2` |
+| `S2` | server | 1.5+ | Padding of the handshake response message |
+| `S3` / `S4` | server | 2.0+ | Padding of the cookie / transport messages |
+| `H1`–`H4` | server | 1.5+ | Message header values. 2.0+ also accepts a range (`1200-1400`); ranges must not overlap |
+| `HeaderProtectionKey` | server | 3.0+ | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
+| `ContentPaddingAddition` | client | 3.0+ | Extra random bytes per data packet (`10-40`) |
+| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default. Keep RekeyAfterTime under 180: the server drops the session at 180 s (the form warns) |
+| `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets. Keep S1–S4 equal with it, or amneziawg-go drops some data packets as false handshakes ([#186](https://github.com/amnezia-vpn/amneziawg-go/issues/186)); Randomize draws them equal and the form warns. Without it, equal S1–S4 get a warning instead |
+| `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
+| `MTU` | — | all | Interface MTU (1280–1440) |
+| `AllowedIPs` | client | all | What the device sends through the tunnel: `0.0.0.0/0` (the default) is all IPv4, a narrower list is split tunnelling. `::/0` sends IPv6 in too, where the server drops it |
+| `Endpoint` | server | all | The detected public IP, or the server's **endpoint host** (a DNS name or IPv4). With a dynamic DNS name, a new public IP needs no re-import |
+
+What hides what: **I1–I5** (a protocol's shape) and **Jc/Jmin/Jmax** (random junk)
+precede the handshake; **S1–S3** and **H1–H3** disguise the handshake messages; **S4**,
+**H4** and on 3.x `ContentPaddingAddition` every data packet; 3.x **header protection**
+and 3.1 **random trailers** both. The form shows only the selected protocol's fields
+and checks them as you type.
+
+Every new server draws its own random parameters (ported from
+[AmneziaWG Architect](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT)): four
+disjoint H ranges, S sizes that never make two message types the same length, a small
+junk train, and on 3.x a header protection key, content padding and timers.
+**Randomize** draws a fresh set. In a client's drawer each group (junk, I1–I5, 3.x
+timers and padding) has its own **Generate**. Nothing is saved until **Save**, and
+nothing is generated for a client by itself.
+
+### I1–I5 (custom signature packets)
+
+Sent before every handshake, client-side only. `I1` is the primary packet (empty `I1`
+skips the chain); `I2`–`I5` follow in order. The server's I1–I5 are defaults for new
+clients only; changing them leaves existing clients alone.
+[Reference](https://github.com/amnezia-vpn/amneziawg-go#custom-signature-packets).
+
+Tags: `<b 0x[hex]>` static bytes, `<r [size]>` random bytes, `<rd [size]>` random
+digits, `<rc [size]>` random letters, `<t>` unix timestamp (4 bytes). Example:
+`I1 = <b 0xf6ab3267fa><t><r 10>`. A packet larger than the MTU fragments, which can
+look suspicious to DPI.
+
+**Generate** fills them with a shape:
+
+| Shape | I1 | I2 | I3–I5 |
+|---|---|---|---|
+| **QUIC Initial** | a QUIC client Initial, 1200–1252 bytes as browsers send it | a second Initial | short packets, as a QUIC connection carries next |
+| **DNS query** | an A query for the host (a common name when left empty) | the AAAA query | — |
+| **Random** | random bytes and tags | the same | the same |
+
+What a real client picks per connection (connection ids, a DNS transaction id) is a
+random tag, so it changes on every handshake. Wireshark reads the packets as QUIC and
+DNS, but a DPI that decrypts QUIC Initials finds them broken. A note says when the
+server's port is not the protocol's usual one (UDP 443, 53). For other shapes the
+drawer links to [AmneziaWG Architect](https://architect.vai-rice.space).
+
+Long I1–I5 can make a config too large for one QR code; then use **Download .conf**.
+
+## 🐳 Docker Deployment
+
+Image: https://hub.docker.com/r/stalker1211/amneziawg15-web-ui. `:latest` is the
+newest build, `:2.8` and so on pin a release; the version under the page heading shows
+which one runs. A plain `docker run` is in [Quick start](#-quick-start).
+
+### Environment variables
+
+**Settings**, each also in **⚙**. A set variable is copied into the stored settings at
+every boot and makes the field read-only; remove it and the last value stays, editable.
+An invalid value is logged and ignored.
+
+| Variable | Default | Setting |
+|----------|---------|---------|
+| `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in, stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
+| `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
+| `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
+| `LOG_LEVEL` | `INFO` | The web panel's log, and which requests nginx logs |
+| `TRUSTED_PROXIES` | `172.17.0.0/16` | Reverse proxies whose `X-Forwarded-For` names the client (IPs or CIDRs, comma-separated; empty trusts none) |
+
+**Deployment.**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NGINX_PORT` | `80` | Port nginx listens on inside the container |
+| `WAN_IF` | *(auto)* | Outbound interface for NAT and forwarding; detected from the default route |
+| `AWG_LOG_FILE` | `/var/log/amnezia/amneziawg-go.log` | Where the daemon's log goes |
+
+Retired, ignored with a warning: `API_TOKEN`, `AUTO_START_SERVERS`, `ALLOWED_ORIGINS`,
+`DEFAULT_MTU`, `DEFAULT_SUBNET`, `DEFAULT_PORT`, `DEFAULT_DNS`, `ENABLE_NAT`,
+`BLOCK_LAN_CIDRS` (a new server starts from your newest one). `SYS_MODULE` is not
+needed: the daemon runs in userspace.
+
+### Docker Compose
+
+```yaml
+services:
+  amnezia-web-ui:
+    image: stalker1211/amneziawg15-web-ui:latest
+    container_name: amnezia-web-ui
+    ports:
+      - "8080:80/tcp"
+      - "51820:51820/udp"
+    volumes:
+      - amnezia-data:/etc/amnezia
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+volumes:
+  amnezia-data:
+```
+
+### Local build
+
+`./run.sh` builds the image and (re)starts a local container. `BUILD=0` skips the
+build, `INTERACTIVE=1` runs it in the foreground, `ENTRYPOINT=/bin/sh INTERACTIVE=1`
+gives a shell.
 
 ## 📝 Logging
 
-Everything except the AWG daemon's log goes to the container's output, so `docker logs`
-(and Promtail/Loki) see it all: the web UI's log, nginx's requests and errors,
-supervisord, and the Activity events. Two levels are set in **⚙ → Logging** (or pinned
-by their variables): the daemon's and the web UI's.
+Everything but the AWG daemon's log goes to the container's output, so `docker logs`
+(and Promtail/Loki) see it all: the web UI, nginx, supervisord and the Activity events.
+Both levels are in **⚙ → Logging**.
 
-**AWG daemon (`amneziawg-go`)** — `off`, `error` (the default: silent unless something
-fails) or `debug`, which adds every handshake and "Received message with unknown
-type": the only trace of a client with outdated parameters, or of a scanner. The
-daemon reads its level when a server starts, so the drawer offers to restart the
-running servers. Variable: `AWG_LOG_LEVEL` (`verbose` means `debug`, `silent` means
-`off`); it reaches the daemon only, never the panel's own level. The file is
-`AWG_LOG_FILE` (default `/var/log/amnezia/amneziawg-go.log`).
+**AWG daemon** (`amneziawg-go`): `off`, `error` (the default) or `debug`, which adds
+every handshake and "Received message with unknown type" (a client with outdated
+parameters, or a scanner). Read when a server starts, so the drawer offers to restart
+the running ones. `AWG_LOG_LEVEL` (`verbose` = `debug`, `silent` = `off`); the file is
+`AWG_LOG_FILE`. Shown per server in **⋯ → AWG Logs**.
 
-Use **⋯ → AWG Logs** on a server card. The log view filters by the selected server interface and shows related “startup banner” lines for that interface.
-
-**Web UI** — always on, with timestamps, levels and module names.
-`ERROR`/`WARNING`/`INFO` (default)/`DEBUG`, applied at once. Variable: `LOG_LEVEL`.
+**Web UI**: `ERROR`/`WARNING`/`INFO` (default)/`DEBUG`, applied at once. `LOG_LEVEL`.
 
 ```
 2026-08-07 17:49:02 INFO    [services.amnezia_manager] Server myvpn started successfully
 ```
 
-**nginx** — one line per request, with a level from the status: `error` for 5xx,
-`warning` for other 4xx, `debug` for the rest and for a 401 (a browser's first request
-always gets one, and failed sign-ins are Activity events). Which requests are logged
-follows the **Web panel** level, applied at once:
+**nginx**: one line per request, its level from the status (`error` 5xx, `warning`
+other 4xx, `debug` the rest and 401s, which every browser gets first). Which requests
+are logged follows the Web UI level:
 
 | Web panel level | Requests logged |
 |---|---|
@@ -114,45 +240,36 @@ follows the **Web panel** level, applied at once:
 | Info, Warnings | the failed ones: 4xx (but 401) and 5xx |
 | Errors | 5xx |
 
-`/static/` (a dozen files per page load) and the Docker health check's `/status` are
-never logged. nginx's warnings and errors follow in its own format (a failed sign-in
-among them, or why a request got a 502); they also stay in `/var/log/nginx/error.log`,
-where the panel reads failed sign-ins.
+`/static/` and the health check's `/status` are never logged. nginx's own warnings and
+errors follow in its format, and stay in `/var/log/nginx/error.log` too.
 
 ```
 2026-10-05T18:04:21+00:00 debug 200 POST /api/servers/a1b2c3/stop 192.168.1.50 user=admin bytes=21
 2026/10/05 18:04:21 [error] 41#41: *11 user "admin": password mismatch, client: 192.168.1.50, ...
 ```
 
-**Behind a reverse proxy** (Caddy, Traefik, another nginx), every request comes from
-the proxy's address, in these lines and in failed sign-ins alike. List the proxy in
-**⚙ → Access → Trusted proxies** (or `TRUSTED_PROXIES`): nginx then takes the client
-from its `X-Forwarded-For`. The default, `172.17.0.0/16`, is Docker's default bridge.
-Trust only proxies that set that header themselves: whoever is trusted chooses the
-address logged. Saving reloads nginx; an open page reconnects within ~10 s.
+**Behind a reverse proxy**, every request comes from the proxy's address. List it in
+**⚙ → Access → Trusted proxies** (`TRUSTED_PROXIES`) and nginx takes the client from
+`X-Forwarded-For`. Trust only proxies that set that header themselves. Saving reloads
+nginx; an open page reconnects within ~10 s.
 
-**supervisord** — process starts and exits. `reaped unknown pid … (exit status 0)` is
-an `amneziawg-go` daemon ending when its server stops: supervisord is the container's
-PID 1, which collects every exited process, and the daemon is not one it started.
+**supervisord**: process starts and exits. `reaped unknown pid … (exit status 0)` is a
+daemon ending when its server stops.
 
-Docker keeps a container's output without a size limit unless told otherwise; with
-`/status` left out it is small (about a hundred lines a day besides the events),
-but `--log-opt max-size=10m --log-opt max-file=3` (or `logging:` in Compose) caps it.
+Docker keeps a container's output unbounded unless told otherwise (about a hundred
+lines a day besides the events); `--log-opt max-size=10m --log-opt max-file=3` caps it.
 
-**Activity events** — one JSON line each, marked `"src": "awg-webui"` to tell them
-from the lines above. Each also carries a
-`level` — `error` for `health.problem`, `warning` for `auth.fail`, `egress.change`,
-`client.old_config` and `client.maybe_blocked` (a device that cannot connect, so a
-Loki alert can catch it), `info` for the rest (`client.recovered` among them) — while
-`kind` stays the category:
+**Activity events**: one JSON line each, `"src": "awg-webui"`, with a `level`: `error`
+for `health.problem`; `warning` for `auth.fail`, `egress.change`, `client.old_config`
+and `client.maybe_blocked` (so a Loki alert can catch a device that cannot connect);
+`info` for the rest.
 
 ```
 {"src": "awg-webui", "level": "info", "seq": 42, "ts": "2026-10-02T19:32:52Z", "kind": "change", "event": "client.params", "server_id": "abc123", "server": "home", "client_id": "cl1", "client": "iphone", "detail": {"changes": [{"field": "MTU", "old": 1420, "new": 1380}]}}
 ```
 
-In Grafana, as JSON: `{container="..."} | json | src="awg-webui"`. To read them like
-other logs instead, have Promtail rewrite each event into a plain line with a `level`
-label (the line is then text, so `| json` no longer applies):
+In Grafana: `{container="..."} | json | src="awg-webui"`. Or have Promtail rewrite each
+event into a plain line with a `level` label:
 
 ```
 awg-webui client.offline server="home" client="iphone" duration=0h50m down=670.70MiB up=21.06MiB
@@ -180,15 +297,12 @@ pipeline_stages:
         - output: { source: message }
 ```
 
-`down`/`up` are the device's (`sent_bytes` is the server's tx). Other events' `detail`
-(`changes`, `problem`, `address`...) can be added to the template the same way. Keep
-Promtail's `positions.filename` on persistent storage: if it is lost, Promtail re-reads
-the whole container log, and a changed template stores every old event again.
+`down`/`up` are the device's (`sent_bytes` is the server's tx). Keep Promtail's
+`positions.filename` on persistent storage, or a lost one re-reads the whole log.
 
-The other lines can take the same shape (`webui [services.amnezia_manager] Server
-myvpn stopped successfully`), with `src` and `level` labels, by a second `match` after
-the first. Each format starts with its time, which is dropped (Docker's is kept); the
-regex has no `$`, because the `docker` stage leaves the line's newline on:
+The other lines take the same shape (`webui [services.amnezia_manager] Server myvpn
+stopped successfully`) with a second `match` after the first (the regex has no `$`: the
+`docker` stage leaves the newline on):
 
 ```yaml
   - match:
@@ -216,131 +330,27 @@ regex has no `$`, because the `docker` stage leaves the line's newline on:
         - output: { source: message }
 ```
 
-## 🏗️ Architecture
-
-One container, three processes under supervisord: **nginx** (port 80, Basic Auth,
-reverse proxy), the **Flask web UI** (127.0.0.1:5000), and one
-**`amneziawg-go`** daemon per VPN interface.
-
-```
-web-ui/
-├── app.py                      Flask entrypoint, env parsing
-├── core/                       request guards (CSRF), live updates (events), settings, runtime wiring, helpers, logging
-├── routes/                     servers.py, settings.py, system.py (all /api routes)
-├── services/amnezia_manager.py all business logic
-├── services/history.py         the traffic history, in memory
-├── templates/index.html        page shell
-└── static/
-    ├── css/style.css           a few styles (tailwind.css is built by build_css.sh)
-    ├── vendor/                 qrcode, an unmodified release file
-    └── js/  app.js             state, live updates, API calls, page actions
-              forms.js          the forms (side drawer), checked by /api/validate
-              modals.js         the QR, traffic, logs and full-config views
-              charts.js         the traffic charts (SVG)
-              ui.js             toasts, dialogs, drawer, menus, inline rename
-              server-ui.js      server card and client row rendering
-              protocols.js      reads the page config (protocol table, defaults)
-              api.js            fetch plumbing
-```
-
-State lives in `/etc/amnezia/web_config.json` — the source of truth. WireGuard
-`.conf` files under `/etc/amnezia/amneziawg/` are generated from it and never parsed
-back. See [DEVELOPMENT.md](DEVELOPMENT.md) for the details.
-
-## 🧩 I1–I5 (Custom Signature Packets)
-
-`I1`–`I5` are custom signature packets sent prior to every handshake. They do not carry actual data, so they only need to be configured on the client side.
-
-- `I1` is the primary packet (if `I1` is empty, the entire I1–I5 chain is skipped).
-- `I2`–`I5` are optional follow-up packets (sent in order; empty values are skipped).
-
-Official reference: https://github.com/amnezia-vpn/amneziawg-go#custom-signature-packets
-
-This Web UI treats I1–I5 as **client-only** parameters:
-
-- Server has **default** I1–I5 values (used only when creating *new* clients).
-- Each client can override I1–I5 independently (different clients on the same server may have different values).
-- Existing clients are **not** modified when server defaults change.
-- If an I value is empty, the corresponding `I* = ...` line is **omitted** from generated client configs.
-
-### Tag syntax (quick summary)
-
-I-values are strings composed of tags:
-
-- `<b 0x[hex]>` — static bytes (hex-encoded, e.g. `<b 0xf6ab3267fa>`)
-- `<r [size]>` — random bytes (cryptographically secure)
-- `<rd [size]>` — random digits (`0-9`)
-- `<rc [size]>` — random chars (`a-zA-Z`)
-- `<t>` — unix timestamp (4 bytes)
-
-Example: `I1 = <b 0xf6ab3267fa><t><r 10>`
-
-> **Note**: if the final size of any custom signature packet exceeds the system MTU, it may be fragmented, which can look suspicious to DPI.
-
-In the UI:
-
-- **+ Client**: set I1–I5 for a new client, starting from the server's defaults or
-  copying another client.
-- **Client row → Edit**: change I1–I5 for that client.
-
-### Generate: packets shaped like a protocol
-
-In the client drawer's I1–I5 section, pick a shape and press **Generate**; the fields
-fill in and **Save** keeps them (then re-import the client's config on the device).
-Nothing is generated for a client by itself: new clients start with no I1–I5.
-
-| Shape | I1 | I2 | I3–I5 |
-|---|---|---|---|
-| **QUIC Initial** | a QUIC client Initial, 1200–1252 bytes as browsers send it | a second Initial | short packets, as a QUIC connection carries next |
-| **DNS query** | an A query for the host (a common name when left empty) | the AAAA query | — |
-| **Random** | random bytes and tags | the same | the same |
-
-Everything a real client picks per connection (connection ids, a DNS transaction id
-and cookie, the encrypted payload) is a random tag, so it changes on every handshake;
-only the protocol's fixed fields are static bytes. A note says when the server's port
-is not where the protocol normally goes (UDP 443 for QUIC, 53 for DNS), since a QUIC
-packet to port 51820 is less convincing.
-
-The disguise is the packets' shape: Wireshark reads them as QUIC and DNS. It is not a
-full imitation: a real QUIC Initial can be decrypted by anyone who sees it, and these
-carry random bytes, so a DPI that decrypts Initials finds them broken. The junk packets
-(Jc) and the handshake still follow them. For other shapes (TLS, DTLS, SIP), the drawer
-links to [AmneziaWG Architect](https://architect.vai-rice.space).
-
-## 📷 QR code notes
-
-WireGuard configs can become too large to fit into a single QR code (especially with long I1–I5 values). When this happens, the QR view shows an error and you should use **Download .conf** instead. The QR carries the config without comments, which keeps it as small as possible.
-
 ## 🔧 API Endpoints
 
-All `/api/*` routes sit behind nginx HTTP Basic Auth (the panel's sign-in, see
-[Security](#security)), the only credential: the web UI listens on 127.0.0.1 inside the container, so nothing
-reaches it around nginx. Scripts send the same Basic Auth (`curl -u`). `API_TOKEN` was
-removed in 2.4; a container that still sets it logs a warning and ignores it.
-
-Live updates are no exception: `GET /api/events` is a Server-Sent Events stream (an
-ordinary request that stays open), behind the same Basic Auth, which the browser
-sends with it as with any request. Until 2.5 they went over Socket.IO, whose
-WebSocket handshake iPadOS Safari sent without the credential, so `/socket.io/` had
-to be gated by a session cookie instead; that exception is gone, with the cookie.
-
-**Mutating requests must send `Content-Type: application/json`** (anything else gets
-`415`). This is what stops another site's page from driving the API using your cached
-Basic Auth credentials.
+Every `/api/*` route is behind nginx Basic Auth ([Security](#security)); the web UI
+listens on 127.0.0.1 only, so nothing reaches it around nginx. Scripts use the same
+credential (`curl -u`). **Mutating requests must send `Content-Type:
+application/json`** (`415` otherwise): this stops another site's page from driving the
+API with your cached credential.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes and bit/s over the last 7 s, endpoint, handshake age), and a running server's `totals` since its interface came up (`received_bytes`, `sent_bytes`, `since`) |
+| GET | `/api/servers` | everything the page shows: servers with live status, their clients and each client's traffic (bytes and bit/s over the last 7 s, endpoint, handshake age, `diagnosis`), and a running server's `totals` since its interface came up (`received_bytes`, `sent_bytes`, `since`) |
 | GET | `/api/events` | live updates, a Server-Sent Events stream: `traffic_update` (every 7 s per running server: its time `at`, the same per-client shape as `traffic` above, and its `totals`), `server_status` (after a start or stop), `activity` (each new event, as in `/api/activity`), `ping` (every 15 s when idle) |
 | GET | `/api/activity` | the Activity events kept in memory: `{"events": [...newest first], "since": "<boot time>"}` |
 | GET | `/api/servers/<id>/traffic?range=1h\|6h\|24h` | the traffic history per client, in bit/s: every 7 s for `1h` (the default), per minute for `6h` and `24h`; `null` where there is no data; totals in bytes; `since`, when the history started |
-| POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `endpoint_host`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `transport_params`, `client_defaults`) |
+| POST | `/api/servers` | create (`name` required; `protocol`, `port`, `subnet`, `mtu`, `dns`, `endpoint_host`, `auto_start`, `enable_nat`, `block_lan_cidrs`, `connection_analyzer`, `transport_params`, `client_defaults`) |
 | DELETE | `/api/servers/<id>` | delete server and its clients |
 | POST | `/api/servers/<id>/start` \| `/stop` | bring the interface up/down |
 | GET | `/api/servers/<id>/info` | summary (status, keys, params, client count) |
 | GET | `/api/servers/<id>/config` \| `/config/download` | the generated `.conf` |
 | POST | `/api/servers/<id>/transport-params` | protocol + S1–S4 / H1–H4 / `HeaderProtectionKey` / AWG 3.1 toggles; restarts if running |
-| POST | `/api/servers/<id>/networking` | NAT / LAN-block toggles; reapplies iptables and, on a running server, re-checks the egress |
+| POST | `/api/servers/<id>/networking` | NAT / LAN-block / `connection_analyzer`; a NAT or LAN change reapplies iptables and, on a running server, re-checks the egress |
 | POST | `/api/servers/<id>/rename` | `{"name": "..."}` |
 | POST | `/api/servers/<id>/endpoint-host` | `{"endpoint_host": "vpn.example.com"}`: what client configs dial (empty: the detected IP) |
 | POST | `/api/servers/<id>/egress-ip` | probe the server's outbound IP (also done by itself after a start or a networking change) |
@@ -362,166 +372,28 @@ Basic Auth credentials.
 | GET | `/api/system/iptables-test` | a server's firewall rules as they are now (`?server_id=`); every server's under **⚙ → About → Firewall rules** |
 | GET | `/status` | container uptime, plain text (localhost only); a 503 with a line per problem — a server that should be running but is down, a running server whose peers differ from its clients, or whose firewall rules differ from its switches — which the Docker health check turns into `unhealthy` |
 
-Example:
-
 ```bash
 curl -u admin:pass -H 'Content-Type: application/json' \
   -d '{"name":"My VPN","protocol":"AWG 3.0","subnet":"10.10.0.0/24","port":51820}' \
   http://localhost:8080/api/servers
 ```
 
-Server-side params (S1–S4, H1–H4, `HeaderProtectionKey`, `RandomTrailers`,
-`DisableCookies`) are written to both the server config and every client config, so
-changing them means clients must re-import.
-Client-side params (Jc, Jmin, Jmax, I1–I5, `ContentPaddingAddition`, timings) are
-per-client and only appear in client configs.
+## 🏗️ Architecture
 
-## 🐳 Docker Deployment
+One container, three kinds of process under supervisord: **nginx** (Basic Auth,
+reverse proxy), the **Flask web UI** (127.0.0.1:5000), and one **`amneziawg-go`**
+daemon per server. State lives in `/etc/amnezia/web_config.json`; the WireGuard
+`.conf` files under `/etc/amnezia/amneziawg/` are generated from it, never parsed back.
 
-Official docker image repository: https://hub.docker.com/r/stalker1211/amneziawg15-web-ui
-
-### Environment variables
-
-**Settings.** Each is also in the panel (⚙). While its variable is set (and not
-empty) the value is copied into the stored settings at every boot and the field is
-read-only; remove the variable and the last value stays, now editable. An invalid
-value is logged and ignored. So upgrading changes nothing: the first 2.4 boot copies
-today's environment.
-
-| Variable | Default | Setting |
-|----------|---------|---------|
-| `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in. Stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
-| `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
-| `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
-| `LOG_LEVEL` | `INFO` | The web panel's log, and which requests nginx logs |
-| `TRUSTED_PROXIES` | `172.17.0.0/16` | Reverse proxies whose `X-Forwarded-For` names the client (IPs or CIDRs, comma-separated; empty trusts none) |
-
-**Deployment.**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NGINX_PORT` | `80` | Port nginx listens on inside the container |
-| `WAN_IF` | *(auto)* | Outbound interface for the NAT and forwarding rules; detected from the default route |
-| `AWG_LOG_FILE` | `/var/log/amnezia/amneziawg-go.log` | Where the daemon's log goes |
-
-Retired, ignored with a warning at boot: `API_TOKEN` (2.4), `AUTO_START_SERVERS`
-(2.5; a restart brings back what was running, and `false` no longer stops that),
-`ALLOWED_ORIGINS` (2.5; the live updates no longer use Socket.IO, so a reverse proxy
-needs nothing set), and the new-server defaults `DEFAULT_MTU`, `DEFAULT_SUBNET`,
-`DEFAULT_PORT`, `DEFAULT_DNS`, `ENABLE_NAT` and `BLOCK_LAN_CIDRS` (2.5; the New
-server form starts from your newest server, and each server keeps its own values).
-`SYS_MODULE` is not needed: the daemon runs in userspace.
-
-## 🧪 Local build/run (dev)
-
-This repo includes a convenience script that builds and runs a local container:
-
-- `./run.sh` (idempotent; replaces existing container; builds image by default)
-- Common overrides:
-  - `BUILD=0 ./run.sh` (skip build)
-  - `INTERACTIVE=1 ./run.sh` (run interactively)
-  - `ENTRYPOINT=/bin/sh INTERACTIVE=1 ./run.sh` (debug shell)
-
-### Image tags
-
-`stalker1211/amneziawg15-web-ui:latest` is the newest build; `:2.6` and so on pin a
-release. The version under the page heading (e.g. `v2.6 build 20261001.1`) shows
-exactly which one is running.
-
-### Docker Compose Example
-
-```yaml
-version: '3.8'
-services:
-  amnezia-web-ui:
-    image: stalker1211/amneziawg15-web-ui:latest
-    container_name: amnezia-web-ui
-    ports:
-      - "8080:8080/tcp"
-      - "51820:51820/udp"
-    environment:
-      - NGINX_PORT=8080
-    volumes:
-      - amnezia-data:/etc/amnezia
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun
-    sysctls:
-      - net.ipv4.ip_forward=1
-      - net.ipv4.conf.all.src_valid_mark=1
-    restart: unless-stopped
-volumes:
- amnezia-data:
 ```
-
-### Docker Run Example
-
-```bash
-docker run -d \
-  --name amnezia-web-ui \
-  --cap-add=NET_ADMIN \
-  --sysctl net.ipv4.ip_forward=1 \
-  --sysctl net.ipv4.conf.all.src_valid_mark=1 \
-  --device /dev/net/tun \
-  --restart unless-stopped \
-  -p 9090:9090 \
-  -p 51821:51821/udp \
-  -e NGINX_PORT=9090 \
-  -v amnezia-data:/etc/amnezia \
-  stalker1211/amneziawg15-web-ui:latest
+web-ui/
+├── app.py          Flask entrypoint
+├── core/           request guards, live updates, settings, logging
+├── routes/         the /api routes
+├── services/       the manager, traffic history, Activity, Connection analyzer
+├── templates/      page shell
+└── static/js/      the page: state, forms, dialogs, charts
 ```
-
-## 📊 Obfuscation Parameters
-
-Two kinds, and the distinction matters:
-
-- **Server-side** — must be identical on both ends. Written into the server config
-  *and* every client config, so changing one means clients must re-import.
-- **Client-side** — may differ per client; only appear in client configs.
-
-| Parameter | Side | Protocol | Notes |
-| --- | --- | --- | --- |
-| `Jc` | client | 1.5+ | Junk packets sent before each handshake (4–12 typical; 0 sends none) |
-| `Jmin` / `Jmax` | client | 1.5+ | Junk packet size range; `Jmin` ≤ `Jmax`, keep `Jmax` < MTU or packets fragment |
-| `I1`–`I5` | client | 1.5+ | Custom signature packets (tag syntax above). Empty values are omitted |
-| `S1` | server | 1.5+ | Padding of the handshake initiation message. `S1 + 56 ≠ S2` |
-| `S2` | server | 1.5+ | Padding of the handshake response message |
-| `S3` / `S4` | server | 2.0+ | Padding of the cookie / transport messages |
-| `H1`–`H4` | server | 1.5+ | Message header values. 2.0+ also accepts a range (`1200-1400`); ranges must not overlap |
-| `HeaderProtectionKey` | server | 3.0+ | Encrypts packet headers. Requires each of S1–S4 ≥ 12 |
-| `ContentPaddingAddition` | client | 3.0+ | Extra random bytes per data packet (`10-40`) |
-| `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default. Keep RekeyAfterTime under 180: the server keeps WireGuard's timers and drops the session at 180 s (the form warns) |
-| `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets; mirrored to both ends. Keep S1–S4 equal with it: otherwise amneziawg-go drops some data packets as false handshakes ([#186](https://github.com/amnezia-vpn/amneziawg-go/issues/186)). Randomize draws them equal while the switch is on, and the form warns with the estimated loss. Without the switch, equal S1–S4 get a warning instead: initiation and response keep WireGuard's 56-byte size difference |
-| `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
-| `MTU` | — | all | Interface MTU (1280–1440) |
-| `AllowedIPs` | client | all | What the device sends through the tunnel, set per client: `0.0.0.0/0` (the default) is all IPv4, a narrower list is split tunnelling. Adding `::/0` sends IPv6 in too, where the server drops it and apps fall back to IPv4; a Linux device with IPv6 switched off cannot bring `::/0` up |
-| `Endpoint` | server | all | The detected public IP, or the server's **endpoint host** (a DNS name or IPv4). With a dynamic DNS name, a new public IP needs no re-import |
-
-What hides what: **I1–I5** (a protocol's shape) and **Jc/Jmin/Jmax** (random junk,
-different every handshake) precede the handshake; **S1–S3** and **H1–H3** disguise the
-handshake messages; **S4** and **H4** (and on AWG 3.x `ContentPaddingAddition`) every data
-packet; AWG 3.x **header protection** and 3.1 **random trailers** both; the 3.x timings
-when rekeys happen. I1–I5 and Jc work together: the I-packets give the first packets a
-familiar shape, and Jc keeps the burst before each handshake from being the same sizes
-every time. The UI shows only the fields the selected
-protocol supports and validates the constraints above as you type: I1–I5 tags as
-the daemon parses them, uint16/uint32 bounds, and warnings for equal message sizes,
-H values in WireGuard's own 1–4 (without header protection), AWG 3.x timers that
-fight each other, and AWG 3.x without a header protection key (it then works like
-2.0).
-
-Every new server gets its own random parameters, drawn by the server
-(`/api/generate`, ported from [AmneziaWG Architect](https://github.com/Vadim-Khristenko/Any-Tech-ARCHITECT)):
-four disjoint H ranges under 2³¹−1, S sizes that never make two message types the
-same length, a small junk train (Jc 4–12, Jmax ≤ 160), and on AWG 3.x a header
-protection key, content padding and timers that keep WireGuard's timer rules. With a
-key, H stays four custom ranges: docs.amnezia.org suggests 1–4 there, since the cipher
-hides the message type, and both work. **Randomize** draws a fresh set. In a client's
-drawer, each group of client-side parameters has its own **Generate**: the junk packets
-(Jc, Jmin, Jmax), I1–I5 (below), and on AWG 3.x the timers and content padding. One
-group is redrawn without touching the others; Save keeps the values. All of them are
-drawn by the server, and nothing is generated for a client unless you press Generate.
 
 ## 🔍 Logs, backup and debugging
 
@@ -546,28 +418,30 @@ curl -u admin:pass http://localhost:8080/api/system/status
 curl -u admin:pass "http://localhost:8080/api/system/iptables-test?server_id=<server-id>"
 ```
 
-Server ids are 6 characters (e.g. `a1b2c3`); the interface is `wg-<id>`. Restore by
-putting `/etc/amnezia` back and restarting the container — the servers that were
-running come back up on their own. The backup holds the settings and the hashed
-sign-in (`.htpasswd`) too.
+Server ids are 6 characters (e.g. `a1b2c3`); the interface is `wg-<id>`. To restore,
+put `/etc/amnezia` back and restart the container: the servers that were running come
+back up. The backup holds the settings and the hashed sign-in too.
 
 # Security
-The app is exposed directly on 80 or custom port with basic authentication.
+
+The panel is exposed on its port behind HTTP Basic Auth.
 
 > [!IMPORTANT]
-> I strongly recommend protecting endpoints with firewall and/or nginx authentication.
-> Basic auth alone is not strong enough and can be bruteforced.
+> Basic Auth alone can be brute-forced. Protect the port with a firewall or a reverse
+> proxy of your own.
 
 A new volume signs in with `admin` / `changeme`, and the panel shows a **Default
-password** banner (and the log a warning) until it is changed. Change it in
-**⚙ → Access** (the current password is required); it is stored hashed (SHA-512 crypt)
-in `/etc/amnezia/.htpasswd`, so it survives image updates. The tab that saves it stays
-signed in; every other browser is asked for the new password. Setting `NGINX_PASSWORD` instead pins it (the field turns read-only),
-which also works as a recovery: set it, restart, sign in, remove it. Prefer the
-drawer for a compose file kept in git.
+password** banner until it is changed in **⚙ → Access** (the current password is
+required). It is stored hashed (SHA-512 crypt) in `/etc/amnezia/.htpasswd` and survives
+image updates; other browsers are asked for the new one. `NGINX_PASSWORD` pins it
+instead (the field turns read-only), which also works as a recovery: set it, restart,
+sign in, remove it.
 
 > [!NOTE]
-> There is no possibility to protect the built-in nginx with allow ip rule, because when run in docker with bridge mode docker doesn't pass the real client ip into the container. External proxy or additional container is required to perform client ip check.
+> The built-in nginx cannot filter by client IP: in Docker's bridge mode the
+> container does not see the real address. Do it in a reverse proxy in front.
 
 # Support
-The NO support provided as well as no regular updates are planned. Found issues can be fixed if free time permits.
+
+No support is provided and no regular updates are planned. Issues may be fixed if time
+permits.
