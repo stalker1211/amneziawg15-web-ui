@@ -1,0 +1,4 @@
+{"servers": {"51820": {"priv": "gCpxhRyTKbc3Ep2zLWH1wL6EOstVwhBMMMmgS3/t8WI=", "hpk": "0IKQMmWAY5lWLP2hnGKz0dc9fVJLDJBjKsXhFSjT7G0="}, "51821": {"priv": "4LWkOAN6TBu8vfcjMSC8rqYftLr+xQF543TxvCmm2Gs="}},
+ "clients": {"A": "Zi6GX55mR+QJb9NrnDfjjJOMOLafxKSORaiJ558573k=", "B": "KsDVShPWq/G+AF7lWvGz7t6gKlj5sVkrkylvtU2KR3U=", "C": "BqrFekS3PzK1v3YemHZzhZvGxwgXDefTAolOiUet6g0=", "D": "uYwtrhGciY06uftrYYImU5tvT4qlYxOn255AkumTR24=", "E": "ZqNXVqcsm8SvvS/v9E4za84JSfdLrqJNPKwOru4vZEw="},
+ "sources": {"A": "192.168.97.3", "B": "192.168.97.4", "C": "192.168.97.5", "D": "192.168.97.6", "E": "192.168.97.7"},
+ "srv_pub": {"srv0": "ZBQScLOXpJ+5BjGqueaTn+GcVdyAWI0Q5/sk6wPVgmk=", "other": "OEp1bM3kf6gUI3xBpn6kEugjt5xoL6n7hAX/xD0jMSI="}}

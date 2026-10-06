@@ -1,0 +1,6 @@
+udp      17 16 src=127.0.0.1 dst=127.0.0.11 sport=42276 dport=53 src=127.0.0.11 dst=127.0.0.1 sport=54114 dport=42276 mark=0 use=1
+udp      17 29 src=192.168.97.5 dst=192.168.97.2 sport=59901 dport=51820 [UNREPLIED] src=192.168.97.2 dst=192.168.97.5 sport=51820 dport=59901 mark=0 use=1
+udp      17 25 src=192.168.97.4 dst=192.168.97.2 sport=37071 dport=51821 [UNREPLIED] src=192.168.97.2 dst=192.168.97.4 sport=51821 dport=37071 mark=0 use=1
+udp      17 29 src=192.168.97.3 dst=192.168.97.2 sport=50980 dport=51820 [UNREPLIED] src=192.168.97.2 dst=192.168.97.3 sport=51820 dport=50980 mark=0 use=1
+udp      17 119 src=192.168.97.7 dst=192.168.97.2 sport=43006 dport=51820 src=192.168.97.2 dst=192.168.97.7 sport=51820 dport=43006 [ASSURED] mark=0 use=1
+udp      17 24 src=192.168.97.6 dst=192.168.97.2 sport=42244 dport=51820 [UNREPLIED] src=192.168.97.2 dst=192.168.97.6 sport=51820 dport=42244 mark=0 use=1
