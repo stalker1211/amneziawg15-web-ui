@@ -69,6 +69,29 @@ the tunnel's traffic; idle, it costs about 0.2 % of a CPU core. It needs `CAP_NE
 which Docker grants by default. A device whose packets never reach the server looks
 switched off, and is not detected.
 
+### What it can and cannot see
+
+The analyzer reads the device's **handshake initiation**, the first packet it sends,
+so it sees only the parameters that packet carries. The other server-side parameters
+pad or label packets it does not read: the server's response and cookie reply travel
+to the device, and data packets are not inspected. A device left on an old value of
+one of those is diagnosed less precisely, or not at all:
+
+| Parameter on the device differs | What happens to the device | What the panel shows |
+| --- | --- | --- |
+| `S1`, `H1`, `HeaderProtectionKey`, `RandomTrailers` | The server cannot read its handshake and never answers | **Old config**, naming the parameter |
+| `S2`, `H2` | The server answers, the device cannot read the answer and keeps retrying | **Maybe blocked**; the dialog adds that the server's parameters changed after its last handshake |
+| `S4`, `H4` | The handshake completes on the device, but the server drops all its data, so nothing passes | **Nothing** (at most, rarely, Maybe blocked) |
+| `S3`, `H3` | Nothing while the server is idle: a cookie reply is sent only under a handshake flood | Nothing; under load the device may fail to connect undiagnosed |
+| `Jc`, `Jmin`, `Jmax`, `I1`–`I5`, 3.0's client timings and padding | Nothing: they live only in the client's config, and the server accepts any | Nothing (there is nothing to diagnose) |
+
+In practice the gap is narrow: **Randomize** redraws S1–S4 and H1–H4 together, so a
+change made with it always moves S1 and H1, and a device left behind shows as **Old
+config**. Only a hand edit of S2–S4 or H2–H4 alone is diagnosed as above. In that case
+the client's **Re-import** mark still flags it, unless the config was shown again
+since (a QR displayed counts as issued, scanned or not). The Activity log keeps every
+parameter change, old → new.
+
 ## 📈 Traffic and Activity
 
 Download (↓) and upload (↑) are from the device's side. The traffic history lives in
