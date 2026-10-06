@@ -105,6 +105,8 @@ FROM alpine:${ALPINE_VERSION} AS runtime
 # Runtime deps:
 # - bash/openresolv/iproute2/iptables: required by awg-quick and our iptables scripts
 # - ca-certificates: required for external IP/Geo lookups
+# - conntrack-tools: `conntrack -L`, the flows the daemon left unanswered (Old config,
+#   services/probe.py); netlink, so it works where /proc/net/nf_conntrack is absent
 # - openssl: generates the nginx Basic Auth hash in scripts/start.sh. Replaces
 #   apache2-utils/htpasswd, which pulled in apr-util (CVE-2026-34191,
 #   CVE-2026-32327, both critical and unfixed in Alpine as of 3.24).
@@ -121,6 +123,7 @@ RUN apk upgrade --no-cache \
     iptables \
     openresolv \
     ca-certificates \
+    conntrack-tools \
     && rm -f /usr/lib/python*/ensurepip/_bundled/pip-*.whl \
     && rm -rf /usr/lib/python*/site-packages/setuptools \
               /usr/lib/python*/site-packages/setuptools-*.dist-info \

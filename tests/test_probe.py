@@ -1,5 +1,6 @@
 """Tests for services/probe.py: when to capture, the capture itself, and the Old config /
-Maybe blocked verdicts (DEVELOPMENT.md §10, 2.8, part 2).
+Maybe blocked verdicts (DEVELOPMENT.md §10, 2.8, part 2); then its wiring in the manager
+(part 3): the store a transport change keeps, and a monitor tick end to end.
 
 Every I/O is a fake: `conntrack` answers what a test sets, the capture returns the
 datagrams tests/fixtures/handshakes/capture.jsonl has from that source to that port
@@ -20,6 +21,7 @@ import tests.support  # noqa: F401 -- puts web-ui on the path
 
 from services import probe  # isort: skip -- after tests.support
 from services.probe import Probe, parse_conntrack  # isort: skip
+from tests.support import SystemPaths, build_manager, build_real_manager  # isort: skip
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "handshakes"
 KEYS = json.loads((FIXTURE / "keys.json").read_text(encoding="utf-8"))
@@ -633,6 +635,129 @@ class CaptureFlowTests(unittest.TestCase):
         diagnosis["verdict"] = "changed"
         self.assertEqual(h.probe.diagnosis("a")["verdict"], "old_config")
         self.assertIsNone(h.probe.diagnosis("nobody"))
+
+
+# Four distinct, valid HeaderProtectionKeys (32 bytes, base64).
+HPKS = [K1, *(KEYS["servers"][port]["priv"] for port in ("51820", "51821")), KEYS["clients"]["A"]]
+
+
+class StoreTests(unittest.TestCase):
+    """What update_server_transport_params keeps for the probe: the replaced
+    HeaderProtectionKeys and when the parameters last changed (2.8, *Store*)."""
+
+    def setUp(self):
+        self.manager = build_manager()
+        self.server = self.manager.create_wireguard_server(
+            {"name": "s", "protocol": "AWG 3.1", "subnet": "10.72.0.0/24", "port": 51972, "auto_start": False}
+        )
+        self.first = self.server["transport_params"]["HeaderProtectionKey"]
+
+    def change(self, at, protocol="AWG 3.1", **params):
+        body = {"protocol": protocol, **self.server["transport_params"], **params}
+        with mock.patch("services.amnezia_manager.time.time", return_value=at + 0.5):
+            self.manager.update_server_transport_params(self.server["id"], body)
+        return self.server.get("previous_header_protection_keys"), self.server.get("transport_changed_at")
+
+    def test_a_new_server_has_neither(self):
+        self.assertNotIn("previous_header_protection_keys", self.server)
+        self.assertNotIn("transport_changed_at", self.server)
+
+    def test_the_last_three_keys_newest_first(self):
+        k0, (k1, k2, k3, k4) = self.first, HPKS
+        self.assertEqual(self.change(100, HeaderProtectionKey=k1), ([k0], 100))
+        self.assertEqual(self.change(200, HeaderProtectionKey=k2), ([k1, k0], 200))
+        self.assertEqual(self.change(300, HeaderProtectionKey=k3), ([k2, k1, k0], 300))
+        self.assertEqual(self.change(400, HeaderProtectionKey=k4), ([k3, k2, k1], 400))
+        # A key that becomes current again leaves the list.
+        self.assertEqual(self.change(500, HeaderProtectionKey=k2), ([k4, k3, k1], 500))
+        # Saved, so the probe still has them after a restart.
+        self.assertEqual(self.manager.load_config()["servers"][0]["previous_header_protection_keys"], [k4, k3, k1])
+
+    def test_switching_protection_off_or_leaving_3x_keeps_the_key(self):
+        self.assertEqual(self.change(100, HeaderProtectionKey=""), ([self.first], 100))
+        self.assertEqual(self.change(200, HeaderProtectionKey=HPKS[0]), ([self.first], 200))
+        self.assertEqual(self.change(300, protocol="AWG 2.0"), ([HPKS[0], self.first], 300))
+
+    def test_any_server_side_parameter_moves_the_time_and_nothing_else_does(self):
+        self.assertEqual(self.change(100, S1=self.server["transport_params"]["S1"] + 1), ([], 100))
+        self.assertEqual(self.change(200), ([], 100))  # saved unchanged
+
+
+class ManagerTickTests(unittest.TestCase):
+    """The monitor loop with the probe in it: a fake dump and conntrack, the capture
+    faked from the fixture, the rest real (background work runs inline)."""
+
+    def setUp(self):
+        from services.amnezia_manager import AmneziaManager
+
+        self.loop = AmneziaManager.start_traffic_monitoring
+        self.paths = SystemPaths().start(self)
+        self.manager, self.fake = build_real_manager(self)
+        server = self.manager.create_wireguard_server(
+            {"name": "s0", "protocol": "AWG 3.1", "subnet": "10.73.0.0/24", "port": 51820, "auto_start": False}
+        )
+        client, _ = self.manager.add_wireguard_client(server["id"], "u_a")
+        # The fixture's server and device A, which still uses OLD_A.
+        server.update(server_private_key=KEYS["servers"]["51820"]["priv"], transport_params=dict(CUR0))
+        client["client_public_key"] = PUB["A"]
+        self.server, self.client = server, client
+        self.paths.interfaces.add(server["interface"])
+        iface = server["interface"]
+        dump = "\t".join([iface, "priv", "pub", "51820", *["0"] * 25, "off"]) + "\n"
+        dump += "\t".join([iface, PUB["A"], "psk", endpoint(A), "10.73.0.2/32", "0", "0", "0", "off"])
+        self.fake.respond(["/usr/bin/awg", "show", "all", "dump"], dump)
+        self.dump = dump
+        self.fake.respond(probe.CONNTRACK, flow_line(A, 29))
+        self.captures = []
+        self.manager.probe.capture = lambda *args: (self.captures.append(args), sent(A))[1]
+        self.fake.calls.clear()
+
+    def tick(self, at):
+        class StopLoop(BaseException):
+            pass
+
+        self.manager.sleep = mock.Mock(side_effect=StopLoop)
+        with (
+            mock.patch("services.amnezia_manager.time.time", return_value=at),
+            mock.patch.object(self.manager, "interface_totals", return_value={}),
+            self.assertRaises(StopLoop),
+        ):
+            self.loop(self.manager)
+
+    def test_old_config_from_the_loop_to_the_payload(self):
+        for at in (1_791_244_500, 1_791_244_507):
+            self.tick(at)
+        # One dump and one conntrack per tick, the capture on the second.
+        dump = ["/usr/bin/awg", "show", "all", "dump"]
+        self.assertEqual(self.fake.argvs(), [dump, probe.CONNTRACK] * 2)
+        self.assertEqual(self.captures, [(51820, "192.168.97.3", 50980, probe.CAPTURE_SECONDS, probe.CAPTURE_LIMIT)])
+        self.assertIsNone(self.manager.get_traffic_for_server(self.server["id"])[self.client["id"]]["diagnosis"])
+
+        self.tick(1_791_244_514)  # judges it
+        diagnosis = self.manager.get_traffic_for_server(self.server["id"])[self.client["id"]]["diagnosis"]
+        self.assertEqual(set(diagnosis), DIAGNOSIS_KEYS)
+        self.assertEqual(
+            (diagnosis["verdict"], diagnosis["since"], diagnosis["endpoint"], diagnosis["mismatch"]),
+            ("old_config", 1_791_244_500, endpoint(A), ["S1", "H1", "RandomTrailers"]),
+        )
+        # A *session* event, at warning, without `since`; and in the tick's traffic_update.
+        event = self.manager.activity.payload()["events"][0]
+        self.assertEqual(
+            (event["kind"], event["event"], event["client_id"]), ("session", "client.old_config", self.client["id"])
+        )
+        self.assertEqual(set(event["detail"]), DIAGNOSIS_KEYS - {"since"})
+        with open(self.manager.activity._path, encoding="utf-8") as f:
+            self.assertEqual(json.loads(f.read().splitlines()[-1])["level"], "warning")
+        self.assertEqual(self.manager.events.published[-1][0], "activity")
+
+        # Its handshake moves: recovered (info), and the diagnosis is gone.
+        self.fake.respond(probe.CONNTRACK, "")
+        dump = self.dump.replace("\t0\t0\t0\toff", "\t1791244520\t148\t92\toff")
+        self.fake.respond(["/usr/bin/awg", "show", "all", "dump"], dump)
+        self.tick(1_791_244_521)
+        event = self.manager.activity.payload()["events"][0]
+        self.assertEqual((event["event"], event["detail"]), ("client.recovered", {"verdict": "old_config", "duration_s": 21}))
+        self.assertIsNone(self.manager.get_traffic_for_server(self.server["id"])[self.client["id"]]["diagnosis"])
 
 
 if __name__ == "__main__":

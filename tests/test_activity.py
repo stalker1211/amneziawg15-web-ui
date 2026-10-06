@@ -65,6 +65,13 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(self.events.published[0], ("activity", item))
         self.assertEqual(self.activity.payload()["since"], "2026-10-02T18:52:52Z")
 
+    def test_levels(self):
+        # A device that cannot connect is a warning, so a Grafana alert on Loki sees it
+        # (2.8, services/probe.py); its recovery and every other event are info.
+        for event in ("client.old_config", "client.maybe_blocked", "client.recovered", "client.online"):
+            self.activity.record("session", event)
+        self.assertEqual([line["level"] for line in self.lines()], ["warning", "warning", "info", "info"])
+
     def test_names_are_written_as_they_are(self):
         self.activity.change("server.create", server={"id": "a", "name": "Дом"})
         self.assertIn('"server": "Дом"', Path(self.path).read_text(encoding="utf-8"))

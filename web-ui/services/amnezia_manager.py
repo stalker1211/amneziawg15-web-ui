@@ -44,6 +44,7 @@ from core.logging_setup import get_logger
 from services import activity, authlog, generator, signatures
 from services.history import TrafficHistory
 from services.netinfo import NetInfo
+from services.probe import Probe
 from services.sessions import Sessions
 
 logger = get_logger(__name__)
@@ -163,6 +164,16 @@ class AmneziaManager:
         self._watch_lock = threading.Lock()
         self._health = []
         self._egress_seen = {}
+        # Old config / Maybe blocked (services/probe.py), ticked by the monitor after the
+        # sessions; its events are *session* ones. Late-bound, like netinfo below.
+        self.probe = Probe(
+            run_command=lambda args: self.run_command(args),
+            start_background_task=lambda target: self.start_background_task(target),
+            lookup_geoip=lambda ip: self.netinfo.lookup_geoip(ip),
+            on_event=lambda event, server, client, detail: self.activity.record(
+                "session", event, server=server, client=client, detail=detail
+            ),
+        )
 
         self.auto_start_servers_enabled = auto_start_servers
         self.default_mtu = default_mtu
@@ -1030,9 +1041,11 @@ AllowedIPs = {client["client_ip"]}/32
         next_protocol = self.normalize_protocol(params.get("protocol", server.get("protocol")))
         next_transport_params = self.validate_transport_params(next_protocol, params)
         old = {"Protocol": server.get("protocol"), **(server.get("transport_params") or {})}
+        changes = activity.field_changes(old, {"Protocol": next_protocol, **next_transport_params})
 
         server["protocol"] = next_protocol
         server["transport_params"] = dict(next_transport_params)
+        self.record_transport_change(server, old.get("HeaderProtectionKey"), changes)
 
         # Re-extract so client params the new protocol does not support are dropped.
         for client in server.get("clients") or []:
@@ -1042,7 +1055,6 @@ AllowedIPs = {client["client_ip"]}/32
         self.write_server_conf(server)
 
         self.save_config()
-        changes = activity.field_changes(old, {"Protocol": next_protocol, **next_transport_params})
         if changes:
             self.activity.change("server.transport", server=server, changes=changes)
 
@@ -1058,6 +1070,23 @@ AllowedIPs = {client["client_ip"]}/32
             "was_running": was_running,
             "restarted": restarted,
         }
+
+    PREVIOUS_PROTECTION_KEYS = 3
+
+    def record_transport_change(self, server, old_key, changes):
+        """What the probe needs to read a device left on an old config (services/probe.py),
+        stored on the server and never sent: the last PREVIOUS_PROTECTION_KEYS
+        HeaderProtectionKeys it replaced, newest first (one current again leaves the list;
+        switching protection off or leaving 3.x keeps the old one), and when its
+        parameters last changed (`transport_changed_at`)."""
+        if not changes:
+            return
+        server["transport_changed_at"] = int(time.time())
+        current = (server.get("transport_params") or {}).get("HeaderProtectionKey") or None
+        previous = [key for key in server.get("previous_header_protection_keys") or [] if key != current]
+        if old_key and old_key != current:
+            previous = [old_key] + [key for key in previous if key != old_key]
+        server["previous_header_protection_keys"] = previous[: self.PREVIOUS_PROTECTION_KEYS]
 
     def apply_live_config(self, interface):
         """Apply the latest config to a running interface using 'awg syncconf'.
@@ -1957,7 +1986,8 @@ PersistentKeepalive = 25
 
     def start_traffic_monitoring(self):
         """Read telemetry every 7 s, record it in the history, and push each running
-        server's to the page, with the tick's time."""
+        server's to the page, with the tick's time; then the sessions, the probe's tick
+        (services/probe.py) and the failed sign-ins."""
 
         def monitor_traffic():
             while True:
@@ -1972,6 +2002,7 @@ PersistentKeepalive = 25
                                 "traffic_update", {"server_id": server["id"], "at": at, "traffic": traffic, "totals": totals}
                             )
                     self.record_sessions()
+                    self.probe.tick(at, self.config["servers"], self._telemetry)
                     self.record_auth_failures()
                     self.sleep(7)
                 except Exception as e:
@@ -2127,6 +2158,8 @@ PersistentKeepalive = 25
                 "latest_handshake_at": info.get("handshake_at"),
                 "latest_handshake_seconds": seconds,
                 "active": self.is_online(seconds),
+                # Old config / Maybe blocked, or None (services/probe.py).
+                "diagnosis": self.probe.diagnosis(client.get("id")),
             }
         return traffic
 

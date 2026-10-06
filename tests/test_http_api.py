@@ -5,6 +5,7 @@ installs the production guards from core/guards.py and the real routes around a
 stubbed manager.
 """
 
+import base64
 import http.server
 import json
 import os
@@ -458,8 +459,11 @@ CLIENT_KEYS = {
 # and since 2.5 its rates over the last tick (bit/s), so the page never differences them.
 TRAFFIC_KEYS = {
     "received_bytes", "sent_bytes", "received_bps", "sent_bps", "endpoint", "geo", "geo_country_code",
-    "latest_handshake_at", "latest_handshake_seconds", "active",
+    "latest_handshake_at", "latest_handshake_seconds", "active", "diagnosis",
 }  # fmt: skip
+# Stored for the probe (2.8) and never sent: the replaced HeaderProtectionKeys, and when
+# the parameters last changed (a diagnosis carries that as `params_changed_at`).
+STORE_KEYS = {"previous_header_protection_keys", "transport_changed_at"}
 
 
 class ApiContractTests(unittest.TestCase):
@@ -486,6 +490,15 @@ class ApiContractTests(unittest.TestCase):
 
     def test_no_json_payload_carries_a_private_key(self):
         client_url = f"/api/servers/{self.server['id']}/clients/{self.added['client']['id']}"
+        # A new HeaderProtectionKey stores the old one for the probe (2.8).
+        transport = self.client.get(f"/api/servers/{self.server['id']}/info").get_json()["transport_params"]
+        replaced = transport["HeaderProtectionKey"]
+        new_key = base64.b64encode(bytes(range(32))).decode()
+        changed = self.client.post(
+            f"/api/servers/{self.server['id']}/transport-params", json={**transport, "HeaderProtectionKey": new_key}
+        )
+        self.assertEqual(changed.status_code, 200, changed.get_json())
+        self.assertEqual(self.manager.get_server(self.server["id"])["previous_header_protection_keys"], [replaced])
         responses = {
             "POST .../issued": self.client.post(f"{client_url}/issued", json={}),
             "POST /api/servers": self.client.post(
@@ -502,11 +515,11 @@ class ApiContractTests(unittest.TestCase):
         for label, response in responses.items():
             self.assertEqual(response.status_code, 200, label)
             body = response.get_data(as_text=True)
-            for field in SECRET_KEYS:
+            for field in SECRET_KEYS | STORE_KEYS:
                 self.assertNotIn(f'"{field}"', body, label)
         # The key values themselves must not leak under some other name either.
         manager_server = self.manager.get_server(self.server["id"])
-        secrets = {manager_server["server_private_key"]}
+        secrets = {manager_server["server_private_key"], replaced}
         for client in manager_server["clients"]:
             secrets |= {client["client_private_key"], client["preshared_key"]}
             secrets |= {client["config_issued_fingerprint"]} - {None}

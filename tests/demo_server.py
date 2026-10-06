@@ -97,6 +97,7 @@ class DemoManager(AmneziaManager):
         self._public_ip_calls = 0
         self.diagnoses = {}  # client id -> the probe's diagnosis (seed_diagnoses), its times relative
         super().__init__(**kwargs)
+        self.probe.enabled = False  # no raw socket here: the diagnoses are seeded
         # Replaced before the seed: until then the traffic loop has no server to look up.
         self.netinfo = DemoNetInfo(
             run_command=self.run_command,

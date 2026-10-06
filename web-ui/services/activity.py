@@ -28,7 +28,15 @@ SOURCE = "awg-webui"
 RING_SIZE = 1000
 # The stdout line's `level`, for log tooling (Grafana colours only standard level names);
 # `kind` stays the category. Any other event is "info".
-LEVELS = {"health.problem": "error", "egress.change": "warning", "auth.fail": "warning"}
+LEVELS = {
+    "health.problem": "error",
+    "egress.change": "warning",
+    "auth.fail": "warning",
+    # services/probe.py: a device that cannot connect, so a Grafana alert on Loki sees it.
+    "client.old_config": "warning",
+    "client.maybe_blocked": "warning",
+    "client.recovered": "info",
+}
 
 # Fields whose old and new values an event may show; any other field goes by name
 # alone (I1-I5, HeaderProtectionKey, RandomTrailers, ContentPaddingAddition...).

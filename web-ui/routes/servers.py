@@ -56,7 +56,12 @@ def register_server_routes(app, amnezia_manager, *, to_bool):
     # Never sent to the browser: the UI reads none of them, and every config that needs
     # them is rendered server-side (config-both, the .conf downloads, /config). The
     # fingerprint hashes a config that holds the client's private key.
-    secret_keys = frozenset({"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"})
+    # Nor the probe's store (services/probe.py): the replaced HeaderProtectionKeys, and
+    # when the parameters last changed, which reaches the page only in a diagnosis.
+    secret_keys = frozenset(
+        {"server_private_key", "client_private_key", "preshared_key", "config_issued_fingerprint"}
+        | {"previous_header_protection_keys", "transport_changed_at"}
+    )
 
     def serialize_client(client, server=None):
         # None of these is stored per client: the server's name and protocol, and the
