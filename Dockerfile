@@ -17,9 +17,9 @@ WORKDIR /src/amneziawg-go
 # selection takes the max of both, so pinning below upstream is a no-op.
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git . \
     && git checkout "${AWG_GO_REF}" \
-    && go get golang.org/x/crypto@v0.56.0 \
-    && go get golang.org/x/net@v0.57.0 \
-    && go get golang.org/x/sys@v0.47.0 \
+    && go get golang.org/x/crypto@v0.57.0 \
+    && go get golang.org/x/net@v0.60.0 \
+    && go get golang.org/x/sys@v0.48.0 \
     && go mod tidy \
     && make
 
