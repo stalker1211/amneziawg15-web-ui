@@ -1,6 +1,6 @@
 # Pinned so rebuilding an old release cannot jump an Alpine major; bump deliberately.
 ARG ALPINE_VERSION=3.24
-ARG GO_VERSION=1.26.8
+ARG GO_VERSION=1.26.9
 
 ############################
 # Build: amneziawg-go
