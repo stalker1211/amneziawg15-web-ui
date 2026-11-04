@@ -5,7 +5,10 @@ runs `publish_dockerhub.sh` without `--publish` (a dry run), which prints the ve
 tags without touching Docker. The rules pinned here: every publish updates :latest,
 except a rebuild of an older release (so :latest never goes backwards); an image also
 gets a version tag only when HEAD is exactly on a clean release tag vX.Y[.Z]; and
---publish runs only on master or on a clean release commit.
+--publish runs only on master or on a clean release commit. The --scan-remote tests
+stub grype (and a docker that reports any use): the flag scans the published :latest,
+or a tag given to it, from the registry on any branch, builds nothing, and passes
+grype's exit codes through (0 clean, 2 fixable findings, 1 grype error = inconclusive).
 """
 
 import os
@@ -189,6 +192,78 @@ class PublishRulesTests(unittest.TestCase):
         counter.write_text(f"{time.strftime('%Y%m%d')} 4\n", encoding="utf-8")
         self.assertTrue(self.publish()[1]["Label"].endswith(".5"))
         self.assertEqual(counter.read_text(encoding="utf-8").split()[1], "4")
+
+    def stub_scan_remote(self, grype_exit, flags=(), platforms=None):
+        # A stub grype that records each call's arguments and exits with grype_exit,
+        # plus a docker stub that would report any use: --scan-remote reads the
+        # registry on its own and must never reach docker or the build counter.
+        stub = Path(tempfile.mkdtemp(prefix="awg-stub-"))
+        self.addCleanup(shutil.rmtree, stub, ignore_errors=True)
+        (stub / "grype").write_text(
+            f'#!/bin/sh\necho "$@" >> "{stub / "grype.log"}"\nexit {grype_exit}\n',
+            encoding="utf-8",
+        )
+        (stub / "docker").write_text('#!/bin/sh\necho "stub docker ran" >&2\nexit 99\n', encoding="utf-8")
+        for name in ("grype", "docker"):
+            (stub / name).chmod(0o755)
+        env = {**self.env, "PATH": f"{stub}{os.pathsep}{self.env['PATH']}"}
+        if platforms:
+            env["PLATFORMS"] = platforms
+        result = subprocess.run(
+            ["bash", "publish_dockerhub.sh", "--scan-remote", *flags],
+            cwd=self.dir, env=env, capture_output=True, text=True, check=False,  # exit code is asserted
+        )  # fmt: skip
+        log = stub / "grype.log"
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        return result.returncode, result.stdout + result.stderr, calls
+
+    def test_scan_remote_reads_the_published_latest_on_any_branch(self):
+        self.git("switch", "-q", "-c", "feature")  # no release tag, not master: still scans
+        self.commit("work in progress")
+        code, output, calls = self.stub_scan_remote(0)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Scan clean", output)
+        self.assertNotIn("Version:", output)  # scan-remote does not derive a version
+        self.assertNotIn("stub docker ran", output)  # the registry read needs no daemon
+        self.assertFalse((self.dir / ".cache" / "build_counter").exists())
+        self.assertEqual(len(calls), 2)  # one per platform
+        for call, platform in zip(calls, ("linux/amd64", "linux/arm64")):
+            argv = call.split()
+            self.assertIn("registry:stalker1211/amneziawg15-web-ui:latest", argv)
+            self.assertIn(platform, argv)  # grype selects the platform from the index
+            self.assertIn("--fail-on high", call)
+        _, _, calls = self.stub_scan_remote(0, platforms="linux/arm64")
+        self.assertEqual(len(calls), 1)  # PLATFORMS is honoured
+
+    def test_scan_remote_exit_codes_are_grypes(self):
+        code, output, calls = self.stub_scan_remote(2)  # a fixable HIGH/CRITICAL sits on :latest
+        self.assertEqual(code, 2, output)
+        self.assertIn("republish", output)
+        self.assertEqual(len(calls), 2)  # both platforms are scanned even when the first fails
+
+        code, output, _ = self.stub_scan_remote(1)  # a grype error is never read as clean
+        self.assertEqual(code, 1, output)
+        self.assertIn("INCONCLUSIVE", output)
+
+        code, output, _ = self.stub_scan_remote(127)  # any other grype failure either
+        self.assertEqual(code, 1, output)
+        self.assertIn("INCONCLUSIVE", output)
+
+    def test_scan_remote_can_pick_a_published_version_tag(self):
+        for asked in ("2.8.2", "v2.8.2"):  # the same forms the version argument takes
+            code, output, calls = self.stub_scan_remote(0, flags=(asked,))
+            self.assertEqual(code, 0, output)
+            self.assertEqual(len(calls), 2)
+            for call in calls:
+                self.assertIn("registry:stalker1211/amneziawg15-web-ui:2.8.2", call.split())
+        self.assertIn(":latest", self.stub_scan_remote(0, flags=())[2][0])  # without one it is latest
+
+    def test_scan_remote_is_not_combined_with_a_build(self):
+        for flag in ("--scan", "--publish"):
+            code, output, calls = self.stub_scan_remote(0, flags=(flag,))
+            self.assertEqual(code, 1, output)
+            self.assertIn("not combined", output)
+            self.assertEqual(calls, [])  # it refuses before scanning anything
 
 
 class ProvenanceTests(unittest.TestCase):

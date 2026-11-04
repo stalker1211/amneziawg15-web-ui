@@ -16,11 +16,19 @@ set -euo pipefail
 # findings are printed, and a HIGH or CRITICAL one that has a fix stops the publish.
 # Unfixed ones are shown as "(suppressed)"; no rebuild can clear them.
 #
+# --scan-remote [X.Y[.Z]] scans what is published instead of a build: :latest, or the
+# tag given, is read from the registry (no docker, no build, nothing here changes).
+# Its exit codes are grype's, for a cron watch: 0 clean, 2 a fixable HIGH/CRITICAL
+# sits on the published image (Alpine moved on since the push; a republish from this
+# tree clears it), 1 a grype error — inconclusive, never read as clean.
+#
 # Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh --publish
 #
 # Usage:
 #   ./publish_dockerhub.sh             dry run: print version, label and tags; build nothing
 #   ./publish_dockerhub.sh --scan      build locally and scan; push nothing
+#   ./publish_dockerhub.sh --scan-remote        scan the published :latest on Docker Hub; build/push nothing
+#   ./publish_dockerhub.sh --scan-remote 2.8.2  same for one published version tag
 #   ./publish_dockerhub.sh --publish   build, scan and, if the scan passes, push HEAD as above
 #   ./publish_dockerhub.sh --publish 2.3   same, but stop unless HEAD is release v2.3
 #
@@ -36,11 +44,13 @@ PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 
 PUBLISH=0
 SCAN=0
+SCAN_REMOTE=0
 EXPECTED="${TAG:-}"
 for arg in "$@"; do
 	case "${arg}" in
 	--publish) PUBLISH=1 ;;
 	--scan) SCAN=1 ;;
+	--scan-remote) SCAN_REMOTE=1 ;;
 	-h | --help)
 		sed -n '4,/^$/p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
@@ -52,6 +62,51 @@ for arg in "$@"; do
 	*) EXPECTED="${arg}" ;;
 	esac
 done
+
+if [[ ${SCAN_REMOTE} -eq 1 ]]; then
+	# The watch on the published image: grype reads it from the registry, so this
+	# works on any branch, needs no docker daemon and changes nothing.
+	if [[ ${PUBLISH} -eq 1 || ${SCAN} -eq 1 ]]; then
+		echo "Error: --scan-remote scans what is published, not a build; it is not combined with --scan or --publish." >&2
+		exit 1
+	fi
+	if ! command -v grype >/dev/null 2>&1; then
+		echo "Error: grype not found. Install it with: brew install grype" >&2
+		exit 1
+	fi
+	REMOTE_TAG="${EXPECTED:-latest}" # a positional argument or TAG= names the published tag
+	TARGET="${IMAGE_REPO}:${REMOTE_TAG#v}"
+	echo "Scanning the published ${TARGET} (registry read: no build, no push)."
+	# grype exits 2 on a fixable HIGH/CRITICAL, 1 on its own errors; every platform is
+	# scanned before deciding, so one failure does not hide another.
+	FIXABLE=0
+	ERRORED=0
+	for platform in ${PLATFORMS//,/ }; do
+		echo
+		echo "== Scan ${platform}"
+		code=0
+		grype "registry:${TARGET}" --platform "${platform}" -q \
+			--ignore-states not-fixed,wont-fix,unknown --show-suppressed \
+			--fail-on high || code=$?
+		if [[ ${code} -eq 2 ]]; then
+			FIXABLE=1
+		elif [[ ${code} -ne 0 ]]; then
+			ERRORED=1
+		fi
+	done
+	if [[ ${ERRORED} -eq 1 ]]; then
+		echo "Scan INCONCLUSIVE: grype errored while reading ${TARGET}." >&2
+		echo "The published image is unscanned: do not read this as clean." >&2
+		exit 1
+	fi
+	if [[ ${FIXABLE} -eq 1 ]]; then
+		echo "Scan FAILED: fixable HIGH/CRITICAL vulnerabilities sit on ${TARGET}." >&2
+		echo "Alpine moved on since this image was pushed; a republish from this tree clears it." >&2
+		exit 2
+	fi
+	echo "Scan clean: no fixable HIGH/CRITICAL vulnerabilities on ${TARGET}."
+	exit 0
+fi
 
 VERSION="$(version_describe)"
 RELEASE="$(version_release)"
