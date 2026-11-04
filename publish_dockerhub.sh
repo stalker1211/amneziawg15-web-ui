@@ -17,10 +17,11 @@ set -euo pipefail
 # Unfixed ones are shown as "(suppressed)"; no rebuild can clear them.
 #
 # --scan-remote [X.Y[.Z]] scans what is published instead of a build: :latest, or the
-# tag given, is read from the registry (no docker, no build, nothing here changes).
-# Its exit codes are grype's, for a cron watch: 0 clean, 2 a fixable HIGH/CRITICAL
-# sits on the published image (Alpine moved on since the push; a republish from this
-# tree clears it), 1 a grype error — inconclusive, never read as clean.
+# tag given, is read from the registry (no docker daemon, no build, nothing here
+# changes), on every platform the published index lists; PLATFORMS is for builds only.
+# Exit codes, for a cron watch: 0 clean; 2 a fixable HIGH/CRITICAL on some platform
+# (Alpine moved on since the push: republish :latest from master, or rebuild a version
+# tag from its own checkout); 1 a grype error and no finding, inconclusive, never clean.
 #
 # Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh --publish
 #
@@ -63,6 +64,29 @@ for arg in "$@"; do
 	esac
 done
 
+# Both scans run the same grype check. grype exits 2 on a fixable HIGH/CRITICAL and 1
+# on its own errors; every platform is scanned before deciding, so one failure does
+# not hide another. Sets FIXABLE and ERRORED to the platforms concerned.
+scan_image() { # <grype source> <platforms, comma- or space-separated>
+	local platform code
+	FIXABLE=()
+	ERRORED=()
+	for platform in ${2//,/ }; do
+		echo
+		echo "== Scan ${platform}"
+		code=0
+		grype "$1" --platform "${platform}" -q \
+			--ignore-states not-fixed,wont-fix,unknown --show-suppressed \
+			--fail-on high || code=$?
+		if [[ ${code} -eq 2 ]]; then
+			FIXABLE+=("${platform}")
+		elif [[ ${code} -ne 0 ]]; then
+			ERRORED+=("${platform}")
+		fi
+	done
+	echo
+}
+
 if [[ ${SCAN_REMOTE} -eq 1 ]]; then
 	# The watch on the published image: grype reads it from the registry, so this
 	# works on any branch, needs no docker daemon and changes nothing.
@@ -71,38 +95,58 @@ if [[ ${SCAN_REMOTE} -eq 1 ]]; then
 		exit 1
 	fi
 	if ! command -v grype >/dev/null 2>&1; then
-		echo "Error: grype not found. Install it with: brew install grype" >&2
+		echo "Error: grype is not on PATH (${PATH}). Install it with brew install grype;" >&2
+		echo "under cron or launchd, put /opt/homebrew/bin and /usr/local/bin on PATH." >&2
+		exit 1
+	fi
+	if ! command -v docker >/dev/null 2>&1; then
+		echo "Error: docker (the CLI; no daemon is needed) is not on PATH (${PATH})." >&2
+		echo "Under cron or launchd, put /opt/homebrew/bin and /usr/local/bin on PATH." >&2
 		exit 1
 	fi
 	REMOTE_TAG="${EXPECTED:-latest}" # a positional argument or TAG= names the published tag
-	TARGET="${IMAGE_REPO}:${REMOTE_TAG#v}"
+	REMOTE_TAG="${REMOTE_TAG#v}"
+	TARGET="${IMAGE_REPO}:${REMOTE_TAG}"
 	echo "Scanning the published ${TARGET} (registry read: no build, no push)."
-	# grype exits 2 on a fixable HIGH/CRITICAL, 1 on its own errors; every platform is
-	# scanned before deciding, so one failure does not hide another.
-	FIXABLE=0
-	ERRORED=0
-	for platform in ${PLATFORMS//,/ }; do
-		echo
-		echo "== Scan ${platform}"
-		code=0
-		grype "registry:${TARGET}" --platform "${platform}" -q \
-			--ignore-states not-fixed,wont-fix,unknown --show-suppressed \
-			--fail-on high || code=$?
-		if [[ ${code} -eq 2 ]]; then
-			FIXABLE=1
-		elif [[ ${code} -ne 0 ]]; then
-			ERRORED=1
-		fi
-	done
-	if [[ ${ERRORED} -eq 1 ]]; then
-		echo "Scan INCONCLUSIVE: grype errored while reading ${TARGET}." >&2
-		echo "The published image is unscanned: do not read this as clean." >&2
+	if [[ -n "${TAG:-}" && "${EXPECTED}" == "${TAG}" ]]; then
+		echo "(The tag comes from TAG=${TAG} in the environment.)"
+	fi
+	# The platforms come from the published index, not PLATFORMS: a build's setting
+	# must not shrink the watch to half the image. imagetools reads the registry
+	# without a daemon; attestation manifests list as unknown/unknown.
+	if ! INDEX="$(docker buildx imagetools inspect "${TARGET}" --format \
+		'{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{with .Platform.Variant}}/{{.}}{{end}} {{end}}' 2>&1)"; then
+		echo "${INDEX}" >&2
+		echo "Scan INCONCLUSIVE: cannot read ${TARGET}'s index from the registry." >&2
 		exit 1
 	fi
-	if [[ ${FIXABLE} -eq 1 ]]; then
-		echo "Scan FAILED: fixable HIGH/CRITICAL vulnerabilities sit on ${TARGET}." >&2
-		echo "Alpine moved on since this image was pushed; a republish from this tree clears it." >&2
+	REMOTE_PLATFORMS=""
+	for platform in ${INDEX}; do
+		[[ "${platform}" == unknown/* ]] || REMOTE_PLATFORMS+="${platform} "
+	done
+	if [[ -z "${REMOTE_PLATFORMS}" ]]; then
+		echo "Scan INCONCLUSIVE: ${TARGET} lists no platforms (not a multi-platform index)." >&2
+		exit 1
+	fi
+	echo "Published platforms: ${REMOTE_PLATFORMS% }"
+	scan_image "registry:${TARGET}" "${REMOTE_PLATFORMS}"
+	if [[ ${#ERRORED[@]} -gt 0 ]]; then
+		echo "grype errored on ${ERRORED[*]}: ${TARGET} is unscanned there, not clean." >&2
+	fi
+	if [[ ${#FIXABLE[@]} -gt 0 ]]; then
+		# A finding stands even when another platform errored: it is the actionable part.
+		echo "Scan FAILED on ${FIXABLE[*]}: fixable HIGH/CRITICAL vulnerabilities sit on ${TARGET}." >&2
+		if [[ "${REMOTE_TAG}" == latest ]]; then
+			echo "Alpine has fixed them since the push: republish from master (./publish_dockerhub.sh --publish)." >&2
+		else
+			echo "Alpine has fixed them since the push. Only a rebuild from its tag replaces :${REMOTE_TAG}:" >&2
+			echo "  git checkout v${REMOTE_TAG} && ./publish_dockerhub.sh --publish" >&2
+		fi
 		exit 2
+	fi
+	if [[ ${#ERRORED[@]} -gt 0 ]]; then
+		echo "Scan INCONCLUSIVE: do not read this as clean." >&2
+		exit 1
 	fi
 	echo "Scan clean: no fixable HIGH/CRITICAL vulnerabilities on ${TARGET}."
 	exit 0
@@ -225,17 +269,10 @@ docker buildx build \
 	--load \
 	.
 
-# grype exits 2 on a fixable HIGH/CRITICAL, 1 on its own errors; either stops here.
-# Every platform is scanned before deciding, so one failure does not hide another.
-FAILED=()
-for platform in ${PLATFORMS//,/ }; do
-	echo
-	echo "== Scan ${platform}"
-	grype "docker:${CANDIDATE}" --platform "${platform}" -q \
-		--ignore-states not-fixed,wont-fix,unknown --show-suppressed \
-		--fail-on high || FAILED+=("${platform}")
-done
-echo
+# A fixable HIGH/CRITICAL or a grype error on any platform stops here.
+scan_image "docker:${CANDIDATE}" "${PLATFORMS}"
+# The ${a[@]+...} form keeps an empty array legal under set -u in macOS's bash 3.2.
+FAILED=(${FIXABLE[@]+"${FIXABLE[@]}"} ${ERRORED[@]+"${ERRORED[@]}"})
 if [[ ${#FAILED[@]} -gt 0 ]]; then
 	echo "Scan FAILED on ${FAILED[*]}: a fixable HIGH/CRITICAL finding (or a grype error) above; nothing pushed." >&2
 	exit 1
