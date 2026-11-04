@@ -194,7 +194,9 @@ class PublishRulesTests(unittest.TestCase):
         self.assertTrue(self.publish()[1]["Label"].endswith(".5"))
         self.assertEqual(counter.read_text(encoding="utf-8").split()[1], "4")
 
-    def stub_scan_remote(self, grype_exit, flags=(), index="linux/amd64 linux/arm64 unknown/unknown", env=None, missing=None):
+    def stub_scan_remote(
+        self, grype_exit, flags=(), index: str | None = "linux/amd64 linux/arm64 unknown/unknown", env=None, missing=None
+    ):
         # A stub grype that records each call's arguments and exits with grype_exit
         # (or, given a dict, that platform's code), plus a docker stub that answers only
         # `buildx imagetools inspect` with `index` (None: the registry read fails) and

@@ -52,7 +52,7 @@ class Sessions:
                     session["received"] = counted(was and was["rx"], rx)
                     session["sent"] = counted(was and was["tx"], tx)
                     changes.append(("client.online", client_id, None))
-            elif online:
+            elif online and session is not None and was:  # a session comes from an earlier tick
                 received = counted(was["rx"], rx)
                 session = {
                     "since": session["since"],

@@ -52,7 +52,7 @@ class AuthLog:
     """nginx's error log, read incrementally (no file with `path=None`: the tests).
     Only the monitor thread calls `poll`, so there is no lock."""
 
-    def __init__(self, path=ERROR_LOG, clock=time.time, chunk=CHUNK):
+    def __init__(self, path: str | None = ERROR_LOG, clock=time.time, chunk=CHUNK):
         self._path = path
         self._clock = clock
         self._chunk = chunk
@@ -91,21 +91,24 @@ class AuthLog:
     def _read(self):
         """The complete lines added since the last poll, from the open file and, after
         a rotation, from the new one."""
+        path = self._path
+        if path is None:  # poll() never asks then
+            return []
         try:
-            stat = os.stat(self._path)
+            stat = os.stat(path)
         except FileNotFoundError:
             stat = None
         identity = (stat.st_dev, stat.st_ino) if stat else None
         lines = []
         if self._file is not None:
-            if identity == self._identity and stat.st_size < self._file.tell():
+            if stat is not None and identity == self._identity and stat.st_size < self._file.tell():
                 self._file.seek(0)  # truncated in place (copytruncate, `: >`)
             lines, full = self._drain()
             if identity == self._identity or full:
                 return lines
             self.close()  # renamed or removed, and read to its end: the new one now
         if stat is not None:
-            self._file = open(self._path, "rb")  # noqa: SIM115 -- kept open between ticks
+            self._file = open(path, "rb")  # noqa: SIM115 -- kept open between ticks
             opened = os.fstat(self._file.fileno())
             self._identity = (opened.st_dev, opened.st_ino)
             if not self._started:
@@ -117,11 +120,14 @@ class AuthLog:
     def _drain(self):
         """Up to a chunk of complete lines from the open file, and whether the chunk was
         full. A partial last line is left for the next poll."""
-        data = self._file.read(self._chunk)
+        file = self._file
+        if file is None:
+            return [], False
+        data = file.read(self._chunk)
         full = len(data) == self._chunk
         end = data.rfind(b"\n") + 1
         if end < len(data) and (end or not full):  # a full chunk with no newline is dropped
-            self._file.seek(end - len(data), os.SEEK_CUR)
+            file.seek(end - len(data), os.SEEK_CUR)
             data = data[:end]
         return data.splitlines(), full
 

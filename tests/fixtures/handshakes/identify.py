@@ -59,6 +59,7 @@ class Server:
         self.hpk = b64decode(hpk_b64) if hpk_b64 else None
 
     def keystream(self, datagram):
+        assert self.hpk is not None  # identify() asks only with a key
         nonce = b"\x00\x00\x00\x00" + datagram[:12]  # counter 0 || 12-byte nonce
         enc = Cipher(algorithms.ChaCha20(self.hpk, nonce), mode=None).encryptor()
         return enc.update(bytes(INIT_SIZE))

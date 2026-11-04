@@ -18,7 +18,7 @@ IN_MINUTE = time.mktime((2026, 10, 2, 23, 25, 40, 0, 0, -1))
 NEXT_MINUTE = IN_MINUTE + 60
 
 
-def failure(at, address="203.0.113.7", user="admin", missing=False):
+def failure(at, address="203.0.113.7", user: str | bytes = "admin", missing=False):
     """One record as nginx writes it (the fixture's shapes), at local time `at`."""
     stamp = time.strftime("%Y/%m/%d %H:%M:%S", time.localtime(at)).encode()
     reason = b' was not found in "/etc/amnezia/.htpasswd"' if missing else b": password mismatch"

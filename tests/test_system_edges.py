@@ -15,6 +15,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from tests.support import (
@@ -551,7 +552,9 @@ class EgressProbeTests(_Base):
         server = self._server()
 
         def probe(answer):
-            side = {"side_effect": answer} if isinstance(answer, Exception) else {"return_value": (answer, "https://ident.me")}
+            side: dict[str, Any] = (
+                {"side_effect": answer} if isinstance(answer, Exception) else {"return_value": (answer, "https://ident.me")}
+            )
             with (
                 mock.patch.object(self.manager.netinfo, "detect_public_ip_from_source", **side),
                 mock.patch.object(self.manager.netinfo, "lookup_geoip", return_value=("Sweden", "SE")),

@@ -187,7 +187,7 @@ class MismatchTests(unittest.TestCase):
 
     KEY = "Zi6GX55mR+QJb9NrnDfjjJOMOLafxKSORaiJ558573k="
 
-    def init(self, offset=40, msg_type=100500, trailer=0, key_index=0):
+    def init(self, offset=40, msg_type=100500, trailer=0, key_index: int | None = 0):
         return Initiation(self.KEY, offset, msg_type, trailer, key_index)
 
     def test_each_parameter(self):

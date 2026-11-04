@@ -9,6 +9,7 @@ every set without a single warning.
 import itertools
 import os
 import unittest
+from typing import Any
 from unittest import mock
 
 # tests.support puts web-ui on sys.path. Tests exercise internals on purpose and use
@@ -230,7 +231,7 @@ class TrailerLossTests(unittest.TestCase):
         return [w for w in self.m.transport_param_warnings(protocol, transport, 1420) if "56-byte" in w]
 
     def test_equal_s_without_trailers_warns(self):
-        equal = {"S1": 24, "S2": 24, "S3": 24, "S4": 24}
+        equal: dict[str, Any] = {"S1": 24, "S2": 24, "S3": 24, "S4": 24}
         self.assertEqual(len(self.equal_s_warnings(self.validated(trailers=False, **equal))), 1)
         # 2.0 and 3.0 have no trailers to hide it.
         for protocol in ("AWG 2.0", "AWG 3.0"):

@@ -130,7 +130,7 @@ def identify(datagram, server_private_key, protection_keys=()):
     if len(datagram) < INITIATION_SIZE:
         return None
     responder = _responder(server_private_key)
-    keystreams = [(index, _keystream(key, datagram)) for index, key in enumerate(protection_keys)]
+    keystreams: list[tuple[int | None, int]] = [(index, _keystream(key, datagram)) for index, key in enumerate(protection_keys)]
     keystreams.append((None, 0))
     for offset in range(len(datagram) - INITIATION_SIZE + 1):
         raw = int.from_bytes(datagram[offset : offset + _READ], "little")
