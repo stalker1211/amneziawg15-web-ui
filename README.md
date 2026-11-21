@@ -188,6 +188,7 @@ An invalid value is logged and ignored.
 |----------|---------|---------|
 | `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in, stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
 | `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
+| `GEOIP_PROVIDER` | `ipapi.co` | Where those places come from: ipapi.co, or the `https://` base URL of a service answering `<url>/<ip>/json/` in ipapi.co's shape (a local GeoLite2 lookup keeps addresses on your network); when it fails, ipapi.co answers |
 | `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
 | `LOG_LEVEL` | `INFO` | The web panel's log, and which requests nginx logs |
 | `TRUSTED_PROXIES` | `172.17.0.0/16` | Reverse proxies whose `X-Forwarded-For` names the client (IPs or CIDRs, comma-separated; empty trusts none) |

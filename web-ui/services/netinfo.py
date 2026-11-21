@@ -2,9 +2,10 @@
 
 The three outbound calls, all HTTPS through core.helpers.https_get: the public IP
 (api.ipify.org and two fallbacks), the egress probe bound to a tunnel's address (where
-that tunnel's traffic exits), and the country and city of an address at ipapi.co,
-cached. Nothing here reads or writes web_config.json: the manager keeps the public IP
-it hands to clients, and records each probe on its server (probe_server_egress_ip).
+that tunnel's traffic exits), and the country and city of an address, cached: from
+ipapi.co, or first from a GeoIP provider in its shape (the geoip_provider setting).
+Nothing here reads or writes web_config.json: the manager keeps the public IP it hands
+to clients, and records each probe on its server (probe_server_egress_ip).
 """
 
 import ipaddress
@@ -30,6 +31,13 @@ class NetInfo:
     # A failed lookup (rate limit, timeout) is retried after this, not after a day.
     GEOIP_FAILURE_TTL_SECONDS = 10 * 60
     GEOIP_CACHE_MAX_ENTRIES = 512
+    # ipapi.co: the default, and the fallback when a GeoIP provider is set and fails.
+    GEOIP_DEFAULT_URL = "https://ipapi.co"
+    # A lookup never waits longer than this, the provider and the fallback together.
+    GEOIP_TIMEOUT_SECONDS = 2.0
+    GEOIP_PROVIDER_TIMEOUT_SECONDS = 1.0
+    # Less than this left after the provider: no time to ask ipapi.co.
+    GEOIP_MIN_TIMEOUT_SECONDS = 0.2
 
     EGRESS_PROBE_SERVICES = (
         "https://api.ipify.org",
@@ -42,6 +50,8 @@ class NetInfo:
         self.run_command = run_command
         self.start_background_task = start_background_task
         self.enable_geoip = enable_geoip
+        # A base URL answering in ipapi.co's shape, asked first; "" asks only ipapi.co.
+        self.geoip_provider = ""
         # Cache GeoIP lookups to avoid rate limits and latency
         # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
         self._geoip_cache = {}
@@ -201,7 +211,7 @@ class NetInfo:
     def lookup_geoip_cached(self, ip):
         """(label, country code) from the cache only; a miss is looked up in the background.
 
-        For the traffic loop, which must not wait on ipapi.co (up to 2 s per new
+        For the traffic loop, which must not wait on GeoIP (up to 2 s per new
         client endpoint): the label appears on the next tick.
         """
         ip = self._geoip_candidate(ip)
@@ -222,8 +232,51 @@ class NetInfo:
             self.start_background_task(resolve)
         return (None, None)
 
+    def set_geoip_provider(self, url):
+        """Ask `url` (an https base URL in ipapi.co's shape) first, or only ipapi.co when
+        "". A change forgets the cached places, so the new source names them."""
+        url = (url or "").rstrip("/")
+        if url != self.geoip_provider:
+            self.geoip_provider = url
+            self._geoip_cache.clear()
+
+    @staticmethod
+    def _ask_geoip(base_url, ip, timeout):
+        """`<base_url>/<ip>/json/` as a dict, or ValueError/OSError naming what went wrong:
+        not a 200, not JSON, an `"error": true` body (ipapi.co's and lan-dash's), or no
+        country or place in it."""
+        response = https_get(f"{base_url}/{ip}/json/", timeout=timeout)
+        try:
+            data = json.loads(response.text)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            data = {}
+        if response.status != 200 or data.get("error"):
+            reason = data.get("reason") or data.get("message")
+            raise ValueError(f"HTTP {response.status}" + (f": {str(reason)[:120]}" if reason else ""))
+        if not response.content_type.startswith("application/json"):
+            raise ValueError(f"not JSON ({response.content_type or 'no content type'})")
+        if not data:
+            raise ValueError("an empty or invalid JSON body")
+        return data
+
+    def _lookup_at(self, base_url, ip, timeout, now):
+        """(label, country code) from one service, cached; raises when it has no place."""
+        data = self._ask_geoip(base_url, ip, timeout)
+        label, country_code = _geo_label(data), _country_code(data)
+        if not label and not country_code:
+            raise ValueError("no country or place in the answer")
+        self._cache_geoip(ip, now, label, country_code, data)
+        return (label, country_code)
+
     def lookup_geoip(self, ip):
-        """Return (geo label, country code) for a public IP with caching."""
+        """Return (geo label, country code) for a public IP with caching.
+
+        Asks the GeoIP provider when one is set, then ipapi.co if it fails in any way
+        (an error, a timeout, an answer without a place). The two share today's 2 s:
+        the provider gets at most half, ipapi.co what is left.
+        """
         ip = self._geoip_candidate(ip)
         if not ip:
             return (None, None)
@@ -233,45 +286,39 @@ class NetInfo:
         if fresh is not None:
             return fresh
 
-        def format_geo_label(raw):
-            if not isinstance(raw, dict):
-                return None
-            country = raw.get("country_name") or raw.get("country") or raw.get("countryCode")
-            city = raw.get("city")
-            region = raw.get("region") or raw.get("regionName")
+        timeout = self.GEOIP_TIMEOUT_SECONDS
+        if self.geoip_provider:
+            started = time.monotonic()
+            try:
+                return self._lookup_at(self.geoip_provider, ip, self.GEOIP_PROVIDER_TIMEOUT_SECONDS, now)
+            except Exception as exc:  # pylint: disable=broad-exception-caught  -- any failure falls back
+                logger.info("GeoIP: %s failed for %s (%s); asking ipapi.co", self.geoip_provider, ip, exc)
+            timeout -= time.monotonic() - started
+        if timeout >= self.GEOIP_MIN_TIMEOUT_SECONDS:
+            try:
+                return self._lookup_at(self.GEOIP_DEFAULT_URL, ip, timeout, now)
+            except Exception:  # pylint: disable=broad-exception-caught  -- cached as a failure below
+                pass
+        self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"}, failed=True)
+        return (None, None)
 
-            loc_parts = [p for p in [city, region] if p]
-            loc = ", ".join(loc_parts).strip()
 
-            if country and loc:
-                return f"{country} / {loc}"
-            if country:
-                return str(country)
-            if loc:
-                return loc
-            return None
+def _geo_label(raw):
+    """ "Country / City, Region" from an ipapi.co-shaped answer (or ip-api.com's keys)."""
+    country = raw.get("country_name") or raw.get("country") or raw.get("countryCode")
+    loc = ", ".join(str(p) for p in (raw.get("city"), raw.get("region") or raw.get("regionName")) if p).strip()
+    if country and loc:
+        return f"{country} / {loc}"
+    if country:
+        return str(country)
+    return loc or None
 
-        def extract_country_code(raw):
-            if not isinstance(raw, dict):
-                return None
-            cc = raw.get("country_code") or raw.get("countryCode") or raw.get("country")
-            if isinstance(cc, str):
-                cc = cc.strip().upper()
-                if re.fullmatch(r"[A-Z]{2}", cc):
-                    return cc
-            return None
 
-        try:
-            resp = https_get(f"https://ipapi.co/{ip}/json/", timeout=2)
-            if resp.status != 200:
-                self._cache_geoip(ip, now, None, None, {"status": resp.status}, failed=True)
-                return (None, None)
-
-            data = json.loads(resp.text) if resp.content_type.startswith("application/json") else {}
-            label = format_geo_label(data)
-            country_code = extract_country_code(data)
-            self._cache_geoip(ip, now, label, country_code, data)
-            return (label, country_code)
-        except Exception:
-            self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"}, failed=True)
-            return (None, None)
+def _country_code(raw):
+    """The two-letter country code, upper-cased, or None."""
+    cc = raw.get("country_code") or raw.get("countryCode") or raw.get("country")
+    if isinstance(cc, str):
+        cc = cc.strip().upper()
+        if re.fullmatch(r"[A-Z]{2}", cc):
+            return cc
+    return None

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## Version 2.9 (unreleased)
+
+### Privacy
+- **A GeoIP provider** (⚙ → Privacy, or `GEOIP_PROVIDER`): the country and city of
+  endpoint, public and egress addresses can come from your own service instead of
+  ipapi.co, so the addresses stay on your network. Any `https://` base URL that answers
+  `<url>/<ip>/json/` in ipapi.co's shape (`country_code`, `country_name`, `city`,
+  `region`). When it fails (an error, not JSON, a timeout), ipapi.co answers, and a
+  lookup still waits at most 2 s in all. Changing it forgets the cached places.
+
 ## Version 2.8 (2026-10-06)
 
 ### Why a device can't connect (experimental)

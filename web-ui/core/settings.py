@@ -24,6 +24,7 @@ import os
 import re
 import subprocess
 import tempfile
+from urllib.parse import urlsplit
 
 from core.helpers import parse_daemon_log_level, to_bool
 from core.logging_setup import get_logger
@@ -75,9 +76,33 @@ def _proxies(raw):
     return ", ".join(networks)
 
 
+def _geoip_provider(raw):
+    """Where GeoIP asks: "" for ipapi.co (also written "ipapi.co"), or the https base URL
+    of a service answering in ipapi.co's shape at <url>/<ip>/json/ (services/netinfo.py
+    falls back to ipapi.co on any failure). Normalized without a trailing slash."""
+    text = str(raw).strip()
+    if text.lower().rstrip("/") in ("", "ipapi.co", "https://ipapi.co"):
+        return ""
+    if len(text) > 200 or any(c.isspace() or ord(c) < 32 for c in text):
+        raise ValueError("GeoIP provider: a URL of at most 200 characters, without spaces")
+    try:
+        parts = urlsplit(text)
+        hostname, _port = parts.hostname, parts.port
+    except ValueError:
+        raise ValueError(f"GeoIP provider: '{text}' is not a URL") from None
+    if parts.scheme.lower() != "https":
+        raise ValueError("GeoIP provider: the URL must start with https://, so nobody on the path can answer for it")
+    if not hostname or parts.username is not None or parts.password is not None:
+        raise ValueError("GeoIP provider: the URL needs a host name, without a user or password")
+    if parts.query or parts.fragment or text.endswith(("?", "#")):
+        raise ValueError("GeoIP provider: a base URL, without ? or #; the panel adds /<ip>/json/")
+    return text.rstrip("/")
+
+
 # key: (environment variable, parser, built-in default)
 FIELDS = {
     "geoip": ("ENABLE_GEOIP", _flag, True),
+    "geoip_provider": ("GEOIP_PROVIDER", _geoip_provider, ""),
     "awg_log_level": ("AWG_LOG_LEVEL", _daemon_level, "error"),
     "log_level": ("LOG_LEVEL", _panel_level, "INFO"),
     # Docker's default bridge: the panel's behaviour before this was a setting (2.7.2).

@@ -9,7 +9,7 @@ tests/test_system_edges.py.
 
 import json
 import unittest
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 # pylint: disable=missing-function-docstring,missing-class-docstring,protected-access,wrong-import-order
@@ -130,6 +130,106 @@ class GeoIpTests(_Base):
         result, get = self._lookup("8.8.8.8", _Response(data={"country": "US"}))
         self.assertEqual(result, (None, None))
         get.assert_not_called()
+
+
+class GeoIpProviderTests(_Base):
+    """A GeoIP provider in ipapi.co's shape, asked first; ipapi.co on any failure."""
+
+    PROVIDER = "https://lan.example/api/geo"
+    # lan-dash 1.3's answer: ipapi.co's shape.
+    PLACE: ClassVar[dict] = {"ip": "8.8.8.8", "country_code": "US", "country_name": "United States", "city": "Mountain View",
+                             "region": "California", "org": "GOOGLE", "asn": "AS15169"}  # fmt: skip
+
+    def setUp(self):
+        super().setUp()
+        self.net.set_geoip_provider(self.PROVIDER)
+
+    def _lookup(self, provider_answer, ipapi_answer=None, ip="8.8.8.8"):
+        """provider_answer / ipapi_answer: a response, or an exception to raise."""
+        answers = {f"{self.PROVIDER}/{ip}/json/": provider_answer, f"https://ipapi.co/{ip}/json/": ipapi_answer}
+
+        def get(url, timeout):
+            answer = answers[url]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with mock.patch(f"{MODULE}.https_get", side_effect=get) as https_get:
+            result = self.net.lookup_geoip(ip)
+        return result, [(c.args[0], c.kwargs["timeout"]) for c in https_get.call_args_list]
+
+    def test_the_provider_answers(self):
+        result, calls = self._lookup(_Response(data=self.PLACE))
+        self.assertEqual(result, ("United States / Mountain View, California", "US"))
+        self.assertEqual(calls, [(f"{self.PROVIDER}/8.8.8.8/json/", 1.0)])  # ipapi.co never asked
+
+    def test_any_failure_falls_back_to_ipapi(self):
+        ipapi = _Response(data={"country_name": "Netherlands", "country_code": "NL"})
+        failures = {
+            "lan-dash, no files": _Response(404, data={"error": True, "reason": "No GeoLite2 files"}),
+            "lan-dash, not found": _Response(404, data={"error": True, "reason": "Not in GeoLite2"}),
+            "lan-dash, invalid": _Response(400, data={"error": True, "reason": "Invalid IP Address"}),
+            "nginx's 401 page": _Response(401, text="<html><title>401 Authorization Required</title>", content_type="text/html"),
+            "an HTML 200": _Response(text="<html>", content_type="text/html"),
+            "bad JSON": _Response(text="{not json"),
+            "a JSON list": _Response(text="[1, 2]"),
+            "an error body with 200": _Response(data={"error": True, "reason": "RateLimited"}),
+            "no place in it": _Response(data={"ip": "8.8.8.8"}),
+            "a timeout": TimeoutError("timed out"),
+            "a bad certificate": OSError("CERTIFICATE_VERIFY_FAILED"),
+        }  # fmt: skip
+        for n, (name, answer) in enumerate(failures.items()):
+            with self.subTest(name), self.assertLogs(MODULE, "INFO") as logs:
+                result, calls = self._lookup(answer, ipapi, ip=f"8.8.8.{n}")
+            self.assertEqual(result, ("Netherlands", "NL"))
+            self.assertEqual(
+                [url for url, _ in calls], [f"{self.PROVIDER}/8.8.8.{n}/json/", f"https://ipapi.co/8.8.8.{n}/json/"]
+            )
+            self.assertIn("asking ipapi.co", logs.output[0])
+            if name == "lan-dash, no files":
+                self.assertIn("(HTTP 404: No GeoLite2 files)", logs.output[0])  # the reason, for the log
+
+    def test_both_failing_is_cached_as_a_failure(self):
+        with self.assertLogs(MODULE, "INFO"):
+            result, calls = self._lookup(OSError("down"), _Response(429))
+        self.assertEqual((result, len(calls)), ((None, None), 2))
+        self.assertTrue(self.net._geoip_cache["8.8.8.8"]["failed"])  # retried in 10 minutes, not a day
+
+    def test_the_two_never_wait_longer_than_two_seconds(self):
+        # The provider timed out after its second: ipapi.co gets what is left of the two.
+        clock = iter([100.0, 101.25])
+        with mock.patch(f"{MODULE}.time.monotonic", side_effect=lambda: next(clock)), self.assertLogs(MODULE, "INFO"):
+            result, calls = self._lookup(TimeoutError("timed out"), _Response(data={"country": "NL"}))
+        self.assertEqual(result, ("NL", "NL"))
+        self.assertEqual(calls[1], ("https://ipapi.co/8.8.8.8/json/", 0.75))
+        # Nothing left: ipapi.co is not asked, and the failure is cached.
+        clock = iter([100.0, 101.9])
+        with mock.patch(f"{MODULE}.time.monotonic", side_effect=lambda: next(clock)), self.assertLogs(MODULE, "INFO"):
+            result, calls = self._lookup(TimeoutError("timed out"), ip="8.8.4.4")
+        self.assertEqual((result, len(calls)), ((None, None), 1))
+
+    def test_https_only(self):
+        # The setting refuses anything else (tests/test_settings.py); should an http://
+        # URL reach NetInfo anyway, https_get refuses to send it and ipapi.co answers.
+        from core.helpers import https_get
+
+        self.net.set_geoip_provider("http://lan.example/api/geo")
+        ipapi = _Response(data={"country": "NL"})
+        with (
+            mock.patch(
+                f"{MODULE}.https_get", side_effect=lambda url, timeout: ipapi if "ipapi.co" in url else https_get(url, timeout)
+            ),
+            self.assertLogs(MODULE, "INFO") as logs,
+        ):
+            self.assertEqual(self.net.lookup_geoip("8.8.8.8"), ("NL", "NL"))
+        self.assertIn("Not an https URL", logs.output[0])
+
+    def test_without_a_provider_only_ipapi_is_asked(self):
+        self.net.set_geoip_provider("")
+        with mock.patch(f"{MODULE}.https_get", return_value=_Response(data={"country": "NL"})) as get:
+            self.assertEqual(self.net.lookup_geoip("8.8.8.8"), ("NL", "NL"))
+        self.assertEqual([c.args[0] for c in get.call_args_list], ["https://ipapi.co/8.8.8.8/json/"])
+        self.assertEqual(get.call_args.kwargs["timeout"], 2.0)
 
 
 class EgressProbeTests(_Base):

@@ -354,13 +354,15 @@ class AmneziaManager:
                     self.activity.record("health", event, server=server, detail={"problem": line})
 
     def apply_settings(self):
-        """Take GeoIP and the daemon's log level from the settings, and give nginx its
-        part (the request lines by log_level, the trusted proxies): rewritten and
-        reloaded only when it differs from what start.sh or the last save wrote."""
+        """Take GeoIP (on or off, and its provider) and the daemon's log level from the
+        settings, and give nginx its part (the request lines by log_level, the trusted
+        proxies): rewritten and reloaded only when it differs from what start.sh or the
+        last save wrote."""
         if self.settings is None:
             return
         values = self.settings.values
         self.netinfo.enable_geoip = values["geoip"]
+        self.netinfo.set_geoip_provider(values["geoip_provider"])
         self.awg_log_level = values["awg_log_level"]
         if self.nginx_include_path:
             nginx_conf.write(values, self.nginx_include_path, self.run_command)

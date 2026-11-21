@@ -917,8 +917,12 @@ class FormUi {
                     </div>`)}
                 ${this.formSection('Privacy', `
                     <div class="flex flex-col">
-                        ${toggle('geoip', 'Show where addresses are', 'Looks up country and city of endpoint, public and egress IPs at ipapi.co.')}
-                    </div>`)}
+                        ${toggle('geoip', 'Show where addresses are', 'Looks up country and city of endpoint, public and egress IPs at ipapi.co, or at the provider below.')}
+                    </div>
+                    ${this.formField('s-geoip_provider', 'GeoIP provider', values.geoip_provider, { mono: true,
+                        placeholder: 'ipapi.co', attrs: `spellcheck="false" autocomplete="off" ${pinned('geoip_provider') ? 'disabled' : ''}`,
+                        hint: hint('geoip_provider', 'Empty for ipapi.co, or an https base URL answering <span class="font-mono">&lt;url&gt;/&lt;ip&gt;/json/</span> '
+                            + 'in ipapi.co\'s shape, so addresses stay on your network. When it fails, ipapi.co answers instead.') })}`)}
                 ${this.formSection('About', `
                     <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
                         ${row('Panel', data.about.build_label)}${row('Daemon', data.about.daemon)}${row('Tools', data.about.tools)}

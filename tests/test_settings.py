@@ -107,6 +107,40 @@ class ResolveTests(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
 class RetiredVariableTests(unittest.TestCase):
+    def test_the_geoip_provider_is_ipapi_or_an_https_base_url(self):
+        settings = Settings({})
+        settings.resolve({})
+        self.assertEqual(settings.values["geoip_provider"], "")  # the default: ipapi.co
+        for raw in ("", "  ", "ipapi.co", "https://ipapi.co/", "IPAPI.CO"):
+            self.assertEqual(settings.check({"geoip_provider": raw}), ({"geoip_provider": ""}, []), raw)
+        for raw, normalized in (
+            ("https://geo.example/api/geo", "https://geo.example/api/geo"),
+            (" https://geo.example:8443/v1/ ", "https://geo.example:8443/v1"),
+        ):
+            self.assertEqual(settings.check({"geoip_provider": raw}), ({"geoip_provider": normalized}, []), raw)
+        # https only: a plain-http answer could be written by anyone on the path.
+        for bad in (
+            "http://lan.example/api/geo",
+            "lan.example/api/geo",
+            "ftp://lan.example",
+            "https://",
+            "https://user:pw@lan.example",
+            "https://lan.example/geo?key=1",
+            "https://lan.example/geo#x",
+            "https://lan.example:99999",
+            "https://lan .example",
+            "https://lan.example/" + "x" * 200,
+        ):
+            values, errors = settings.check({"geoip_provider": bad})
+            self.assertEqual((values, len(errors)), ({}, 1), bad)
+            self.assertTrue(errors[0].startswith("GeoIP provider"), errors)
+        pinned = Settings({"GEOIP_PROVIDER": "ipapi.co"})  # pins the default
+        stored = {"geoip_provider": "https://geo.example"}
+        self.assertTrue(pinned.resolve(stored))
+        self.assertEqual(
+            (pinned.values["geoip_provider"], pinned.sources["geoip_provider"], stored), ("", "env", {"geoip_provider": ""})
+        )
+
     def test_only_a_set_retired_variable_is_reported(self):
         from core.settings import retired_variables
 
@@ -183,6 +217,16 @@ class ManagerSettingsTests(unittest.TestCase):
         stored = json.loads(Path(manager.config_file).read_text(encoding="utf-8"))["settings"]
         self.assertEqual(stored, {"geoip": False})
 
+    def test_the_geoip_provider_reaches_netinfo_and_a_change_forgets_the_places(self):
+        manager = build_manager(settings=Settings({"GEOIP_PROVIDER": "https://geo.example/api/"}))
+        self.assertEqual(manager.netinfo.geoip_provider, "https://geo.example/api")
+        manager.netinfo._cache_geoip("8.8.8.8", 0.0, "Somewhere", "SE", {})
+        manager.apply_settings()  # the same provider: the cache stays
+        self.assertIn("8.8.8.8", manager.netinfo._geoip_cache)
+        manager.settings.values["geoip_provider"] = ""
+        manager.apply_settings()
+        self.assertEqual((manager.netinfo.geoip_provider, manager.netinfo._geoip_cache), ("", {}))
+
     def test_a_stored_new_server_default_no_longer_applies(self):
         # A 2.4 store with MTU 1300 and NAT off: dropped at the first boot, and a server
         # created through the API without those fields gets the built-in values.
@@ -215,7 +259,9 @@ class SettingsRouteTests(unittest.TestCase):
 
     def test_get_shows_values_sources_and_never_the_password(self):
         payload = self.http.get("/api/settings").get_json()
-        self.assertEqual(sorted(payload["values"]), ["awg_log_level", "geoip", "log_level", "trusted_proxies"])
+        self.assertEqual(
+            sorted(payload["values"]), ["awg_log_level", "geoip", "geoip_provider", "log_level", "trusted_proxies"]
+        )
         self.assertEqual((payload["values"]["geoip"], payload["sources"]["geoip"]), (True, "env"))
         self.assertEqual(payload["env"]["geoip"], "ENABLE_GEOIP")
         self.assertTrue(payload["access"]["password_is_default"])
@@ -289,6 +335,7 @@ class SettingsRouteTests(unittest.TestCase):
         )
         self.assertEqual(len(validate({"access": {"password": "short"}})["errors"]), 1)
         self.assertEqual(len(validate({"settings": {"awg_log_level": "debug"}})["warnings"]), 1)
+        self.assertEqual(len(validate({"settings": {"geoip_provider": "http://lan.example/geo"}})["errors"]), 1)
 
 
 if __name__ == "__main__":
