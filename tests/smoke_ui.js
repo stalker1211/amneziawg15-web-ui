@@ -679,13 +679,17 @@ function check(label, condition, detail) {
         const data = await amneziaApp.getJson('/api/settings');
         await amneziaApp.openSettings();
         await new Promise((r) => setTimeout(r, 800));
+        // The credential's fields follow `access` (NGINX_USER / NGINX_PASSWORD), not `sources`:
+        // with both variables set, the current password is read-only too.
+        const credential = ['s-user', 's-password', 's-password2', 's-current'];
         const disabled = [...document.querySelectorAll('#drawerBody input:disabled, #drawerBody select:disabled')]
-            .map((e) => e.id).filter((id) => !['s-user', 's-password', 's-password2'].includes(id)).sort();
+            .map((e) => e.id).filter((id) => !credential.includes(id)).sort();
         const pinned = Object.keys(data.sources).filter((k) => data.sources[k] === 'env').map((k) => `s-${k}`).sort();
-        return { disabled, pinned, banner: !document.getElementById('passwordBanner').hidden, isDefault: data.access.password_is_default };
+        const current = document.getElementById('s-current').disabled === !data.access.editable;
+        return { disabled, pinned, current, banner: !document.getElementById('passwordBanner').hidden, isDefault: data.access.password_is_default };
     });
     check('settings drawer shows exactly the env-pinned fields read-only, and the banner follows the credential',
-        JSON.stringify(settingsPinned.disabled) === JSON.stringify(settingsPinned.pinned)
+        JSON.stringify(settingsPinned.disabled) === JSON.stringify(settingsPinned.pinned) && settingsPinned.current
             && settingsPinned.banner === settingsPinned.isDefault, settingsPinned);
     const settingsSaved = await page.evaluate(async () => {
         if (document.getElementById('s-default_port')) return 'the retired New servers section is still there';
@@ -725,7 +729,17 @@ function check(label, condition, detail) {
         return saved.values.trusted_proxies === '192.0.2.10, 198.51.100.0/24' ? 'saved' : `stored ${saved.values.trusted_proxies}`;
     });
     check('trusted proxies: a /0 is refused as typed, a list is saved normalized', proxiesSaved === 'saved', proxiesSaved);
-    check('the credential needs its repeat and the current password', await page.evaluate(async () => {
+    // With NGINX_PASSWORD set (the container command in CLAUDE.md) there is nothing to
+    // type into: the field must be read-only instead.
+    const passwordPinned = await page.evaluate(async () => (await amneziaApp.getJson('/api/settings')).access.password_source === 'env');
+    if (passwordPinned) check('a password set by NGINX_PASSWORD is read-only in the drawer', await page.evaluate(async () => {
+        await amneziaApp.openSettings();
+        await new Promise((r) => setTimeout(r, 600));
+        const readOnly = document.getElementById('s-password').disabled && document.getElementById('s-password2').disabled;
+        window.Ui.closeDrawer();
+        return readOnly;
+    }));
+    else check('the credential needs its repeat and the current password', await page.evaluate(async () => {
         await amneziaApp.openSettings();
         await new Promise((r) => setTimeout(r, 600));
         const password = document.getElementById('s-password');
