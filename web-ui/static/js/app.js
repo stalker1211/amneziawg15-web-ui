@@ -227,6 +227,7 @@ class AmneziaApp {
             'open-settings': () => this.openSettings(),
             'open-activity': () => this.showActivity(),
             'iptables-check': () => this.checkIptables(),
+            'geoip-test': (el) => this.testGeoipProvider(el),
         };
         const run = (event) => {
             const el = event.target.closest('[data-action]');

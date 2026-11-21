@@ -188,7 +188,7 @@ An invalid value is logged and ignored.
 |----------|---------|---------|
 | `NGINX_USER` / `NGINX_PASSWORD` | `admin` / `changeme` | The Basic Auth sign-in, stored hashed in `/etc/amnezia/.htpasswd`; see [Security](#security) |
 | `ENABLE_GEOIP` | `1` | Country and city of endpoint, public and egress IPs (asks ipapi.co) |
-| `GEOIP_PROVIDER` | `ipapi.co` | Where those places come from: ipapi.co, or the `https://` base URL of a service answering `<url>/<ip>/json/` in ipapi.co's shape (a local GeoLite2 lookup keeps addresses on your network); when it fails, ipapi.co answers |
+| `GEOIP_PROVIDER` | `ipapi.co` | Where those places come from: ipapi.co, or the `https://` base URL of a service answering `<url>/<ip>/json/` in ipapi.co's shape (a local GeoLite2 lookup keeps addresses on your network); when it fails, ipapi.co answers. ⚙ → Privacy can test it and shows how it has answered |
 | `AWG_LOG_LEVEL` | `error` | The VPN daemon's log: `off`, `error`, `debug` |
 | `LOG_LEVEL` | `INFO` | The web panel's log, and which requests nginx logs |
 | `TRUSTED_PROXIES` | `172.17.0.0/16` | Reverse proxies whose `X-Forwarded-For` names the client (IPs or CIDRs, comma-separated; empty trusts none) |
@@ -388,6 +388,7 @@ API with your cached credential.
 | GET | `/api/settings` | panel settings: values, where each comes from (`env`, `panel`, `default`), the sign-in's state, versions |
 | POST | `/api/settings` | `{"settings": {...}, "access": {"current_password", "user", "password"}}`; nothing applies unless all of it is valid |
 | POST | `/api/settings/restart-servers` | restart the running servers (a new daemon log level) |
+| POST | `/api/settings/geoip-test` | `{"provider"}`: ask a GeoIP provider, as typed, where the public IP is (once, no fallback; saves nothing) |
 | POST | `/api/generate` | random parameters for a protocol: `{"protocol", "mtu"}` → `{"transport_params", "client_defaults"}`; saves nothing |
 | POST | `/api/validate` | dry-run a form: `{"server": {...}}`, `{"server_id", "protocol", "transport_params", "endpoint_host"}` or `{"server_id", "client_params", "allowed_ips"}` → `{"errors", "warnings"}` (a transport change also gets the re-import counts) |
 | GET | `/api/system/status` | health, counts, public IP, supported protocols |

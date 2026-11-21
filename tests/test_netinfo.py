@@ -303,6 +303,169 @@ class GeoIpProviderTests(_Base):
         self.assertEqual(get.call_args.kwargs["timeout"], 2.0)
 
 
+class GeoIpRecordTests(_Base):
+    """⚙'s line under the setting (geoip_status): how the first source asked, the
+    provider or ipapi.co without one, has done since the start or the last change."""
+
+    PROVIDER = GeoIpProviderTests.PROVIDER
+    PLACE = GeoIpProviderTests.PLACE
+
+    def setUp(self):
+        super().setUp()
+        self.net.set_geoip_provider(self.PROVIDER)
+
+    def _lookup(self, ip, provider_answer, ipapi_answer=None):
+        """One lookup; each answer a response, or an exception to raise. Returns the URLs asked."""
+
+        def get(url, timeout):
+            answer = ipapi_answer if url.startswith("https://ipapi.co/") else provider_answer
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with mock.patch(f"{MODULE}.https_get", side_effect=get) as https_get:
+            self.net.lookup_geoip(ip)
+        return [c.args[0] for c in https_get.call_args_list]
+
+    def _counts(self):
+        status = self.net.geoip_status()
+        return (status["answers"], status["failures"], status["failing"])
+
+    def test_answers_and_failures_are_counted_with_the_latest_reason(self):
+        status = self.net.geoip_status()
+        self.assertEqual(
+            {k: status[k] for k in ("source", "provider", "last_answer", "last_failure", "last_error")},
+            {"source": "lan.example", "provider": True, "last_answer": None, "last_failure": None, "last_error": None},
+        )
+        self.assertEqual(self._counts(), (0, 0, 0))
+        ipapi = _Response(data={"country": "NL"})
+        self._lookup("8.8.8.1", _Response(data=self.PLACE))
+        with self.assertLogs(MODULE, "INFO"):
+            self._lookup("8.8.8.2", _Response(404, data={"error": True, "reason": "Not in GeoLite2"}), ipapi)
+            self._lookup("8.8.8.3", TimeoutError("timed out"), ipapi)
+        # ipapi.co placed both, but the record is the provider's: two failures in a row.
+        self.assertEqual(self._counts(), (1, 2, 2))
+        status = self.net.geoip_status()
+        self.assertEqual(status["last_error"], "timed out")
+        self.assertGreaterEqual(status["last_failure"], status["last_answer"])
+        self._lookup("8.8.8.4", _Response(data=self.PLACE))
+        self.assertEqual(self._counts(), (2, 2, 0))  # answering again
+
+    def test_a_place_from_the_cache_is_not_an_ask(self):
+        self._lookup("8.8.8.8", _Response(data=self.PLACE))
+        self.assertEqual(self._lookup("8.8.8.8", OSError("not asked")), [])
+        self.assertEqual(self._counts(), (1, 0, 0))
+
+    def test_a_provider_change_starts_the_record_over(self):
+        self._lookup("8.8.8.8", _Response(data=self.PLACE))
+        self.net.set_geoip_provider(self.PROVIDER)  # the same one: kept
+        self.assertEqual(self._counts(), (1, 0, 0))
+        since = self.net.geoip_status()["since"]
+        with mock.patch(f"{MODULE}.time.time", return_value=since + 60):
+            self.net.set_geoip_provider("https://other.example/geo")
+        status = self.net.geoip_status()
+        self.assertEqual((status["source"], status["since"], self._counts()), ("other.example", since + 60, (0, 0, 0)))
+
+    def test_without_a_provider_ipapi_has_the_record(self):
+        self.net.set_geoip_provider("")
+        self._lookup("8.8.8.8", None, _Response(data={"country": "NL"}))
+        self._lookup("8.8.4.4", None, _Response(429, data={"error": True, "reason": "RateLimited"}))
+        status = self.net.geoip_status()
+        self.assertEqual(
+            (status["source"], status["provider"], status["last_error"]), ("ipapi.co", False, "HTTP 429: RateLimited")
+        )
+        self.assertEqual(self._counts(), (1, 1, 1))
+
+    def test_a_lookup_from_before_a_provider_change_is_not_counted(self):
+        def answer_after_a_change(url, timeout):
+            self.net.set_geoip_provider("https://other.example")
+            return _Response(data=self.PLACE)
+
+        with mock.patch(f"{MODULE}.https_get", side_effect=answer_after_a_change):
+            self.net.lookup_geoip("8.8.8.8")
+        self.assertEqual(self._counts(), (0, 0, 0))
+
+    def test_the_record_names_the_host_never_the_url(self):
+        url = "https://geo.example/s3cret-token"
+        self.net.set_geoip_provider(url)
+        with self.assertLogs(MODULE, "INFO"):
+            self._lookup("8.8.8.8", OSError(f"refused: {url}/8.8.8.8/json/"), _Response(data={"country": "NL"}))
+        status = self.net.geoip_status()
+        self.assertEqual((status["source"], status["last_error"]), ("geo.example", "refused: geo.example/8.8.8.8/json/"))
+        self.assertNotIn("s3cret", json.dumps(status))
+
+
+class GeoIpCheckTests(_Base):
+    """⚙'s Test (check_geoip_source): one source, asked once and now; nothing kept."""
+
+    PROVIDER = GeoIpProviderTests.PROVIDER
+    PLACE = GeoIpProviderTests.PLACE
+
+    def _check(self, url, answer, public_ip="8.8.4.4"):
+        def get(asked, timeout):
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with mock.patch(f"{MODULE}.https_get", side_effect=get) as https_get:
+            result = self.net.check_geoip_source(url, public_ip)
+        return result, [(c.args[0], c.kwargs["timeout"]) for c in https_get.call_args_list]
+
+    def test_only_the_source_is_asked_and_nothing_is_kept(self):
+        self.net.enable_geoip = False  # a click, not a lookup: asked all the same
+        self.net.set_geoip_provider("https://saved.example")  # the URL as typed is asked, not the saved one
+        before = self.net.geoip_status()
+        result, calls = self._check(self.PROVIDER, _Response(data=self.PLACE))
+        self.assertEqual(calls, [(f"{self.PROVIDER}/8.8.4.4/json/", 5.0)])  # longer than a lookup waits
+        self.assertEqual(
+            {k: v for k, v in result.items() if k != "seconds"},
+            {"source": "lan.example", "provider": True, "ip": "8.8.4.4", "is_public_ip": True, "ok": True,
+             "label": "United States / Mountain View, California", "country_code": "US", "error": None,
+             "budget": 1.0, "slow": False},
+        )  # fmt: skip
+        self.assertEqual((self.net._geoip_cache, self.net.geoip_status()), ({}, before))
+
+    def test_a_failure_is_said_and_ipapi_is_not_asked(self):
+        failures = {
+            "lan-dash, not found": (_Response(404, data={"error": True, "reason": "Not in GeoLite2"}), "HTTP 404: Not in GeoLite2"),
+            "an HTML page": (_Response(text="<html>", content_type="text/html"), "not JSON (text/html)"),
+            "no place in it": (_Response(data={"ip": "8.8.4.4"}), "no country or place in the answer"),
+            "down": (OSError("Connection refused"), "Connection refused"),
+        }  # fmt: skip
+        for name, (answer, error) in failures.items():
+            with self.subTest(name):
+                result, calls = self._check(self.PROVIDER, answer)
+                self.assertEqual((result["ok"], result["error"], result["label"], result["slow"]), (False, error, None, False))
+                self.assertEqual(len(calls), 1)
+
+    def test_a_slow_answer_is_told_from_a_dead_one(self):
+        clock = iter([100.0, 101.5])
+        with mock.patch(f"{MODULE}.time.monotonic", side_effect=lambda: next(clock)):
+            result, _ = self._check(self.PROVIDER, _Response(data=self.PLACE))
+        self.assertEqual((result["ok"], result["seconds"], result["budget"], result["slow"]), (True, 1.5, 1.0, True))
+        # ipapi.co, as the only source, has a lookup's two seconds.
+        clock = iter([100.0, 101.5])
+        with mock.patch(f"{MODULE}.time.monotonic", side_effect=lambda: next(clock)):
+            result, calls = self._check("", _Response(data={"country": "NL"}))
+        self.assertEqual(calls[0][0], "https://ipapi.co/8.8.4.4/json/")
+        self.assertEqual(
+            (result["source"], result["provider"], result["budget"], result["slow"]), ("ipapi.co", False, 2.0, False)
+        )
+
+    def test_without_a_public_ip_it_asks_about_a_stand_in(self):
+        for public_ip in (None, "", "192.168.1.2", "203.0.113.9"):
+            with self.subTest(public_ip):
+                result, calls = self._check(self.PROVIDER, _Response(data=self.PLACE), public_ip=public_ip)
+                self.assertEqual((result["ip"], result["is_public_ip"]), ("8.8.8.8", False))
+                self.assertEqual(calls[0][0], f"{self.PROVIDER}/8.8.8.8/json/")
+
+    def test_the_error_names_the_host_never_the_url(self):
+        url = "https://geo.example/s3cret-token"
+        result, _ = self._check(url, OSError(f"refused: {url}/8.8.4.4/json/"))
+        self.assertEqual((result["source"], result["error"]), ("geo.example", "refused: geo.example/8.8.4.4/json/"))
+        self.assertNotIn("s3cret", json.dumps(result))
+
+
 class EgressProbeTests(_Base):
     def test_source_and_service_are_validated(self):
         with self.assertRaises(ValueError):

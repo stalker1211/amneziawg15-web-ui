@@ -734,6 +734,35 @@ function check(label, condition, detail) {
         return saved.values.trusted_proxies === '192.0.2.10, 198.51.100.0/24' ? 'saved' : `stored ${saved.values.trusted_proxies}`;
     });
     check('trusted proxies: a /0 is refused as typed, a list is saved normalized', proxiesSaved === 'saved', proxiesSaved);
+    // GeoIP provider (2.9): a line says how its source has done, and Test asks the URL as
+    // typed, unsaved (the demo answers from its table; a container asks the real one).
+    const geoipTest = await page.evaluate(async () => {
+        await amneziaApp.openSettings();
+        await new Promise((r) => setTimeout(r, 600));
+        const status = document.getElementById('s-geoip-status');
+        const field = document.getElementById('s-geoip_provider');
+        const button = document.querySelector('#drawerBody [data-action="geoip-test"]');
+        const line = document.getElementById('s-geoip-test');
+        if (!status || !/ipapi\.co|\./.test(status.textContent)) return `no status line: ${status?.textContent}`;
+        if (!field || !button || !line) return 'no field, Test button or result line';
+        const test = async () => {
+            button.click();
+            for (let i = 0; i < 80 && (line.hidden || /Asking/.test(line.textContent)); i += 1) await new Promise((r) => setTimeout(r, 100));
+            return line.textContent;
+        };
+        if (!field.disabled) {
+            const typed = field.value;
+            field.value = 'http://geo.example/api';
+            const refused = await test();
+            field.value = typed;
+            if (!/https:\/\//.test(refused)) return `an http URL was not refused: ${refused}`;
+        }
+        const answer = await test();
+        window.Ui.closeDrawer();
+        return answer;
+    });
+    check('GeoIP: the line under the provider, and Test refusing an http URL and asking the typed one',
+        /answered in|gave no place/.test(geoipTest), geoipTest);
     // With NGINX_PASSWORD set (the container command in CLAUDE.md) there is nothing to
     // type into: the field must be read-only instead.
     const passwordPinned = await page.evaluate(async () => (await amneziaApp.getJson('/api/settings')).access.password_source === 'env');

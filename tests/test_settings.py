@@ -335,6 +335,35 @@ class SettingsRouteTests(unittest.TestCase):
         self.assertFalse(saved["access"]["password_is_default"])
         self.assertTrue(self.access.verify("n3w-secret"))
 
+    def test_the_geoip_test_asks_the_provider_as_typed_and_saves_nothing(self):
+        from core.helpers import HttpsResponse
+
+        self.manager.public_ip = "8.8.4.4"
+        place = HttpsResponse(200, "application/json", json.dumps({"country_name": "Netherlands", "city": "Amsterdam"}))
+        with mock.patch("services.netinfo.https_get", return_value=place) as get:
+            result = self.http.post("/api/settings/geoip-test", json={"provider": "https://geo.example/api/"}).get_json()
+        self.assertEqual(get.call_args.args[0], "https://geo.example/api/8.8.4.4/json/")  # normalized, as Save would
+        self.assertEqual(
+            (result["ok"], result["source"], result["label"], result["is_public_ip"]),
+            (True, "geo.example", "Netherlands / Amsterdam", True),
+        )
+        self.assertEqual((self.manager.settings.values["geoip_provider"], self.stored().get("geoip_provider")), ("", None))
+        # Empty is ipapi.co, as in the field.
+        with mock.patch("services.netinfo.https_get", return_value=place) as get:
+            self.assertTrue(self.http.post("/api/settings/geoip-test", json={"provider": ""}).get_json()["ok"])
+        self.assertEqual(get.call_args.args[0], "https://ipapi.co/8.8.4.4/json/")
+
+    def test_the_geoip_test_refuses_what_save_would(self):
+        response = self.http.post("/api/settings/geoip-test", json={"provider": "http://geo.example/api"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("must start with https://", response.get_json()["error"])
+
+    def test_get_says_how_the_geoip_source_has_done(self):
+        status = self.http.get("/api/settings").get_json()["geoip_status"]
+        self.assertEqual(
+            (status["source"], status["provider"], status["answers"], status["failures"]), ("ipapi.co", False, 0, 0)
+        )
+
     def test_the_drawer_is_checked_through_validate(self):
         def validate(body):
             return self.http.post("/api/validate", json=body).get_json()

@@ -1,8 +1,10 @@
 """Panel settings API: the settings drawer (⚙ in the header).
 
-GET  /api/settings                  values, where each comes from, the credential's state, About
+GET  /api/settings                  values, where each comes from, the credential's state, About,
+                                    how the GeoIP source has done (geoip_status)
 POST /api/settings                  {"settings": {...partial}, "access": {current_password, user?, password?}}
 POST /api/settings/restart-servers  restart the running servers (a new daemon log level needs it)
+POST /api/settings/geoip-test       {"provider"}: ask it, as typed, where the public IP is; saves nothing
 
 The rules live in core/settings.py; /api/validate checks the drawer as you type.
 """
@@ -50,6 +52,7 @@ def register_settings_routes(app, amnezia_manager, access, *, build_label):
             "access": access.payload(),
             "about": about,
             "running_servers": len(running_servers()),
+            "geoip_status": amnezia_manager.netinfo.geoip_status(),
         }
 
     @settings_bp.route("/api/settings", methods=["GET"])
@@ -102,5 +105,16 @@ def register_settings_routes(app, amnezia_manager, access, *, build_label):
             ok = amnezia_manager.stop_server(server["id"]) and amnezia_manager.start_server(server["id"])
             (restarted if ok else failed).append(server["name"])
         return jsonify({"restarted": restarted, "failed": failed})
+
+    @settings_bp.route("/api/settings/geoip-test", methods=["POST"])
+    def geoip_test():
+        """Ask a GeoIP provider as the drawer has it, saved or not ("" for ipapi.co),
+        where this server's public IP is: once, without falling back. Nothing is saved,
+        cached or counted; a URL the setting would refuse is a 400, with its reason."""
+        data = request.get_json(silent=True)
+        provider = data.get("provider") if isinstance(data, dict) else None
+        _env, parse, _default = FIELDS["geoip_provider"]
+        url = parse(provider or "")
+        return jsonify(amnezia_manager.netinfo.check_geoip_source(url, amnezia_manager.public_ip))
 
     app.register_blueprint(settings_bp)

@@ -54,6 +54,8 @@ GEO = {
     "198.51.100.61": ("Frankfurt am Main", "DE"),
     "198.51.100.23": ("Rotterdam", "NL"),
     "203.0.113.140": ("Moscow", "RU"),
+    # ⚙'s Test: the demo's public IPs are documentation addresses, so it asks about this one.
+    "8.8.8.8": ("United States / Mountain View, California", "US"),
 }
 MiB, GiB = 1024**2, 1024**3
 
@@ -75,6 +77,12 @@ class DemoNetInfo(NetInfo):
     # The traffic loop's cache-only lookup would skip documentation-range addresses.
     def lookup_geoip_cached(self, ip):
         return self.lookup_geoip(ip)
+
+    # ⚙'s Test asks one source through here: the real check, the table's answer.
+    def _place_at(self, base_url, ip, timeout):
+        if ip not in GEO:
+            raise ValueError("HTTP 404: not in the demo's table")
+        return GEO[ip]
 
     def get_route_for_source_ip(self, source_ip, destination="1.1.1.1"):
         return "demo"
@@ -286,6 +294,11 @@ def seed(manager):
     # Home has been up for days (the iPad's handshake is 3 d old), Travel since this morning.
     manager.started[home["interface"]] = now - (3 * 86400 + 4 * 3600)
     manager.started[travel["interface"]] = now - 5 * 3600
+    # ⚙ → Privacy's line: ipapi.co's record after a few hours of use, one rate limit in it.
+    manager.netinfo._geoip_record.update(
+        since=now - 5 * 3600, answers=23, failures=1, last_answer=now - 240,
+        last_failure=now - 2 * 3600, last_error="HTTP 429: Too many rapid requests",
+    )  # fmt: skip
     seed_history(manager)
     seed_diagnoses(manager, home, travel, clients)
     seed_activity(manager, home, travel, clients)

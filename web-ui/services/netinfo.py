@@ -3,7 +3,8 @@
 The three outbound calls, all HTTPS through core.helpers.https_get: the public IP
 (api.ipify.org and two fallbacks), the egress probe bound to a tunnel's address (where
 that tunnel's traffic exits), and the country and city of an address, cached: from
-ipapi.co, or first from a GeoIP provider in its shape (the geoip_provider setting).
+ipapi.co, or first from a GeoIP provider in its shape (the geoip_provider setting). ⚙
+shows how that source has done (geoip_status) and can ask it once (check_geoip_source).
 Nothing here reads or writes web_config.json: the manager keeps the public IP it hands
 to clients, and records each probe on its server (probe_server_egress_ip).
 """
@@ -41,6 +42,10 @@ class NetInfo:
     GEOIP_PROVIDER_TIMEOUT_SECONDS = 1.0
     # Less than this left after the provider: no time to ask ipapi.co.
     GEOIP_MIN_TIMEOUT_SECONDS = 0.2
+    # ⚙'s Test waits longer than a lookup, so a slow source is told from a dead one, and
+    # asks about this address when the panel has no public one of its own.
+    GEOIP_TEST_TIMEOUT_SECONDS = 5.0
+    GEOIP_TEST_ADDRESS = "8.8.8.8"
 
     EGRESS_PROBE_SERVICES = (
         "https://api.ipify.org",
@@ -63,6 +68,10 @@ class NetInfo:
         self._geoip_lock = threading.Lock()
         # Addresses a background task is looking up now (lookup_geoip_cached).
         self._geoip_pending = set()
+        # How the first source asked (the provider, or ipapi.co without one) has done
+        # since the panel started or the provider changed: ⚙'s line under the setting
+        # (geoip_status). Memory only, like the cache; under the same lock.
+        self._geoip_record = _new_record()
 
     def detect_public_ip(self):
         """The host's public IPv4 address, or None when no service answered.
@@ -190,20 +199,7 @@ class NetInfo:
         if not self.enable_geoip or not ip or not isinstance(ip, str):
             return None
         ip = ip.strip()
-        try:
-            addr = ipaddress.ip_address(ip)
-        except ValueError:
-            return None
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_multicast
-            or addr.is_reserved
-            or addr.is_unspecified
-        ):
-            return None
-        return ip
+        return ip if _is_public(ip) else None
 
     def _geoip_fresh(self, ip, now):
         """The cached (label, country code), or None when absent or expired."""
@@ -239,11 +235,73 @@ class NetInfo:
     def set_geoip_provider(self, url):
         """Ask `url` (an https base URL in ipapi.co's shape, as the setting normalizes
         it) first, or only ipapi.co when "". A change forgets the cached places, so the
-        new source names them."""
+        new source names them, and starts its record over (geoip_status)."""
         with self._geoip_lock:
             if url != self.geoip_provider:
                 self.geoip_provider = url
                 self._geoip_cache.clear()
+                self._geoip_record = _new_record()
+
+    def _record_geoip(self, provider, error=None):
+        """Count an answer (`error` None) or a failure and its reason from the first
+        source asked, unless the provider changed while it was asked (as _cache_geoip)."""
+        now = time.time()
+        with self._geoip_lock:
+            if provider != self.geoip_provider:
+                return
+            record = self._geoip_record
+            if error is None:
+                record.update(answers=record["answers"] + 1, failing=0, last_answer=now)
+            else:
+                record.update(failures=record["failures"] + 1, failing=record["failing"] + 1)
+                record.update(last_failure=now, last_error=error[:200])
+
+    def geoip_status(self):
+        """For ⚙: the first source asked (the provider's host, never its URL, or
+        ipapi.co), whether it is a provider, and its record since `since` (the panel's
+        start or the provider's last change): answers and failures, `failing` (the
+        failures since the last answer), when each last happened (epoch seconds) and
+        the latest failure's reason. Lookups the cache answers are not counted."""
+        with self._geoip_lock:
+            provider, record = self.geoip_provider, dict(self._geoip_record)
+        return {"source": _host(provider or self.GEOIP_DEFAULT_URL), "provider": bool(provider), **record}
+
+    def check_geoip_source(self, url, public_ip):
+        """Ask `url` (a provider as the setting normalizes it, "" for ipapi.co) where
+        `public_ip` is, once and now, for ⚙'s Test button: no cache, no fallback, and
+        nothing counted or kept. GEOIP_TEST_ADDRESS stands in for an address that is
+        not public (none detected yet).
+
+        It waits GEOIP_TEST_TIMEOUT_SECONDS, longer than a lookup gives the source
+        (`budget`), so a slow source is told from a dead one: `slow` is an answer
+        after the budget, which a lookup would not have waited for.
+        """
+        own = isinstance(public_ip, str) and _is_public(public_ip)
+        ip = public_ip.strip() if own else self.GEOIP_TEST_ADDRESS
+        base = url or self.GEOIP_DEFAULT_URL
+        host = _host(base)
+        budget = self.GEOIP_PROVIDER_TIMEOUT_SECONDS if url else self.GEOIP_TIMEOUT_SECONDS
+        label = country_code = error = None
+        started = time.monotonic()
+        try:
+            label, country_code = self._place_at(base, ip, self.GEOIP_TEST_TIMEOUT_SECONDS)
+        except Exception as exc:  # pylint: disable=broad-exception-caught  -- reported, not raised
+            # Its host, never the URL: the path may carry a token.
+            error = str(exc).replace(base, host)[:200]
+        seconds = round(time.monotonic() - started, 3)
+        return {
+            "source": host,
+            "provider": bool(url),
+            "ip": ip,
+            "is_public_ip": own,
+            "ok": error is None,
+            "label": label,
+            "country_code": country_code,
+            "error": error,
+            "seconds": seconds,
+            "budget": budget,
+            "slow": error is None and seconds > budget,
+        }
 
     @staticmethod
     def _ask_geoip(base_url, ip, timeout):
@@ -300,9 +358,12 @@ class NetInfo:
                 place = self._place_at(provider, ip, self.GEOIP_PROVIDER_TIMEOUT_SECONDS)
             except Exception as exc:  # pylint: disable=broad-exception-caught  -- any failure falls back
                 # Its host, never the URL: the path may carry a token.
-                host = urlparse(provider).hostname or "the provider"
-                logger.info("GeoIP: %s failed for %s (%s); asking ipapi.co", host, ip, str(exc).replace(provider, host))
+                host = _host(provider)
+                reason = str(exc).replace(provider, host)
+                logger.info("GeoIP: %s failed for %s (%s); asking ipapi.co", host, ip, reason)
+                self._record_geoip(provider, reason)
             else:
+                self._record_geoip(provider)
                 self._cache_geoip(provider, ip, now, place, self.GEOIP_CACHE_TTL_SECONDS)
                 return place
             timeout -= time.monotonic() - started
@@ -310,12 +371,50 @@ class NetInfo:
         if timeout >= self.GEOIP_MIN_TIMEOUT_SECONDS:
             try:
                 place = self._place_at(self.GEOIP_DEFAULT_URL, ip, timeout)
+            except Exception as exc:  # pylint: disable=broad-exception-caught  -- cached as a failure below
+                if not provider:  # ipapi.co was the first source: its record
+                    self._record_geoip(provider, str(exc))
+            else:
                 if not provider:
                     ttl = self.GEOIP_CACHE_TTL_SECONDS
-            except Exception:  # pylint: disable=broad-exception-caught  -- cached as a failure below
-                pass
+                    self._record_geoip(provider)
         self._cache_geoip(provider, ip, now, place, ttl)
         return place
+
+
+def _new_record():
+    """A GeoIP source's record, empty, counting from now (NetInfo.geoip_status)."""
+    return {
+        "since": time.time(),
+        "answers": 0,
+        "failures": 0,
+        "failing": 0,
+        "last_answer": None,
+        "last_failure": None,
+        "last_error": None,
+    }
+
+
+def _host(url):
+    """A source's host name, for the log and ⚙: never the URL, whose path may carry a token."""
+    return urlparse(url).hostname or "the provider"
+
+
+def _is_public(ip):
+    """Whether GeoIP can place `ip`: an address that is not private, loopback,
+    link-local, multicast, reserved or unspecified."""
+    try:
+        addr = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return False
+    return not (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_multicast
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
 
 
 def _within(timeout, call):

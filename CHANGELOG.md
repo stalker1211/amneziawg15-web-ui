@@ -12,6 +12,13 @@
   not a day, so your service names the address once it is back. Changing it forgets
   the cached places. The log and Activity name it by its host only, as a token can
   sit in its path.
+- **Whether it works, in ⚙:** Test asks the provider, as typed and before saving,
+  where the server's public IP is: once, without the ipapi.co fallback, and says
+  what came back and how fast, or why not. A slow answer is flagged too, as a lookup
+  waits only 1 s for the provider. Saving a new provider runs the test once. A line
+  under the field counts its answers and failures since the panel started or the
+  provider changed, with the latest failure's reason, so a provider that stopped
+  answering no longer hides behind ipapi.co's places.
 
 ### Tooling
 - **The page's JavaScript is type-checked:** `run_tests.sh` runs `tsc` (TypeScript

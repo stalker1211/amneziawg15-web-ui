@@ -866,6 +866,7 @@ class FormUi {
         const userPinned = access.user_source === 'env';
         const passwordPinned = access.password_source === 'env';
         const row = (k, v) => `<dt class="text-gray-700 dark:text-[#bac5d4]">${k}</dt><dd class="font-mono text-xs text-gray-900 dark:text-[#e5e7eb] min-w-0 break-all">${safe(v || '—')}</dd>`;
+        const geoipStatus = this.geoipStatusMessage(data.geoip_status, values.geoip);
 
         const collectSettings = () => {
             const out = {};
@@ -923,6 +924,7 @@ class FormUi {
                     return;
                 }
                 this.showTempMessage(saved.changed.length ? 'Settings saved' : 'Nothing changed', 'success');
+                if (saved.changed.includes('geoip_provider') && saved.values.geoip_provider) this.toastGeoipTest(saved.values.geoip_provider);
                 if (saved.restart_needed) await this.offerDaemonRestart(saved.restart_needed);
             },
         };
@@ -961,10 +963,20 @@ class FormUi {
                     <div class="flex flex-col">
                         ${toggle('geoip', 'Show where addresses are', 'Looks up country and city of endpoint, public and egress IPs at ipapi.co, or at the provider below.')}
                     </div>
-                    ${this.formField('s-geoip_provider', 'GeoIP provider', values.geoip_provider, { mono: true,
-                        placeholder: 'ipapi.co', attrs: `spellcheck="false" autocomplete="off" ${pinned('geoip_provider') ? 'disabled' : ''}`,
-                        hint: hint('geoip_provider', 'Empty for ipapi.co, or an https base URL answering <span class="font-mono">&lt;url&gt;/&lt;ip&gt;/json/</span> '
-                            + 'in ipapi.co\'s shape, so addresses stay on your network. When it fails, ipapi.co answers instead.') })}`)}
+                    <div>
+                        <label class="label" for="s-geoip_provider">GeoIP provider</label>
+                        <div class="flex gap-2">
+                            <input id="s-geoip_provider" type="text" class="field font-mono" value="${safe(values.geoip_provider)}" placeholder="ipapi.co"
+                                spellcheck="false" autocomplete="off" ${pinned('geoip_provider') ? 'disabled' : ''}>
+                            <button type="button" class="btn btn-secondary" data-action="geoip-test">Test</button>
+                        </div>
+                        <p class="hint">${hint('geoip_provider', 'Empty for ipapi.co, or an https base URL answering <span class="font-mono">&lt;url&gt;/&lt;ip&gt;/json/</span> '
+                            + 'in ipapi.co\'s shape, so addresses stay on your network. When it fails, ipapi.co answers instead. '
+                            + 'Test asks it, as typed, where this server\'s public IP is.')}</p>
+                        <p id="s-geoip-status" class="mt-1 text-xs ${this.geoipToneClass(geoipStatus.tone)}"
+                            title="Counted in memory since the panel started or the provider changed">${safe(geoipStatus.text)}</p>
+                        <p id="s-geoip-test" class="mt-1 text-xs" role="status" hidden></p>
+                    </div>`)}
                 ${this.formSection('About', `
                     <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1.5 text-sm">
                         ${row('Panel', data.about.build_label)}${row('Daemon', data.about.daemon)}${row('Tools', data.about.tools)}
@@ -1049,6 +1061,95 @@ class FormUi {
             }
         }));
         box.innerHTML = blocks.join('');
+    }
+
+    // Privacy → Test: ask the provider as typed (saved or not; empty for ipapi.co) where
+    // this server's public IP is, once, without the ipapi.co fallback, and say what came
+    // back, how fast, or why not (POST /api/settings/geoip-test; it saves nothing).
+    /** @this {AmneziaApp} */
+    async testGeoipProvider(button) {
+        const line = document.getElementById('s-geoip-test');
+        if (!line) return;
+        const show = (tone, text) => {
+            line.className = `mt-1 text-xs ${this.geoipToneClass(tone)}`;
+            line.textContent = text;
+            line.hidden = false;
+        };
+        show('muted', 'Asking…');
+        button.disabled = true;
+        try {
+            const message = this.geoipTestMessage(await this.postJson('/api/settings/geoip-test',
+                { provider: (this.control('s-geoip_provider')?.value || '').trim() }));
+            show(message.tone, message.text);
+        } catch (error) {
+            show('bad', error.message);
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    // After a save that set a new provider: the same test, said in a toast (the drawer
+    // has closed), so a provider that cannot answer is known now, not months later.
+    /** @this {AmneziaApp} */
+    async toastGeoipTest(provider) {
+        try {
+            const message = this.geoipTestMessage(await this.postJson('/api/settings/geoip-test', { provider }));
+            this.showTempMessage(message.text, { good: 'success', warn: 'info' }[message.tone] || 'error');
+        } catch (error) {
+            this.showTempMessage(`GeoIP provider test: ${error.message}`, 'error');
+        }
+    }
+
+    // What the Test found, as { tone, text }.
+    /** @this {AmneziaApp} */
+    geoipTestMessage(result) {
+        const where = `${result.ip}${result.is_public_ip ? ' (this server\'s public IP)' : ''}`;
+        const took = `${Number(result.seconds).toFixed(2)} s`;
+        if (!result.ok) {
+            return { tone: 'bad', text: `${result.source} gave no place for ${where} after ${took}: ${String(result.error).replace(/\.$/, '')}.`
+                + (result.provider ? ' Lookups would go to ipapi.co.' : '') };
+        }
+        const place = [window.ServerUi.flag(result.country_code), result.label || result.country_code].filter(Boolean).join(' ');
+        if (result.slow) {
+            return { tone: 'warn', text: `${result.source} answered, but in ${took}: a lookup waits ${result.budget} s for it, so most would `
+                + `${result.provider ? 'go to ipapi.co' : 'find no place'}. It placed ${where} in ${place}.` };
+        }
+        return { tone: 'good', text: `${result.source} answered in ${took}: ${where} is in ${place}.` };
+    }
+
+    // The line under the field: how the first source asked (the provider, or ipapi.co
+    // without one) has done since the panel started or the provider changed, as
+    // { tone, text } (geoip_status in GET /api/settings; cached places are not asks).
+    /** @this {AmneziaApp} */
+    geoipStatusMessage(status, enabled) {
+        const ago = (t) => window.ServerUi.ago(t);
+        const span = (t) => (ago(t) === 'just now' ? 'minute' : ago(t).replace(/ ago$/, '')); // "2 h"
+        const lookups = (n) => `${n} lookup${n === 1 ? '' : 's'}`;
+        const { source, answers, failures, failing } = status;
+        const off = enabled ? '' : ' GeoIP is off: nothing is asked.';
+        const why = `${ago(status.last_failure)}: ${String(status.last_error).replace(/\.$/, '')}`;
+        if (!answers && !failures) {
+            return { tone: 'muted', text: `${source} has not been asked in the last ${span(status.since)}.${off}` };
+        }
+        if (failing) {
+            return { tone: 'bad', text: `${source} failed its last ${failing === 1 ? `lookup, ${why}` : `${lookups(failing)}, most recently ${why}`}`
+                + `${status.provider ? '; ipapi.co was asked instead' : ''}. In the last ${span(status.since)}: ${answers} answered, ${failures} failed.${off}` };
+        }
+        return {
+            tone: failures ? 'warn' : 'good',
+            text: `${source} answered ${lookups(answers)} in the last ${span(status.since)}, most recently ${ago(status.last_answer)}; `
+                + `${failures ? `${failures} failed, most recently ${why}.` : 'none failed.'}${off}`,
+        };
+    }
+
+    // The GeoIP lines' colours, by how it went.
+    /** @this {AmneziaApp} */
+    geoipToneClass(tone) {
+        return {
+            good: 'text-green-800 dark:text-[#86efac]',
+            warn: 'text-amber-800 dark:text-[#fcd34d]',
+            bad: 'text-red-700 dark:text-[#fca5a5]',
+        }[tone] || 'text-gray-700 dark:text-[#bac5d4]';
     }
 
     /** @this {AmneziaApp} */
