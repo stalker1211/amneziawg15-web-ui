@@ -11,7 +11,6 @@ from core.helpers import to_bool
 from core.logging_setup import configure_logging, get_logger
 from core.runtime import create_flask_app, run_web_ui
 from core.settings import Access, Settings, retired_variables
-from flask import send_from_directory
 from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
 from routes.system import register_system_routes, render_page
@@ -131,13 +130,6 @@ def cache_bust():
         except OSError:
             continue
     return str(int(newest or time.time()))
-
-
-# Explicit static file route to ensure they're served
-@app.route("/static/<path:filename>")
-def static_files(filename):
-    """Serve static assets from the configured static directory."""
-    return send_from_directory(STATIC_DIR, filename)
 
 
 if __name__ == "__main__":

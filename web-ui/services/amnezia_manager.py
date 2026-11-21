@@ -817,7 +817,7 @@ class AmneziaManager:
             result = subprocess.run(args, capture_output=True, text=True, check=True, env=env)
             return result.stdout.strip()
         except (subprocess.CalledProcessError, OSError) as e:
-            logger.error(f"Command failed ({args[0] if args else '?'}): {e}")
+            logger.error("Command failed (%s): %s", args[0] if args else "?", e)
             return None
 
     def generate_wireguard_keys(self):
@@ -1559,7 +1559,7 @@ AllowedIPs = {client["client_ip"]}/32
         # hot-reload and leave the new peer absent from the running daemon.
         if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
-        logger.info(f"Client {client_config['name']} added")
+        logger.info("Client %s added", client_config["name"])
         self.activity.change("client.add", server=server, client=client_config)
         config_content = self.generate_wireguard_client_config(
             server,
@@ -1679,7 +1679,7 @@ AllowedIPs = {client["client_ip"]}/32
         # Apply live config if server is running
         if self.get_server_status(server_id) == "running":
             self.apply_live_config(server["interface"])
-        logger.info(f"Client {server['name']}:{client['name']} removed")
+        logger.info("Client %s:%s removed", server["name"], client["name"])
         self.activity.change("client.delete", server=server, client=client)
         return True
 
@@ -1864,17 +1864,17 @@ PersistentKeepalive = 25
                 server["status"] = "running"
                 self.save_config()
 
-                logger.info(f"Server {server['name']} started successfully")
+                logger.info("Server %s started successfully", server["name"])
                 self.activity.change("server.start", server=server)
                 if iptables_success:
-                    logger.info(f"iptables rules configured for {server['interface']}")
+                    logger.info("iptables rules configured for %s", server["interface"])
                 else:
-                    logger.error(f"Warning: iptables setup may have failed for {server['interface']}")
+                    logger.error("Warning: iptables setup may have failed for %s", server["interface"])
                 self.emit_status_after_delay(server_id, "running")
                 self.probe_egress_later(server_id)
                 return True
             else:
-                logger.error(f"Failed to start server {server['name']}")
+                logger.error("Failed to start server %s", server["name"])
         except Exception as e:
             logger.error("Failed to start server %s: %s", server_id, e)
         return False
@@ -1900,14 +1900,14 @@ PersistentKeepalive = 25
                 server["status"] = "stopped"
                 self.save_config()
 
-                logger.info(f"Server {server['name']} stopped successfully")
+                logger.info("Server %s stopped successfully", server["name"])
                 self.activity.change("server.stop", server=server)
                 if iptables_cleaned:
-                    logger.info(f"iptables rules cleaned up for {server['interface']}")
+                    logger.info("iptables rules cleaned up for %s", server["interface"])
                 self.emit_status_after_delay(server_id, "stopped")
                 return True
             else:
-                logger.error(f"Failed to stop server {server['name']}")
+                logger.error("Failed to stop server %s", server["name"])
         except Exception as e:
             logger.error("Failed to stop server %s: %s", server_id, e)
         return False

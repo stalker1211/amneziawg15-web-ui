@@ -9,12 +9,14 @@ class ModalUi {
     static ACTIVITY_KINDS = [['all', 'All'], ['change', 'Changes'], ['session', 'Sessions'], ['health', 'Health'], ['auth', 'Sign-ins']];
 
     // The code box every view uses; it follows the theme like the rest of the page.
+    /** @this {AmneziaApp} */
     codeBoxHtml(text, id) {
         return `<pre id="${id}" class="max-h-[60vh] overflow-auto rounded-lg border border-gray-400 bg-gray-100 text-gray-900 dark:border-gray-900 dark:bg-gray-900 dark:text-gray-100 p-4 text-xs leading-5 font-mono whitespace-pre">${this.escapeHtml(text)}</pre>`;
     }
 
     // Showing the QR hands the config out: the server records it (POST .../issued),
     // which clears the client's Re-import flag.
+    /** @this {AmneziaApp} */
     async showClientQRCode(serverId, clientId) {
         const server = (this.lastServers || []).find((s) => s.id === serverId) || {};
         const client = (server.clients || []).find((c) => c.id === clientId) || {};
@@ -72,6 +74,7 @@ class ModalUi {
         this.markConfigIssued(serverId, clientId);
     }
 
+    /** @this {AmneziaApp} */
     async markConfigIssued(serverId, clientId) {
         try {
             await this.postJson(`/api/servers/${serverId}/clients/${clientId}/issued`, {});
@@ -84,6 +87,7 @@ class ModalUi {
     // Why a client cannot connect: the evidence behind its row's Old config or Maybe
     // blocked pill (its `diagnosis`, DEVELOPMENT.md §10, 2.8 *Contract*), as it stood
     // when the dialog opened.
+    /** @this {AmneziaApp} */
     showClientDiagnosis(serverId, clientId) {
         const server = (this.lastServers || []).find((s) => s.id === serverId) || {};
         const client = (server.clients || []).find((c) => c.id === clientId) || {};
@@ -180,6 +184,7 @@ class ModalUi {
         };
     }
 
+    /** @this {AmneziaApp} */
     async downloadClientConfig(serverId, clientId) {
         try {
             await this.downloadBlob(`/api/servers/${serverId}/clients/${clientId}/config`, `client-${clientId}.conf`);
@@ -191,6 +196,7 @@ class ModalUi {
     }
 
     // The daemon log for one interface, oldest first, reloaded every 10 s while open.
+    /** @this {AmneziaApp} */
     showServerLogs(serverId, iface) {
         const server = (this.lastServers || []).find((s) => s.id === serverId) || {};
         const interfaceName = String(iface || server.interface || '').trim();
@@ -232,6 +238,7 @@ class ModalUi {
     // time axis and its totals. The crosshair's readout lists every client with traffic
     // at that moment; hovering a client draws its share, a click (a tap) pins it. While
     // open, 1 h follows each tick and every range is fetched again each minute.
+    /** @this {AmneziaApp} */
     showServerTraffic(serverId, range = '24h') {
         const server = (this.lastServers || []).find((s) => s.id === serverId);
         if (!server) return;
@@ -279,6 +286,7 @@ class ModalUi {
     // Fetch the view's range; `rebuild` lays the chart and the rows out anew (on open
     // and on a range switch), otherwise the data is replaced in place. An answer for a
     // range no longer shown is dropped.
+    /** @this {AmneziaApp} */
     async loadServerTraffic(view, rebuild = false) {
         if (this.trafficView !== view) return;
         view.seq += 1;
@@ -299,6 +307,7 @@ class ModalUi {
     }
 
     // From the app: a tick (the 1 h view follows it) or a resize (redrawn to its width).
+    /** @this {AmneziaApp} */
     redrawServerTraffic(serverId = null, reason = 'resize') {
         const view = this.trafficView;
         if (!view?.data) return;
@@ -309,8 +318,9 @@ class ModalUi {
         this.drawTrafficPlot(view);
     }
 
+    /** @this {AmneziaApp} */
     renderTrafficRange(view) {
-        document.querySelectorAll('#dialog [data-range]').forEach((button) => {
+        /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#dialog [data-range]')).forEach((button) => {
             const on = button.dataset.range === view.range;
             button.setAttribute('aria-checked', String(on));
             button.className = `h-7 px-3 rounded-md text-xs font-medium ${on
@@ -320,6 +330,7 @@ class ModalUi {
     }
 
     // The clients of the server as it is now, each with its slice of the history.
+    /** @this {AmneziaApp} */
     trafficRows(view) {
         const server = (this.lastServers || []).find((s) => s.id === view.serverId) || {};
         const n = view.data.t.length;
@@ -331,6 +342,7 @@ class ModalUi {
     }
 
     // The chart, the axes and a row per client; drawTrafficPlot fills them.
+    /** @this {AmneziaApp} */
     renderTrafficBlock(view) {
         const block = document.getElementById('trafficBlock');
         if (!block) return;
@@ -383,7 +395,7 @@ class ModalUi {
             view.hover = null;
             this.trafficHover(view);
         });
-        block.querySelectorAll('[data-traffic-client]').forEach((row) => {
+        /** @type {NodeListOf<HTMLElement>} */ (block.querySelectorAll('[data-traffic-client]')).forEach((row) => {
             const id = row.dataset.trafficClient;
             row.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') { view.emph = id; this.drawTrafficPlot(view); } });
             row.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') { view.emph = view.pinned; this.drawTrafficPlot(view); } });
@@ -396,6 +408,7 @@ class ModalUi {
     }
 
     // The summary, each client's totals and dot, the footer; then the chart.
+    /** @this {AmneziaApp} */
     updateTrafficView(view) {
         const { C, rate, sumSeries, hhmm } = window.Charts;
         const bytes = window.ServerUi.bytes;
@@ -431,6 +444,7 @@ class ModalUi {
     }
 
     // The span the chart shows: the last hour up to the newest tick, or the minute grid.
+    /** @this {AmneziaApp} */
     trafficSpan(view) {
         const { t, now, range } = view.data;
         if (range === '1h' || t.length < 2) {
@@ -440,6 +454,7 @@ class ModalUi {
         return [t[0], t[t.length - 1]];
     }
 
+    /** @this {AmneziaApp} */
     drawTrafficPlot(view) {
         const plot = document.getElementById('trafficPlot');
         if (!plot || !view.data) return;
@@ -519,6 +534,7 @@ class ModalUi {
 
     // The crosshair through the chart and the strips, and its readout: the total (or the
     // highlighted client) and every client with traffic at that moment.
+    /** @this {AmneziaApp} */
     trafficHover(view) {
         const cross = document.getElementById('trafficCross');
         if (!cross) return;
@@ -576,6 +592,7 @@ class ModalUi {
     // header for all of it, from a server's ⋯ for that server. While open, each SSE
     // `activity` event is prepended (receiveActivity), and a stream that (re)opens loads
     // it again (loadActivity), since a restarted panel counts seq from 1 again.
+    /** @this {AmneziaApp} */
     showActivity(serverId = null) {
         const view = { serverId, kind: 'all', events: [], since: null, lastSeq: 0, pending: null, error: '', options: '' };
         this.activityView = view;
@@ -613,6 +630,7 @@ class ModalUi {
 
     // The whole ring. Events the stream brings meanwhile wait in `pending` and are kept
     // only above the ring's newest seq, so none is shown twice or lost.
+    /** @this {AmneziaApp} */
     async loadActivity(view = this.activityView) {
         if (!view || this.activityView !== view) return;
         const pending = [];
@@ -637,6 +655,7 @@ class ModalUi {
 
     // From openEvents: one SSE `activity` event. Without the dialog there is nothing to
     // keep; one at or below the last seq shown is a duplicate.
+    /** @this {AmneziaApp} */
     receiveActivity(event) {
         const view = this.activityView;
         if (!view || !Number.isFinite(event?.seq)) return;
@@ -651,6 +670,7 @@ class ModalUi {
         this.renderActivity(view);
     }
 
+    /** @this {AmneziaApp} */
     renderActivity(view) {
         const list = document.getElementById('activityList');
         if (!list || this.activityView !== view) return;
@@ -658,7 +678,7 @@ class ModalUi {
         const ofServer = view.serverId ? view.events.filter((e) => e.server_id === view.serverId) : view.events;
         const shown = view.kind === 'all' ? ofServer : ofServer.filter((e) => e.kind === view.kind);
 
-        document.querySelectorAll('#dialog [data-activity-kind]').forEach((button) => {
+        /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll('#dialog [data-activity-kind]')).forEach((button) => {
             const kind = button.dataset.activityKind;
             const on = kind === view.kind;
             const count = kind === 'all' ? ofServer.length : ofServer.filter((e) => e.kind === kind).length;
@@ -677,7 +697,7 @@ class ModalUi {
         if (view.serverId && !names.has(view.serverId)) names.set(view.serverId, view.serverId);
         const options = `<option value="">All servers</option>${[...names].map(([id, name]) =>
             `<option value="${safe(id)}">${safe(name)}</option>`).join('')}`;
-        const select = document.getElementById('activityServer');
+        const select = this.control('activityServer');
         if (view.options !== options) {
             view.options = options;
             select.innerHTML = options;
@@ -712,6 +732,7 @@ class ModalUi {
         }).join('');
     }
 
+    /** @this {AmneziaApp} */
     activityDay(at) {
         const start = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
         const days = Math.round((start(new Date()) - start(at)) / 86400000);
@@ -720,6 +741,7 @@ class ModalUi {
         return window.ServerUi.stamp(at.getTime() / 1000).split(',')[0];
     }
 
+    /** @this {AmneziaApp} */
     activityRowHtml(e, at) {
         const safe = (v) => this.escapeHtml(v ?? '');
         const [icon, tone, title, detail] = this.activityText(e);
@@ -738,6 +760,7 @@ class ModalUi {
 
     // [icon, badge tone, title, detail] for one event; every value escaped. Traffic is
     // flipped to the device's side as everywhere on the page: ↓ is what the server sent.
+    /** @this {AmneziaApp} */
     activityText(e) {
         const safe = (v) => this.escapeHtml(v ?? '');
         const d = e.detail || {};
@@ -807,6 +830,7 @@ class ModalUi {
     }
 
     // The server's .conf as the panel generated it. It holds the server's private key.
+    /** @this {AmneziaApp} */
     async showRawServerConfig(serverId) {
         let config;
         try {
@@ -832,12 +856,14 @@ class ModalUi {
         box.querySelector('[data-raw="download"]').addEventListener('click', () => this.downloadServerConfig(serverId));
     }
 
-    downloadServerConfig(serverId) {
-        this.downloadBlob(`/api/servers/${serverId}/config/download`, `server-${serverId}.conf`)
-            .catch((error) => {
-                console.error('Error downloading server config:', error);
-                this.showTempMessage('Error downloading server config: ' + error.message, 'error');
-            });
+    /** @this {AmneziaApp} */
+    async downloadServerConfig(serverId) {
+        try {
+            await this.downloadBlob(`/api/servers/${serverId}/config/download`, `server-${serverId}.conf`);
+        } catch (error) {
+            console.error('Error downloading server config:', error);
+            this.showTempMessage('Error downloading server config: ' + error.message, 'error');
+        }
     }
 }
 

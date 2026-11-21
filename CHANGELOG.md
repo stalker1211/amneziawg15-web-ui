@@ -10,6 +10,13 @@
   `region`). When it fails (an error, not JSON, a timeout), ipapi.co answers, and a
   lookup still waits at most 2 s in all. Changing it forgets the cached places.
 
+### Tooling
+- **The page's JavaScript is type-checked:** `run_tests.sh` runs `tsc` (TypeScript
+  7.0.2, pinned) over `static/js` with JSDoc types, no build step; the browser loads
+  the same files. It found a QR code option the library never read.
+- **A dead-code sweep:** the shadowed `/static` route, an unused dialog, and the last
+  `.then()` chains; a client's I1–I5 lines gained the test they lacked.
+
 ## Version 2.8 (2026-10-06)
 
 ### Why a device can't connect (experimental)

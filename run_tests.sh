@@ -12,8 +12,10 @@
 # at a pinned ruff, since the formatter's output changes between releases -- then runs
 # the suite in a uv-managed Python 3.14 env built from web-ui/requirements.txt, so the
 # deps always match the image's pins and there is no .venv step; uv caches both after
-# the first run. Without uv it skips the lint and runs python3 as is, which is how it
-# runs inside the image:
+# the first run. With npx on PATH it also type-checks the page's JavaScript: tsc at a
+# pinned TypeScript over tsconfig.json (JSDoc in the .js files, tests/globals.d.ts),
+# cached by npx after the first run. Without uv it skips the lint and runs python3 as
+# is, and without npx the type check, which is how it runs inside the image:
 #
 #   docker run --rm -v "$PWD":/src -w /src --entrypoint sh \
 #     amneziawg-web-ui:local -c './run_tests.sh'
@@ -33,6 +35,7 @@ if [[ "${1:-}" == "--cov" ]]; then
 fi
 
 RUFF_VERSION=0.16.8
+TYPESCRIPT_VERSION=7.0.2
 
 if command -v uv >/dev/null 2>&1; then
 	uv tool run --quiet "ruff@${RUFF_VERSION}" check --quiet .
@@ -47,6 +50,10 @@ elif [[ "${COVERAGE}" == 1 ]]; then
 	exit 1
 else
 	PYTHON=(python3)
+fi
+
+if command -v npx >/dev/null 2>&1; then
+	npx --yes --quiet -p "typescript@${TYPESCRIPT_VERSION}" tsc -p .
 fi
 
 # One module/test given: run just that. Otherwise discover the whole suite.

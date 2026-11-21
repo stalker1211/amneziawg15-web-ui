@@ -6,6 +6,8 @@ line-length = 128
 extend-exclude = ["*.md"]
 
 [lint]
+# Logging stays lazy (`%s` arguments, CLAUDE.md): no f-string in a logging call.
+extend-select = ["G004"]
 ignore = [
     "E741",   # ambiguous variable name (l, O, I)
     "E401",   # multiple imports on one line

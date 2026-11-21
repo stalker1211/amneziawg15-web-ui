@@ -16,6 +16,7 @@ class ApiClient {
         return headers;
     }
 
+    /** @param {RequestInfo | URL} input @param {RequestInit} [init] */
     async fetch(input, init = {}) {
         const nextInit = { ...(init || {}) };
         nextInit.headers = this.buildHeaders(nextInit.headers, nextInit.method);

@@ -205,6 +205,19 @@ class ConfigRenderingTests(unittest.TestCase):
         self.assertIn(line, server_text)
         self.assertIn(line, client_text)
 
+    def test_signature_packets_go_to_the_client_only(self):
+        """I1-I5 (2.0+): after H4, in order, an empty one left out; the server never
+        carries them. No golden file has any (found by 2.9's dead-code sweep)."""
+        manager, server, client = self._server_with_client(
+            "AWG 2.0", "10.27.0.0/24", {"I1": "<b 0xc0ffee><r 16>", "I3": "<r 32>"}
+        )
+        client_text = manager.generate_wireguard_client_config(server, client)
+        lines = client_text.splitlines()
+        self.assertEqual(lines[lines.index("H4 = 4000") + 1 :][:2], ["I1 = <b 0xc0ffee><r 16>", "I3 = <r 32>"])
+        self.assertNotIn("I2 =", client_text)
+        with open(server["config_path"], encoding="utf-8") as f:
+            self.assertNotIn("I1 =", f.read())
+
     def test_suspended_client_peer_block_removed(self):
         manager, server, client = self._server_with_client("AWG 1.5", "10.26.0.0/24")
         manager.toggle_client_suspend(server["id"], client["id"])

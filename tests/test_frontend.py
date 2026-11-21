@@ -114,7 +114,7 @@ class HiddenAttributeTests(unittest.TestCase):
 class NativeDialogTests(unittest.TestCase):
     def test_no_alert_confirm_or_prompt(self):
         # They block the page and cannot follow the theme; ui.js has toasts, an in-app
-        # confirm, askText and inline rename instead.
+        # confirm and inline rename instead.
         call = re.compile(r"(?<![.\w])(?<!function )(?:window\.)?(alert|confirm|prompt)\(")
         found = []
         for path in sorted((WEB_UI / "static" / "js").glob("*.js")):

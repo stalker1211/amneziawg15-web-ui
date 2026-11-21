@@ -5,7 +5,7 @@
 // Stateless helpers on window.Ui; the page provides the roots they draw into
 // (#toasts, #dialogRoot, #drawerRoot, #menu in index.html). Every value they
 // interpolate is escaped here; `body`/`sub` arguments are trusted HTML the caller built.
-(() => {
+const Ui = (() => {
     const $ = (sel, root = document) => root.querySelector(sel);
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -131,33 +131,6 @@
         return new Promise((resolve) => { dialogResolve = resolve; });
     }
 
-    // Ask for one line of text. Resolves the trimmed text, or null when cancelled.
-    function askText({ title, body = '', label, value = '', confirmLabel = 'OK', type = 'text' }) {
-        const box = openDialog(`
-            <form class="flex flex-col" novalidate>
-                ${dialogHeader(title)}
-                <div class="px-5 pb-5 flex flex-col gap-3">
-                    ${body ? `<p class="text-sm text-gray-800 dark:text-[#d7dee9]">${body}</p>` : ''}
-                    <div>
-                        <label class="label" for="askTextInput">${esc(label)}</label>
-                        <input id="askTextInput" type="${type}" class="field font-mono" value="${esc(value)}" autocomplete="off" data-autofocus>
-                    </div>
-                </div>
-                <div class="px-5 py-3 flex flex-wrap justify-end gap-2 border-t border-gray-300 dark:border-[#334155]">
-                    <button type="button" class="btn btn-secondary" data-close="dialog">Cancel</button>
-                    <button type="submit" class="btn btn-primary">${esc(confirmLabel)}</button>
-                </div>
-            </form>`, { size: 'max-w-md' });
-        const input = box.querySelector('input');
-        let answer = null;
-        box.querySelector('form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            answer = input.value.trim() || null;
-            closeDialog(true);
-        });
-        return new Promise((resolve) => { dialogResolve = (ok) => resolve(ok ? answer : null); });
-    }
-
     // --- drawer: the forms (new server, settings, add/edit client) -----------------
     let drawerReturn = null;
     let drawerOnClose = null;
@@ -279,12 +252,13 @@
 
     // --- page-wide wiring ------------------------------------------------------------
     document.addEventListener('click', (e) => {
-        const closer = e.target.closest('[data-close]');
+        const target = /** @type {Element} */ (e.target);
+        const closer = /** @type {HTMLElement | null} */ (target.closest('[data-close]'));
         if (closer) {
             if (closer.dataset.close === 'drawer') closeDrawer(); else closeDialog(false);
             return;
         }
-        if (!e.target.closest('#menu') && !e.target.closest('[aria-haspopup="menu"]')) closeMenu();
+        if (!target.closest('#menu') && !target.closest('[aria-haspopup="menu"]')) closeMenu();
     });
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
@@ -295,10 +269,12 @@
     window.addEventListener('resize', closeMenu);
     window.addEventListener('scroll', closeMenu, true);
 
-    window.Ui = {
+    return {
         esc, icon, toast,
-        openDialog, closeDialog, dialogHeader, confirm, askText,
+        openDialog, closeDialog, dialogHeader, confirm,
         openDrawer, closeDrawer, isDrawerOpen,
         openMenu, closeMenu, startRename,
     };
 })();
+
+window.Ui = Ui;

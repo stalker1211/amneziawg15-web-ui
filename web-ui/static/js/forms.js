@@ -12,6 +12,7 @@
 // (the prefix toggleProtocolFields works with), s-* settings, c-* client.
 class FormUi {
     // --- markup helpers -----------------------------------------------------------
+    /** @this {AmneziaApp} */
     formField(id, label, value, { type = 'text', hint = '', cls = '', mono = false, placeholder = '', attrs = '' } = {}) {
         const safe = (v) => this.escapeHtml(v ?? '');
         return `
@@ -22,6 +23,7 @@ class FormUi {
             </div>`;
     }
 
+    /** @this {AmneziaApp} */
     formSwitch(id, title, description, checked, disabled = false) {
         return `
             <label class="flex items-start justify-between gap-4 py-1.5 ${disabled ? 'opacity-60' : 'cursor-pointer'}" for="${id}">
@@ -33,6 +35,7 @@ class FormUi {
             </label>`;
     }
 
+    /** @this {AmneziaApp} */
     formSelect(id, label, options, selected, { hint = '', disabled = false } = {}) {
         const safe = (v) => this.escapeHtml(v ?? '');
         return `
@@ -44,6 +47,7 @@ class FormUi {
             </div>`;
     }
 
+    /** @this {AmneziaApp} */
     formSection(title, inner, extra = '') {
         return `
             <section class="flex flex-col gap-3">
@@ -52,10 +56,12 @@ class FormUi {
             </section>`;
     }
 
+    /** @this {AmneziaApp} */
     formCallout(html) {
         return `<p class="rounded-lg border px-3 py-2 text-xs callout-amber">${html}</p>`;
     }
 
+    /** @this {AmneziaApp} */
     drawerFooter(primaryLabel, left = '') {
         return `
             ${left}<span class="flex-1"></span>
@@ -66,6 +72,7 @@ class FormUi {
     }
 
     // Collapsed help under the protocol select; its lines follow the protocol.
+    /** @this {AmneziaApp} */
     getTransportDescriptionHtml(protocol) {
         const P = window.Protocols;
         const lines = [
@@ -89,6 +96,7 @@ class FormUi {
             </details>`;
     }
 
+    /** @this {AmneziaApp} */
     transportFieldsHtml(protocol, t) {
         const num = (k) => this.formField(`t-${k}`, k, t[k] ?? '', { type: 'number', mono: true, attrs: 'min="0" inputmode="numeric"' });
         return `
@@ -116,10 +124,11 @@ class FormUi {
     }
 
     // Same shape as the transport-params route and /api/validate expect.
+    /** @this {AmneziaApp} */
     collectTransportForm() {
-        const protocol = document.getElementById('t-protocol')?.value || window.Protocols.DEFAULT;
+        const protocol = this.control('t-protocol')?.value || window.Protocols.DEFAULT;
         const P = window.Protocols;
-        const value = (k) => (document.getElementById(`t-${k}`)?.value || '').trim();
+        const value = (k) => (this.control(`t-${k}`)?.value || '').trim();
         const number = (k) => {
             const raw = value(k);
             if (!raw) return null;
@@ -133,11 +142,12 @@ class FormUi {
             S4: P.supportsS34(protocol) ? number('S4') : null,
             H1: value('H1'), H2: value('H2'), H3: value('H3'), H4: value('H4'),
             HeaderProtectionKey: P.supportsAwg3(protocol) ? value('HeaderProtectionKey') : '',
-            RandomTrailers: P.supportsAwg31(protocol) ? !!document.getElementById('t-RandomTrailers')?.checked : false,
-            DisableCookies: P.supportsAwg31(protocol) ? !!document.getElementById('t-DisableCookies')?.checked : false,
+            RandomTrailers: P.supportsAwg31(protocol) ? !!this.control('t-RandomTrailers')?.checked : false,
+            DisableCookies: P.supportsAwg31(protocol) ? !!this.control('t-DisableCookies')?.checked : false,
         };
     }
 
+    /** @this {AmneziaApp} */
     clientFieldsHtml(server, params) {
         const P = window.Protocols;
         const protocol = server.protocol || P.DEFAULT;
@@ -186,6 +196,7 @@ class FormUi {
     // Generate for one group of client-side fields: the junk row, or the AWG 3.x timers
     // and padding. A group is drawn together (Jmin <= Jmax; the timers keep each other's
     // rules), groups apart, so redrawing one leaves the others as they are.
+    /** @this {AmneziaApp} */
     clientGroupButton(group) {
         return `<button type="button" class="btn btn-secondary btn-sm flex-none" data-action="generate-client-group" data-group="${group}">Generate</button>`;
     }
@@ -193,6 +204,7 @@ class FormUi {
     // Fills the group's fields from the server's generator (POST /api/generate, the
     // client_defaults it draws for the server's protocol). Nothing is saved; the drawer
     // checks them like any edit and Save keeps them.
+    /** @this {AmneziaApp} */
     async generateClientGroup(group) {
         const ctx = this.drawerCtx;
         const server = (this.lastServers || []).find((s) => s.id === ctx?.serverId);
@@ -202,7 +214,7 @@ class FormUi {
             const data = await this.fetchGenerated(server.protocol, server.mtu);
             if (ctx !== this.drawerCtx) return;
             keys.forEach((k) => {
-                const el = document.getElementById(`c-${k}`);
+                const el = this.control(`c-${k}`);
                 if (el && data.client_defaults?.[k] !== undefined) el.value = data.client_defaults[k];
             });
             this.scheduleDrawerCheck();
@@ -213,6 +225,7 @@ class FormUi {
 
     // Generate for I1-I5: a profile (page_config's signatureProfiles), a host for the
     // ones that ask for it, and the server's answer (POST /api/generate).
+    /** @this {AmneziaApp} */
     signatureGeneratorHtml() {
         const profiles = window.AppConfig.signatureProfiles || [];
         const safe = (v) => this.escapeHtml(v ?? '');
@@ -228,6 +241,7 @@ class FormUi {
     }
 
     // The profile picked: show the host field if it asks for one.
+    /** @this {AmneziaApp} */
     onSignatureProfileChange(profileId) {
         const profile = (window.AppConfig.signatureProfiles || []).find((p) => p.id === profileId);
         const box = document.getElementById('c-iHostBox');
@@ -238,11 +252,12 @@ class FormUi {
 
     // Generate: I1-I5 from the server, shaped like the profile, into the fields. Nothing
     // is saved; the drawer checks them like any edit and Save keeps them.
+    /** @this {AmneziaApp} */
     async generateSignaturePackets() {
         const ctx = this.drawerCtx;
-        const profile = document.getElementById('c-iProfile')?.value;
+        const profile = this.control('c-iProfile')?.value;
         if (!ctx?.serverId || !profile) return;
-        const host = document.getElementById('c-iHost');
+        const host = this.control('c-iHost');
         try {
             const data = await this.postJson('/api/generate', {
                 server_id: ctx.serverId,
@@ -251,7 +266,7 @@ class FormUi {
             });
             if (ctx !== this.drawerCtx) return;
             Object.entries(data.signature_packets || {}).forEach(([k, v]) => {
-                const el = document.getElementById(`c-${k}`);
+                const el = this.control(`c-${k}`);
                 if (!el) return;
                 el.value = v;
                 this.autosizeTextarea(el, 200);
@@ -269,6 +284,7 @@ class FormUi {
     }
 
     // What the device routes through the tunnel: split tunnelling per client.
+    /** @this {AmneziaApp} */
     allowedIpsFieldHtml(value) {
         return this.formField('c-allowed_ips', 'Allowed IPs', value, {
             mono: true,
@@ -279,16 +295,18 @@ class FormUi {
         });
     }
 
+    /** @this {AmneziaApp} */
     allowedIps() {
-        return (document.getElementById('c-allowed_ips')?.value || '').trim();
+        return (this.control('c-allowed_ips')?.value || '').trim();
     }
 
     // Jc/Jmin/Jmax as numbers when they are numbers (the server explains anything else).
+    /** @this {AmneziaApp} */
     collectClientForm() {
-        const value = (k) => (document.getElementById(`c-${k}`)?.value || '').trim();
+        const value = (k) => (this.control(`c-${k}`)?.value || '').trim();
         const number = (k) => (/^-?\d+$/.test(value(k)) ? Number(value(k)) : value(k));
         const params = { Jc: number('Jc'), Jmin: number('Jmin'), Jmax: number('Jmax') };
-        AmneziaApp.I_PARAM_KEYS.forEach((k) => { params[k] = document.getElementById(`c-${k}`)?.value || ''; });
+        AmneziaApp.I_PARAM_KEYS.forEach((k) => { params[k] = this.control(`c-${k}`)?.value || ''; });
         AmneziaApp.AWG3_CLIENT_PARAM_KEYS.forEach((k) => {
             if (document.getElementById(`c-${k}`)) params[k] = value(k);
         });
@@ -298,6 +316,7 @@ class FormUi {
     // --- checking as you type -----------------------------------------------------
     // ctx: { collect(), validateBody(), submit(), and optionally snapshot (null for an
     //        edit form), saveLabel, localErrors(), onResult(result), mount(), serverId }
+    /** @this {AmneziaApp} */
     openFormDrawer({ title, sub, body, primaryLabel, left = '', ctx }) {
         this.drawerCtx = ctx;
         this.drawerCheckSeq = 0;
@@ -315,6 +334,7 @@ class FormUi {
         this.runDrawerCheck();
     }
 
+    /** @this {AmneziaApp} */
     setupDrawerForms() {
         const body = document.getElementById('drawerBody');
         if (!body) return;
@@ -337,6 +357,7 @@ class FormUi {
         body.addEventListener('change', onEdit);
     }
 
+    /** @this {AmneziaApp} */
     scheduleDrawerCheck() {
         const box = document.getElementById('checks');
         if (box) box.innerHTML = '<p class="text-sm text-gray-600 dark:text-[#98a6ba]">Checking…</p>';
@@ -344,6 +365,7 @@ class FormUi {
         this.drawerCheckTimer = setTimeout(() => this.runDrawerCheck(), 280);
     }
 
+    /** @this {AmneziaApp} */
     isDrawerDirty() {
         const ctx = this.drawerCtx;
         return !ctx || !ctx.snapshot || JSON.stringify(ctx.collect()) !== ctx.snapshot;
@@ -351,6 +373,7 @@ class FormUi {
 
     // Sends the form to /api/validate and shows the answer. Resolves the result, or
     // null when the drawer closed or a newer check overtook this one.
+    /** @this {AmneziaApp} */
     async runDrawerCheck() {
         const ctx = this.drawerCtx;
         if (!ctx) return null;
@@ -373,7 +396,7 @@ class FormUi {
             status.textContent = result.errors.length === 1 ? '1 thing to fix' : `${result.errors.length} things to fix`;
         }
         ctx.onResult?.(result);
-        const primary = document.getElementById('drawerPrimary');
+        const primary = this.control('drawerPrimary');
         const dirty = this.isDrawerDirty();
         if (primary) {
             primary.disabled = result.errors.length > 0 || !dirty;
@@ -382,6 +405,7 @@ class FormUi {
         return result;
     }
 
+    /** @this {AmneziaApp} */
     renderChecks({ errors, warnings }) {
         const list = (items) => `<ul class="mt-1 list-disc pl-5 flex flex-col gap-0.5">${items.map((x) => `<li>${this.escapeHtml(x)}</li>`).join('')}</ul>`;
         let html = '';
@@ -399,9 +423,10 @@ class FormUi {
         return `${html}<p class="text-xs text-gray-600 dark:text-[#98a6ba]">Checked by the server as you type.</p>`;
     }
 
+    /** @this {AmneziaApp} */
     async submitDrawer() {
         const ctx = this.drawerCtx;
-        const primary = document.getElementById('drawerPrimary');
+        const primary = this.control('drawerPrimary');
         if (!ctx || !primary || primary.disabled) return;
         primary.disabled = true;
         clearTimeout(this.drawerCheckTimer);
@@ -420,6 +445,7 @@ class FormUi {
     }
 
     // --- new server -----------------------------------------------------------------
+    /** @this {AmneziaApp} */
     async openCreateServerModal() {
         const servers = this.lastServers || [];
         const builtIn = window.AppConfig.defaults;
@@ -445,12 +471,12 @@ class FormUi {
         const generated = await this.fetchGenerated(protocol, mtu).catch(() => null);
         const transport = generated?.transport_params || {};
         const basics = () => ({
-            name: (document.getElementById('f-name')?.value || '').trim(),
+            name: (this.control('f-name')?.value || '').trim(),
             port: this.numberOrText('f-port'),
-            subnet: (document.getElementById('f-subnet')?.value || '').trim(),
+            subnet: (this.control('f-subnet')?.value || '').trim(),
             mtu: this.numberOrText('f-mtu'),
-            dns: (document.getElementById('f-dns')?.value || '').trim(),
-            endpoint_host: (document.getElementById('f-endpoint_host')?.value || '').trim(),
+            dns: (this.control('f-dns')?.value || '').trim(),
+            endpoint_host: (this.control('f-endpoint_host')?.value || '').trim(),
         });
         const transportParams = () => {
             const { protocol: _protocol, ...rest } = this.collectTransportForm();
@@ -496,10 +522,10 @@ class FormUi {
                         ...basics(),
                         protocol: this.collectTransportForm().protocol,
                         transport_params: transportParams(),
-                        auto_start: !!document.getElementById('f-autostart')?.checked,
-                        enable_nat: !!document.getElementById('f-nat')?.checked,
-                        block_lan_cidrs: !!document.getElementById('f-lan')?.checked,
-                        connection_analyzer: !!document.getElementById('f-analyzer')?.checked,
+                        auto_start: !!this.control('f-autostart')?.checked,
+                        enable_nat: !!this.control('f-nat')?.checked,
+                        block_lan_cidrs: !!this.control('f-lan')?.checked,
+                        connection_analyzer: !!this.control('f-analyzer')?.checked,
                     };
                     const server = await this.postJson('/api/servers', payload);
                     window.Ui.closeDrawer();
@@ -510,15 +536,23 @@ class FormUi {
         });
     }
 
+    /** @this {AmneziaApp} */
     numberOrText(id) {
-        const raw = (document.getElementById(id)?.value || '').trim();
+        const raw = (this.control(id)?.value || '').trim();
         return /^\d+$/.test(raw) ? Number(raw) : raw;
     }
 
     // Random parameters from the server (POST /api/generate), the one generator:
     // every value it draws passes the validators without a warning. With random
     // trailers on, S1-S4 come back equal (amneziawg-go#186).
-    async fetchGenerated(protocol, mtu, { randomTrailers = false } = {}) {
+    /**
+     * @this {AmneziaApp}
+     * @param {string} protocol
+     * @param {number | string} [mtu] left out: the server's default
+     * @param {{randomTrailers?: boolean}} [options]
+     */
+    async fetchGenerated(protocol, mtu, options = {}) {
+        const { randomTrailers = false } = options;
         const n = Number(mtu);
         return this.postJson('/api/generate', {
             protocol,
@@ -527,12 +561,13 @@ class FormUi {
         });
     }
 
+    /** @this {AmneziaApp} */
     fillTransportFields(params, { keepKey = false } = {}) {
         ['S1', 'S2', 'S3', 'S4', 'H1', 'H2', 'H3', 'H4'].forEach((k) => {
-            const el = document.getElementById(`t-${k}`);
+            const el = this.control(`t-${k}`);
             if (el && !el.disabled) el.value = params[k] ?? '';
         });
-        const key = document.getElementById('t-HeaderProtectionKey');
+        const key = this.control('t-HeaderProtectionKey');
         if (key && !key.disabled && params.HeaderProtectionKey && !(keepKey && key.value.trim())) {
             key.value = params.HeaderProtectionKey;
         }
@@ -540,12 +575,13 @@ class FormUi {
 
     // Randomize: a fresh set for the selected protocol. A header protection key that
     // is already there stays (Generate replaces it).
+    /** @this {AmneziaApp} */
     async generateRandomParams() {
         const ctx = this.drawerCtx;
-        const protocol = document.getElementById('t-protocol')?.value || window.Protocols.DEFAULT;
-        const mtu = document.getElementById('f-mtu')?.value || ctx?.mtu;
+        const protocol = this.control('t-protocol')?.value || window.Protocols.DEFAULT;
+        const mtu = this.control('f-mtu')?.value || ctx?.mtu;
         const randomTrailers = window.Protocols.supportsAwg31(protocol)
-            && !!document.getElementById('t-RandomTrailers')?.checked;
+            && !!this.control('t-RandomTrailers')?.checked;
         try {
             const data = await this.fetchGenerated(protocol, mtu, { randomTrailers });
             if (ctx !== this.drawerCtx) return;
@@ -558,9 +594,10 @@ class FormUi {
     }
 
     // Generate: a new 32-byte header protection key, from the server like the rest.
+    /** @this {AmneziaApp} */
     async fillHeaderProtectionKey(elementId) {
-        const element = document.getElementById(elementId);
-        const protocol = document.getElementById('t-protocol')?.value;
+        const element = this.control(elementId);
+        const protocol = this.control('t-protocol')?.value;
         if (!element || !window.Protocols.supportsAwg3(protocol)) return;
         try {
             const data = await this.fetchGenerated(protocol);
@@ -572,6 +609,7 @@ class FormUi {
     }
 
     // --- server settings --------------------------------------------------------------
+    /** @this {AmneziaApp} */
     openServerSettings(info) {
         const server = (this.lastServers || []).find((s) => s.id === info.id) || {};
         const safe = (v) => this.escapeHtml(v ?? '');
@@ -580,11 +618,11 @@ class FormUi {
         const defaultImpact = 'Changing anything here rewrites every client config, and a running server restarts. '
             + 'Each client then has to re-import its QR code or .conf.';
         const row = (k, v, mono = true) => `<dt class="text-gray-700 dark:text-[#bac5d4]">${k}</dt><dd class="${mono ? 'font-mono' : ''} text-gray-900 dark:text-[#e5e7eb] min-w-0 truncate">${v}</dd>`;
-        const endpointHost = () => (document.getElementById('s-endpoint_host')?.value || '').trim();
+        const endpointHost = () => (this.control('s-endpoint_host')?.value || '').trim();
         const collect = () => ({
-            nat: !!document.getElementById('s-nat')?.checked,
-            lan: !!document.getElementById('s-lan')?.checked,
-            analyzer: !!document.getElementById('s-analyzer')?.checked,
+            nat: !!this.control('s-nat')?.checked,
+            lan: !!this.control('s-lan')?.checked,
+            analyzer: !!this.control('s-analyzer')?.checked,
             host: endpointHost(),
             ...this.collectTransportForm(),
         });
@@ -693,6 +731,7 @@ class FormUi {
     }
 
     // --- add and edit client ------------------------------------------------------------
+    /** @this {AmneziaApp} */
     addClient(serverId) {
         const server = (this.lastServers || []).find((s) => String(s.id) === String(serverId));
         if (!server) {
@@ -702,7 +741,7 @@ class FormUi {
         const safe = (v) => this.escapeHtml(v ?? '');
         const clients = server.clients || [];
         const defaults = server.client_defaults || {};
-        const name = () => (document.getElementById('c-name')?.value || '').trim();
+        const name = () => (this.control('c-name')?.value || '').trim();
 
         this.openFormDrawer({
             title: 'Add client',
@@ -730,7 +769,7 @@ class FormUi {
                         name: name(),
                         allowed_ips: this.allowedIps(),
                         client_params: this.collectClientForm(),
-                        copy_from_client_id: document.getElementById('c-copyFrom')?.value || null,
+                        copy_from_client_id: this.control('c-copyFrom')?.value || null,
                     });
                     window.Ui.closeDrawer();
                     this.showTempMessage(`${data.client?.name || name()} added with ${data.client?.client_ip || 'a new address'}`, 'success');
@@ -742,19 +781,21 @@ class FormUi {
     }
 
     // "Start from" another client: copy its parameters into the fields.
+    /** @this {AmneziaApp} */
     fillClientFromCopy(clientId) {
         const serverId = this.drawerCtx?.serverId;
         const server = (this.lastServers || []).find((s) => s.id === serverId);
         const source = (server?.clients || []).find((c) => c.id === clientId);
         const params = source ? source.client_params || {} : server?.client_defaults || {};
         ['Jc', 'Jmin', 'Jmax', ...AmneziaApp.I_PARAM_KEYS, ...AmneziaApp.AWG3_CLIENT_PARAM_KEYS].forEach((k) => {
-            const el = document.getElementById(`c-${k}`);
+            const el = this.control(`c-${k}`);
             if (!el) return;
             el.value = params[k] ?? '';
             if (el.tagName === 'TEXTAREA') this.autosizeTextarea(el, 200);
         });
     }
 
+    /** @this {AmneziaApp} */
     showClientParamsModal(serverId, clientId) {
         const server = (this.lastServers || []).find((s) => String(s.id) === String(serverId));
         const client = (server?.clients || []).find((c) => c.id === clientId);
@@ -804,6 +845,7 @@ class FormUi {
     // --- panel settings (⚙ in the header) -------------------------------------------------
     // GET /api/settings, checked through /api/validate, saved by POST /api/settings. A
     // field whose environment variable is set is read-only ("set by LOG_LEVEL").
+    /** @this {AmneziaApp} */
     async openSettings() {
         let data;
         try {
@@ -828,15 +870,15 @@ class FormUi {
         const collectSettings = () => {
             const out = {};
             Object.keys(values).forEach((k) => {
-                const el = document.getElementById(`s-${k}`);
+                const el = this.control(`s-${k}`);
                 if (!el || el.disabled) return;
                 out[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? this.numberOrText(el.id) : el.value.trim());
             });
             return out;
         };
         const collectAccess = () => {
-            const user = (document.getElementById('s-user')?.value || '').trim();
-            const password = document.getElementById('s-password')?.value || '';
+            const user = (this.control('s-user')?.value || '').trim();
+            const password = this.control('s-password')?.value || '';
             return {
                 ...(!userPinned && user !== access.user ? { user } : {}),
                 ...(!passwordPinned && password ? { password } : {}),
@@ -850,18 +892,18 @@ class FormUi {
             localErrors: () => {
                 const errors = [];
                 const changing = Object.keys(collectAccess()).length > 0;
-                const password = document.getElementById('s-password')?.value || '';
-                if (password && password !== (document.getElementById('s-password2')?.value || '')) {
+                const password = this.control('s-password')?.value || '';
+                if (password && password !== (this.control('s-password2')?.value || '')) {
                     errors.push('The new password and its repeat differ.');
                 }
-                if (changing && !(document.getElementById('s-current')?.value)) {
+                if (changing && !(this.control('s-current')?.value)) {
                     errors.push('Enter the current password to change the user name or password.');
                 }
                 return errors;
             },
             submit: async () => {
                 const credential = collectAccess();
-                const current = document.getElementById('s-current')?.value || '';
+                const current = this.control('s-current')?.value || '';
                 const saved = await this.postJson('/api/settings', {
                     settings: collectSettings(),
                     ...(Object.keys(credential).length ? { access: { ...credential, current_password: current } } : {}),
@@ -941,18 +983,21 @@ class FormUi {
     }
 
     // "Set by X": a field an environment variable pins, in a colour that stands out.
+    /** @this {AmneziaApp} */
     pinnedHint(variable) {
         return `<span class="hint-pinned">${window.Ui.icon('lock', 'inline w-3 h-3 mr-1 -mt-0.5')}Set by <span class="font-mono">${this.escapeHtml(variable)}</span>; `
             + 'remove the variable (and restart) to change it here.</span>';
     }
 
     // After a save: the banner follows the credential.
+    /** @this {AmneziaApp} */
     applySettings(saved) {
         const banner = document.getElementById('passwordBanner');
         if (banner) banner.hidden = !saved.access.password_is_default;
     }
 
     // amneziawg-go reads its log level once, when it starts.
+    /** @this {AmneziaApp} */
     async offerDaemonRestart(count) {
         const ok = await window.Ui.confirm({
             title: `Restart ${count} running server${count === 1 ? '' : 's'} now?`,
@@ -974,6 +1019,7 @@ class FormUi {
     }
 
     // About → Firewall rules: each server's tagged iptables rules as they are now.
+    /** @this {AmneziaApp} */
     async checkIptables() {
         const box = document.getElementById('s-iptables');
         if (!box) return;
@@ -1005,14 +1051,14 @@ class FormUi {
         box.innerHTML = blocks.join('');
     }
 
-    showServerConfig(serverId) {
-        this.apiFetch(`/api/servers/${serverId}/info`)
-            .then((response) => response.json())
-            .then((info) => this.openServerSettings(info))
-            .catch((error) => {
-                console.error('Error fetching server info:', error);
-                this.showTempMessage('Error loading server configuration: ' + error.message, 'error');
-            });
+    /** @this {AmneziaApp} */
+    async showServerConfig(serverId) {
+        try {
+            this.openServerSettings(await this.getJson(`/api/servers/${serverId}/info`));
+        } catch (error) {
+            console.error('Error fetching server info:', error);
+            this.showTempMessage('Error loading server configuration: ' + error.message, 'error');
+        }
     }
 }
 

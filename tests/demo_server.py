@@ -36,7 +36,6 @@ from core.guards import install_guards
 from core.helpers import to_bool
 from core.runtime import create_flask_app
 from core.settings import Access, Settings
-from flask import send_from_directory
 from routes.servers import register_server_routes
 from routes.settings import register_settings_routes
 from routes.system import register_system_routes, render_page
@@ -537,10 +536,6 @@ def main():
     @app.route("/")
     def index():
         return render_page(manager, access, cache_bust=int(time.time()), build_label=args.label)
-
-    @app.route("/static/<path:filename>")
-    def static_files(filename):
-        return send_from_directory(str(web_ui / "static"), filename)
 
     print(f"Demo panel on http://{args.host}:{args.port}/ (state in {tmp})", flush=True)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)  # no line per request

@@ -5,7 +5,7 @@
 // the device's side (↓ download = what the server sent, ↑ upload = what it received;
 // fromApi translates the API's daemon terms), times are epoch seconds, and null is
 // "no data", drawn as a gap, never as a zero. DEVELOPMENT.md §3 (the traffic history).
-(() => {
+const Charts = (() => {
     // Every colour utility carries its dark: partner (tests/test_frontend.py). Download
     // and upload passed the dataviz validator on the panel's cards (worst colour-blind
     // ΔE 24.7).
@@ -140,7 +140,13 @@
     }
 
     // `xs` places the points (default: evenly across `w`). `emph` ({down, up}) draws one
-    // client's share in colour over the total in grey.
+    // client's share in colour over the total in grey. `dTop`/`uTop` fix the scale (default:
+    // each half's own peak).
+    /**
+     * @param {{w: number, h: number, down: Series, up: Series, xs?: number[] | null,
+     *     emph?: {down: Series, up: Series} | null, dTop?: number, uTop?: number,
+     *     grid?: number[], width?: number, split?: number}} options
+     */
     function mirrored({ w, h, down, up, xs = null, emph = null, dTop, uTop, grid = [], width = 1.5, split = SPLIT }) {
         const n = down.length;
         const at = xs || Array.from({ length: n }, (_, i) => (n === 1 ? w / 2 : (i / (n - 1)) * w));
@@ -197,8 +203,10 @@
         return `${s}</svg>`;
     }
 
-    window.Charts = {
+    return {
         C, isNum, maxOf, rate, rateNum, tickNum, niceCeil, hhmm,
         fromApi, sumSeries, buckets, withGaps, geometry, mirrored, hatchSwatch, presenceSvg,
     };
 })();
+
+window.Charts = Charts;

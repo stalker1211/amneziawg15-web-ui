@@ -71,6 +71,14 @@ class AmneziaApp {
         return element;
     }
 
+    // A form control by id, or null. Typed for tsc as an input, so .value, .checked and
+    // .disabled check (a plain HTMLElement has none of them); selects, textareas and
+    // buttons come through here too.
+    /** @param {string} id @returns {HTMLInputElement | null} */
+    control(id) {
+        return /** @type {HTMLInputElement | null} */ (document.getElementById(id));
+    }
+
     // Escape user-controlled strings for safe HTML rendering
     escapeHtml(value) {
         return String(value)
@@ -169,7 +177,6 @@ class AmneziaApp {
                     colorDark: "#000000",
                     colorLight: "#ffffff",
                     correctLevel: level,
-                    margin: 1
                 });
                 lastError = null;
                 break;
@@ -197,7 +204,7 @@ class AmneziaApp {
     // no inline handlers, so nginx can send script-src 'self'. Buttons act on click,
     // switches and selects on change.
     setupActions() {
-        const ids = (el) => [el.dataset.server, el.dataset.client];
+        const ids = (el) => /** @type {[string, string]} */ ([el.dataset.server, el.dataset.client]);
         const actions = {
             'toggle-server': (el) => this.toggleServer(el.dataset.server, el.checked),
             'add-client': (el) => this.addClient(el.dataset.server),
@@ -305,27 +312,27 @@ class AmneziaApp {
         const allowAwg31 = window.Protocols.supportsAwg31(protocol);
 
         ['S3', 'S4'].forEach((key) => {
-            const element = document.getElementById(`${prefix}${key}`);
+            const element = this.control(`${prefix}${key}`);
             if (!element) return;
             element.disabled = !allowS34;
             if (!allowS34) {
                 element.value = '';
             }
-            const container = element.closest('label, div');
+            const container = /** @type {HTMLElement | null} */ (element.closest('label, div'));
             if (container) {
                 container.style.display = allowS34 ? '' : 'none';
             }
         });
 
         ['H1', 'H2', 'H3', 'H4'].forEach((key) => {
-            const element = document.getElementById(`${prefix}${key}`);
+            const element = this.control(`${prefix}${key}`);
             if (!element) return;
             element.placeholder = allowRanges ? '123 or 123-456' : '123';
         });
 
         // AWG 3.x header protection. Clearing the key on downgrade keeps the
         // submitted payload consistent with the protocol the user picked.
-        const keyElement = document.getElementById(`${prefix}HeaderProtectionKey`);
+        const keyElement = this.control(`${prefix}HeaderProtectionKey`);
         if (keyElement) {
             keyElement.disabled = !allowAwg3;
             if (!allowAwg3) keyElement.value = '';
@@ -335,7 +342,7 @@ class AmneziaApp {
         }
 
         ['RandomTrailers', 'DisableCookies'].forEach((key) => {
-            const element = document.getElementById(`${prefix}${key}`);
+            const element = this.control(`${prefix}${key}`);
             if (!element) return;
             element.disabled = !allowAwg31;
             if (!allowAwg31) element.checked = false;
@@ -489,7 +496,7 @@ class AmneziaApp {
     // A new public IP is written into every client config's Endpoint, so say how
     // many devices now hold a config pointing at the old address.
     async refreshPublicIp() {
-        const button = this.getElement('refreshIpBtn');
+        const button = this.control('refreshIpBtn');
         const before = this.currentPublicIp;
         if (button) button.disabled = true;
         try {
@@ -562,43 +569,32 @@ class AmneziaApp {
         this.resyncAppState();
     }
 
-    loadPublicIp() {
-        this.apiFetch('/api/system/status')
-            .then(response => response.json())
-            .then(data => {
-                if (data.public_ip) {
-                    this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
-                } else {
-                    const el = this.getElement('publicIp');
-                    if (el) el.textContent = 'Not detected';
-                }
-            })
-            .catch(error => {
-                console.error('Error loading public IP:', error);
-            });
+    async loadPublicIp() {
+        try {
+            const data = await (await this.apiFetch('/api/system/status')).json();
+            if (data.public_ip) {
+                this.updatePublicIp(data.public_ip, data.public_ip_geo_country_code);
+            } else {
+                const el = this.getElement('publicIp');
+                if (el) el.textContent = 'Not detected';
+            }
+        } catch (error) {
+            console.error('Error loading public IP:', error);
+        }
     }
 
     // `resync`: the page may have missed ticks (a hidden tab, a new stream), so every
     // running server's last hour is fetched again, not only a newly started one's.
-    loadServers({ resync = false } = {}) {
-        return this.apiFetch('/api/servers')
-            .then(response => {
-                if (!response.ok) {
-                    return response.json().then(err => {
-                        throw new Error(err?.error || `HTTP ${response.status}`);
-                    });
-                }
-                return response.json();
-            })
-            .then(servers => {
-                this.lastServers = Array.isArray(servers) ? servers : [];
-                this.renderServers(servers);
-                this.loadTrafficHistory(resync);
-            })
-            .catch(error => {
-                console.error('Error loading servers:', error);
-                this.showServerError('Failed to load servers');
-            });
+    async loadServers({ resync = false } = {}) {
+        try {
+            const servers = await this.getJson('/api/servers');
+            this.lastServers = Array.isArray(servers) ? servers : [];
+            this.renderServers(servers);
+            this.loadTrafficHistory(resync);
+        } catch (error) {
+            console.error('Error loading servers:', error);
+            this.showServerError('Failed to load servers');
+        }
     }
 
     renderServers(servers) {

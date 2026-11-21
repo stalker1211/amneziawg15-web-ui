@@ -1,0 +1,15 @@
+{
+    // tsc over the page's JavaScript (DEVELOPMENT.md §7): JSDoc types in plain .js,
+    // checked, never compiled. run_tests.sh runs it at a pinned TypeScript; the browser
+    // loads the same files. The shared globals are declared in tests/globals.d.ts.
+    "compilerOptions": {
+        "allowJs": true,
+        "checkJs": true,
+        "noEmit": true,
+        "strict": false,
+        "target": "es2022",
+        "lib": ["es2022", "dom", "dom.iterable"],
+        "types": []
+    },
+    "include": ["web-ui/static/js/*.js", "tests/globals.d.ts"]
+}
