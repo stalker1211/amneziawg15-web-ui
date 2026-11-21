@@ -21,7 +21,8 @@ set -euo pipefail
 # changes), on every platform the published index lists; PLATFORMS is for builds only.
 # Exit codes, for a cron watch: 0 clean; 2 a fixable HIGH/CRITICAL on some platform
 # (Alpine moved on since the push: republish :latest from master, or rebuild a version
-# tag from its own checkout); 1 a grype error and no finding, inconclusive, never clean.
+# tag from its own checkout with BUILDX_GIT_INFO=0 set); 1 a grype error and no
+# finding, inconclusive, never clean.
 #
 # Releasing 2.3:   git tag -a v2.3 -m 2.3 && ./publish_dockerhub.sh --publish
 #
@@ -113,10 +114,10 @@ if [[ ${SCAN_REMOTE} -eq 1 ]]; then
 	fi
 	# The platforms come from the published index, not PLATFORMS: a build's setting
 	# must not shrink the watch to half the image. imagetools reads the registry
-	# without a daemon; attestation manifests list as unknown/unknown.
+	# without a daemon; attestation manifests list as unknown/unknown. Its stderr is
+	# left alone: a warning there (DOCKER_HOST over a context) is no platform.
 	if ! INDEX="$(docker buildx imagetools inspect "${TARGET}" --format \
-		'{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{with .Platform.Variant}}/{{.}}{{end}} {{end}}' 2>&1)"; then
-		echo "${INDEX}" >&2
+		'{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}}{{with .Platform.Variant}}/{{.}}{{end}} {{end}}')"; then
 		echo "Scan INCONCLUSIVE: cannot read ${TARGET}'s index from the registry." >&2
 		exit 1
 	fi
@@ -139,8 +140,10 @@ if [[ ${SCAN_REMOTE} -eq 1 ]]; then
 		if [[ "${REMOTE_TAG}" == latest ]]; then
 			echo "Alpine has fixed them since the push: republish from master (./publish_dockerhub.sh --publish)." >&2
 		else
+			# The tag's own script runs, and up to 2.6 it does not keep git out of the
+			# provenance: the variable comes from here, so every tag's build gets it.
 			echo "Alpine has fixed them since the push. Only a rebuild from its tag replaces :${REMOTE_TAG}:" >&2
-			echo "  git checkout v${REMOTE_TAG} && ./publish_dockerhub.sh --publish" >&2
+			echo "  git checkout v${REMOTE_TAG} && BUILDX_GIT_INFO=0 ./publish_dockerhub.sh --publish" >&2
 		fi
 		exit 2
 	fi

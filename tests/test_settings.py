@@ -104,9 +104,6 @@ class ResolveTests(unittest.TestCase):
         pinned.resolve({})
         self.assertEqual((pinned.values["trusted_proxies"], pinned.sources["trusted_proxies"]), ("192.168.1.10", "env"))
 
-
-@unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
-class RetiredVariableTests(unittest.TestCase):
     def test_the_geoip_provider_is_ipapi_or_an_https_base_url(self):
         settings = Settings({})
         settings.resolve({})
@@ -115,6 +112,7 @@ class RetiredVariableTests(unittest.TestCase):
             self.assertEqual(settings.check({"geoip_provider": raw}), ({"geoip_provider": ""}, []), raw)
         for raw, normalized in (
             ("https://geo.example/api/geo", "https://geo.example/api/geo"),
+            ("https://xn--go-bja.example/api", "https://xn--go-bja.example/api"),  # géo, as DNS has it
             (" https://geo.example:8443/v1/ ", "https://geo.example:8443/v1"),
         ):
             self.assertEqual(settings.check({"geoip_provider": raw}), ({"geoip_provider": normalized}, []), raw)
@@ -130,10 +128,19 @@ class RetiredVariableTests(unittest.TestCase):
             "https://lan.example:99999",
             "https://lan .example",
             "https://lan.example/" + "x" * 200,
+            # http.client could never send these: every lookup would fall back.
+            "https://geo.example/géo",
+            "https://géo.example/api",
+            "https://geo.example/a\x7fb",
         ):
             values, errors = settings.check({"geoip_provider": bad})
             self.assertEqual((values, len(errors)), ({}, 1), bad)
             self.assertTrue(errors[0].startswith("GeoIP provider"), errors)
+        # The boot log names the provider by its host: a token can sit in the path.
+        provider = Settings({"GEOIP_PROVIDER": "https://geo.example/s3cret-token"})
+        provider.resolve({})
+        self.assertEqual(provider.loggable()["geoip_provider"], "geo.example")
+        self.assertEqual(settings.loggable()["geoip_provider"], "")  # the default: nothing to hide
         pinned = Settings({"GEOIP_PROVIDER": "ipapi.co"})  # pins the default
         stored = {"geoip_provider": "https://geo.example"}
         self.assertTrue(pinned.resolve(stored))
@@ -141,6 +148,8 @@ class RetiredVariableTests(unittest.TestCase):
             (pinned.values["geoip_provider"], pinned.sources["geoip_provider"], stored), ("", "env", {"geoip_provider": ""})
         )
 
+
+class RetiredVariableTests(unittest.TestCase):
     def test_only_a_set_retired_variable_is_reported(self):
         from core.settings import retired_variables
 
@@ -157,6 +166,7 @@ class RetiredVariableTests(unittest.TestCase):
         self.assertIn("newest server", found[0][1])
 
 
+@unittest.skipUnless(HAVE_OPENSSL, "needs openssl")
 class AccessTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="awg-access-")
@@ -220,7 +230,8 @@ class ManagerSettingsTests(unittest.TestCase):
     def test_the_geoip_provider_reaches_netinfo_and_a_change_forgets_the_places(self):
         manager = build_manager(settings=Settings({"GEOIP_PROVIDER": "https://geo.example/api/"}))
         self.assertEqual(manager.netinfo.geoip_provider, "https://geo.example/api")
-        manager.netinfo._cache_geoip("8.8.8.8", 0.0, "Somewhere", "SE", {})
+        netinfo = manager.netinfo
+        netinfo._cache_geoip(netinfo.geoip_provider, "8.8.8.8", 0.0, ("Somewhere", "SE"), netinfo.GEOIP_CACHE_TTL_SECONDS)
         manager.apply_settings()  # the same provider: the cache stays
         self.assertIn("8.8.8.8", manager.netinfo._geoip_cache)
         manager.settings.values["geoip_provider"] = ""

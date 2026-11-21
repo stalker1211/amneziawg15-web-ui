@@ -11,6 +11,7 @@ to clients, and records each probe on its server (probe_server_egress_ip).
 import ipaddress
 import json
 import re
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -28,12 +29,14 @@ class NetInfo:
     # GeoIP lookups are cached to avoid rate limits; bounded so the dict cannot grow
     # without limit as new client endpoints appear.
     GEOIP_CACHE_TTL_SECONDS = 24 * 3600
-    # A failed lookup (rate limit, timeout) is retried after this, not after a day.
+    # A failed lookup (rate limit, timeout) is retried after this, not after a day; so
+    # is ipapi.co's answer for a failed provider, which is asked again once it is back.
     GEOIP_FAILURE_TTL_SECONDS = 10 * 60
     GEOIP_CACHE_MAX_ENTRIES = 512
     # ipapi.co: the default, and the fallback when a GeoIP provider is set and fails.
     GEOIP_DEFAULT_URL = "https://ipapi.co"
-    # A lookup never waits longer than this, the provider and the fallback together.
+    # A lookup never waits longer than this, the provider and the fallback together
+    # (a wall-clock limit on each request: _within).
     GEOIP_TIMEOUT_SECONDS = 2.0
     GEOIP_PROVIDER_TIMEOUT_SECONDS = 1.0
     # Less than this left after the provider: no time to ask ipapi.co.
@@ -53,8 +56,11 @@ class NetInfo:
         # A base URL answering in ipapi.co's shape, asked first; "" asks only ipapi.co.
         self.geoip_provider = ""
         # Cache GeoIP lookups to avoid rate limits and latency
-        # { ip: {"ts": epoch_seconds, "label": str, "raw": dict} }
+        # { ip: {"ts": epoch_seconds, "ttl": seconds, "label": str, "country_code": str} }
         self._geoip_cache = {}
+        # Request threads and background lookups write the cache, and a provider
+        # change clears it: each under this lock.
+        self._geoip_lock = threading.Lock()
         # Addresses a background task is looking up now (lookup_geoip_cached).
         self._geoip_pending = set()
 
@@ -150,33 +156,34 @@ class NetInfo:
             result[key] = match.group(1) if match else None
         return result
 
-    def _cache_geoip(self, ip, now, label, country_code, raw, failed=False):
-        """Store a GeoIP result, evicting expired and then oldest entries.
+    def _cache_geoip(self, provider, ip, now, place, ttl):
+        """Keep `place` (label, country code) for `ttl` seconds, evicting expired and
+        then oldest entries. `provider` is the one the lookup started with: when the
+        setting changed since, the cache was cleared for the new source, and nothing
+        is stored.
 
         Unbounded growth was slow but real: one entry per distinct client endpoint IP,
         never removed.
         """
-        self._geoip_cache[ip] = {
-            "ts": now,
-            "label": label,
-            "country_code": country_code,
-            "raw": raw,
-            "failed": failed,
-        }
+        label, country_code = place
+        with self._geoip_lock:
+            if provider != self.geoip_provider:
+                return
+            self._geoip_cache[ip] = {"ts": now, "ttl": ttl, "label": label, "country_code": country_code}
 
-        if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
-            return
+            if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
+                return
 
-        for key, entry in list(self._geoip_cache.items()):
-            if (now - entry.get("ts", 0)) >= self.GEOIP_CACHE_TTL_SECONDS:
-                del self._geoip_cache[key]
+            for key, entry in list(self._geoip_cache.items()):
+                if (now - entry["ts"]) >= entry["ttl"]:
+                    del self._geoip_cache[key]
 
-        # Still over budget (many fresh entries): drop the oldest.
-        if len(self._geoip_cache) > self.GEOIP_CACHE_MAX_ENTRIES:
-            for key, _ in sorted(self._geoip_cache.items(), key=lambda kv: kv[1].get("ts", 0)):
-                if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
-                    break
-                del self._geoip_cache[key]
+            # Still over budget (many fresh entries): drop the oldest.
+            if len(self._geoip_cache) > self.GEOIP_CACHE_MAX_ENTRIES:
+                for key, _ in sorted(self._geoip_cache.items(), key=lambda kv: kv[1]["ts"]):
+                    if len(self._geoip_cache) <= self.GEOIP_CACHE_MAX_ENTRIES:
+                        break
+                    del self._geoip_cache[key]
 
     def _geoip_candidate(self, ip):
         """The stripped address when GeoIP is on and it is public, else None."""
@@ -201,10 +208,7 @@ class NetInfo:
     def _geoip_fresh(self, ip, now):
         """The cached (label, country code), or None when absent or expired."""
         cached = self._geoip_cache.get(ip)
-        if not isinstance(cached, dict):
-            return None
-        ttl = self.GEOIP_FAILURE_TTL_SECONDS if cached.get("failed") else self.GEOIP_CACHE_TTL_SECONDS
-        if (now - cached.get("ts", 0)) >= ttl:
+        if not isinstance(cached, dict) or (now - cached["ts"]) >= cached["ttl"]:
             return None
         return (cached.get("label"), cached.get("country_code"))
 
@@ -233,19 +237,20 @@ class NetInfo:
         return (None, None)
 
     def set_geoip_provider(self, url):
-        """Ask `url` (an https base URL in ipapi.co's shape) first, or only ipapi.co when
-        "". A change forgets the cached places, so the new source names them."""
-        url = (url or "").rstrip("/")
-        if url != self.geoip_provider:
-            self.geoip_provider = url
-            self._geoip_cache.clear()
+        """Ask `url` (an https base URL in ipapi.co's shape, as the setting normalizes
+        it) first, or only ipapi.co when "". A change forgets the cached places, so the
+        new source names them."""
+        with self._geoip_lock:
+            if url != self.geoip_provider:
+                self.geoip_provider = url
+                self._geoip_cache.clear()
 
     @staticmethod
     def _ask_geoip(base_url, ip, timeout):
         """`<base_url>/<ip>/json/` as a dict, or ValueError/OSError naming what went wrong:
         not a 200, not JSON, an `"error": true` body (ipapi.co's and lan-dash's), or no
         country or place in it."""
-        response = https_get(f"{base_url}/{ip}/json/", timeout=timeout)
+        response = _within(timeout, lambda: https_get(f"{base_url}/{ip}/json/", timeout=timeout))
         try:
             data = json.loads(response.text)
         except ValueError:
@@ -261,21 +266,22 @@ class NetInfo:
             raise ValueError("an empty or invalid JSON body")
         return data
 
-    def _lookup_at(self, base_url, ip, timeout, now):
-        """(label, country code) from one service, cached; raises when it has no place."""
+    def _place_at(self, base_url, ip, timeout):
+        """(label, country code) from one service; raises when it has no place."""
         data = self._ask_geoip(base_url, ip, timeout)
         label, country_code = _geo_label(data), _country_code(data)
         if not label and not country_code:
             raise ValueError("no country or place in the answer")
-        self._cache_geoip(ip, now, label, country_code, data)
         return (label, country_code)
 
     def lookup_geoip(self, ip):
         """Return (geo label, country code) for a public IP with caching.
 
         Asks the GeoIP provider when one is set, then ipapi.co if it fails in any way
-        (an error, a timeout, an answer without a place). The two share today's 2 s:
-        the provider gets at most half, ipapi.co what is left.
+        (an error, a timeout, an answer without a place). The two share 2 s: the
+        provider gets at most half, ipapi.co what is left. ipapi.co's answer for a
+        failed provider is kept only as long as a failure, so the provider names the
+        address once it is back.
         """
         ip = self._geoip_candidate(ip)
         if not ip:
@@ -286,21 +292,55 @@ class NetInfo:
         if fresh is not None:
             return fresh
 
+        provider = self.geoip_provider
         timeout = self.GEOIP_TIMEOUT_SECONDS
-        if self.geoip_provider:
+        if provider:
             started = time.monotonic()
             try:
-                return self._lookup_at(self.geoip_provider, ip, self.GEOIP_PROVIDER_TIMEOUT_SECONDS, now)
+                place = self._place_at(provider, ip, self.GEOIP_PROVIDER_TIMEOUT_SECONDS)
             except Exception as exc:  # pylint: disable=broad-exception-caught  -- any failure falls back
-                logger.info("GeoIP: %s failed for %s (%s); asking ipapi.co", self.geoip_provider, ip, exc)
+                # Its host, never the URL: the path may carry a token.
+                host = urlparse(provider).hostname or "the provider"
+                logger.info("GeoIP: %s failed for %s (%s); asking ipapi.co", host, ip, str(exc).replace(provider, host))
+            else:
+                self._cache_geoip(provider, ip, now, place, self.GEOIP_CACHE_TTL_SECONDS)
+                return place
             timeout -= time.monotonic() - started
+        place, ttl = (None, None), self.GEOIP_FAILURE_TTL_SECONDS
         if timeout >= self.GEOIP_MIN_TIMEOUT_SECONDS:
             try:
-                return self._lookup_at(self.GEOIP_DEFAULT_URL, ip, timeout, now)
+                place = self._place_at(self.GEOIP_DEFAULT_URL, ip, timeout)
+                if not provider:
+                    ttl = self.GEOIP_CACHE_TTL_SECONDS
             except Exception:  # pylint: disable=broad-exception-caught  -- cached as a failure below
                 pass
-        self._cache_geoip(ip, now, None, None, {"error": "lookup_failed"}, failed=True)
-        return (None, None)
+        self._cache_geoip(provider, ip, now, place, ttl)
+        return place
+
+
+def _within(timeout, call):
+    """call() on a daemon thread, waited for at most `timeout` seconds in all.
+
+    http.client's timeout bounds each socket operation (each address's connect, the TLS
+    handshake, each read), not the request, and the name lookup not at all. A request
+    still running when the wait ends finishes on its own, and its answer is dropped.
+    """
+    outcome = {}
+
+    def run():
+        try:
+            outcome["value"] = call()
+        except Exception as exc:  # pylint: disable=broad-exception-caught  -- raised in the caller
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, name="geoip", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise TimeoutError(f"no answer within {timeout:.1f} s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
 
 
 def _geo_label(raw):

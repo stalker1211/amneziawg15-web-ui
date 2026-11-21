@@ -8,6 +8,8 @@ tests/test_system_edges.py.
 """
 
 import json
+import threading
+import time
 import unittest
 from typing import Any, ClassVar
 from unittest import mock
@@ -193,7 +195,75 @@ class GeoIpProviderTests(_Base):
         with self.assertLogs(MODULE, "INFO"):
             result, calls = self._lookup(OSError("down"), _Response(429))
         self.assertEqual((result, len(calls)), ((None, None), 2))
-        self.assertTrue(self.net._geoip_cache["8.8.8.8"]["failed"])  # retried in 10 minutes, not a day
+        entry = self.net._geoip_cache["8.8.8.8"]
+        self.assertEqual(entry["ttl"], self.net.GEOIP_FAILURE_TTL_SECONDS)  # retried in 10 minutes, not a day
+        self.assertEqual(sorted(entry), ["country_code", "label", "ts", "ttl"])  # never the whole answer
+
+    def test_ipapi_stands_in_only_until_the_provider_is_back(self):
+        # The provider is down for a minute: ipapi.co's answer is kept 10 minutes, not
+        # a day, so the provider names the address once it answers again.
+        with self.assertLogs(MODULE, "INFO"):
+            result, _ = self._lookup(OSError("down"), _Response(data={"country": "NL"}))
+        self.assertEqual(result, ("NL", "NL"))
+        self.assertEqual(self.net._geoip_cache["8.8.8.8"]["ttl"], self.net.GEOIP_FAILURE_TTL_SECONDS)
+        _, calls = self._lookup(None)  # within the 10 minutes: the cache answers
+        self.assertEqual(calls, [])
+        later = time.time() + self.net.GEOIP_FAILURE_TTL_SECONDS + 1
+        with mock.patch(f"{MODULE}.time.time", return_value=later):
+            result, calls = self._lookup(_Response(data=self.PLACE))
+        self.assertEqual((result[1], [url for url, _ in calls]), ("US", [f"{self.PROVIDER}/8.8.8.8/json/"]))
+        self.assertEqual(self.net._geoip_cache["8.8.8.8"]["ttl"], self.net.GEOIP_CACHE_TTL_SECONDS)
+
+    def test_a_slow_provider_is_cut_off_by_the_clock(self):
+        # http.client's timeout is per socket operation and DNS has none: a provider
+        # that keeps the request open past its second is left behind, and ipapi.co asked.
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def get(url, timeout):
+            if url.startswith(self.PROVIDER):
+                release.wait(5)
+                return _Response(data=self.PLACE)
+            return _Response(data={"country": "NL"})
+
+        started = time.monotonic()
+        with (
+            mock.patch.object(self.net, "GEOIP_PROVIDER_TIMEOUT_SECONDS", 0.1),
+            mock.patch(f"{MODULE}.https_get", side_effect=get),
+            self.assertLogs(MODULE, "INFO") as logs,
+        ):
+            result = self.net.lookup_geoip("8.8.8.8")
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertEqual(result, ("NL", "NL"))
+        self.assertIn("no answer within 0.1 s", logs.output[0])
+
+    def test_a_lookup_from_before_a_provider_change_is_not_kept(self):
+        # The setting changes while the old provider is being asked: the cache was
+        # cleared for the new source, and the old answer must not refill it.
+        def answer_after_a_change(url, timeout):
+            self.net.set_geoip_provider("https://other.example")
+            return _Response(data=self.PLACE)
+
+        with mock.patch(f"{MODULE}.https_get", side_effect=answer_after_a_change):
+            self.assertEqual(self.net.lookup_geoip("8.8.8.8")[1], "US")  # the caller still gets it
+        self.assertEqual(self.net._geoip_cache, {})
+
+    def test_the_log_names_the_providers_host_not_its_url(self):
+        # A token can only go in the path (a user, password or query is refused).
+        self.net.set_geoip_provider("https://geo.example/s3cret-token")
+        answers = {"https://geo.example/s3cret-token/8.8.8.8/json/": OSError("down"),
+                   "https://ipapi.co/8.8.8.8/json/": _Response(data={"country": "NL"})}  # fmt: skip
+
+        def get(url, timeout):
+            answer = answers[url]
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with mock.patch(f"{MODULE}.https_get", side_effect=get), self.assertLogs(MODULE, "INFO") as logs:
+            self.net.lookup_geoip("8.8.8.8")
+        self.assertIn("GeoIP: geo.example failed for 8.8.8.8 (down)", logs.output[0])
+        self.assertNotIn("s3cret", "\n".join(logs.output))
 
     def test_the_two_never_wait_longer_than_two_seconds(self):
         # The provider timed out after its second: ipapi.co gets what is left of the two.
@@ -223,6 +293,7 @@ class GeoIpProviderTests(_Base):
         ):
             self.assertEqual(self.net.lookup_geoip("8.8.8.8"), ("NL", "NL"))
         self.assertIn("Not an https URL", logs.output[0])
+        self.assertNotIn("/api/geo", logs.output[0])  # https_get's error names the URL: the host stays
 
     def test_without_a_provider_only_ipapi_is_asked(self):
         self.net.set_geoip_provider("")
@@ -288,10 +359,13 @@ class GeoipCacheTests(unittest.TestCase):
     def setUp(self):
         self.net = build_manager().netinfo
 
+    def _put(self, ip, ts, place=(None, None)):
+        self.net._cache_geoip(self.net.geoip_provider, ip, ts, place, self.net.GEOIP_CACHE_TTL_SECONDS)
+
     def test_cache_is_bounded(self):
         limit = self.net.GEOIP_CACHE_MAX_ENTRIES
         for n in range(limit + 50):
-            self.net._cache_geoip(f"198.51.{n // 256}.{n % 256}", 1000.0, None, None, {})
+            self._put(f"198.51.{n // 256}.{n % 256}", 1000.0)
         self.assertLessEqual(len(self.net._geoip_cache), limit)
 
     def test_expired_entries_are_evicted_first(self):
@@ -300,18 +374,18 @@ class GeoipCacheTests(unittest.TestCase):
         now = 100000.0
         # Fill with stale entries, then add one fresh entry past the limit.
         for n in range(limit):
-            self.net._cache_geoip(f"203.0.{n // 256}.{n % 256}", now - ttl - 1, None, None, {})
-        self.net._cache_geoip("192.0.2.7", now, "Somewhere", "SE", {})
+            self._put(f"203.0.{n // 256}.{n % 256}", now - ttl - 1)
+        self._put("192.0.2.7", now, ("Somewhere", "SE"))
         self.assertIn("192.0.2.7", self.net._geoip_cache)
         self.assertLess(len(self.net._geoip_cache), limit)
 
     def test_oldest_evicted_when_all_entries_are_fresh(self):
         limit = self.net.GEOIP_CACHE_MAX_ENTRIES
         for n in range(limit):
-            self.net._cache_geoip(f"203.1.{n // 256}.{n % 256}", 1000.0 + n, None, None, {})
+            self._put(f"203.1.{n // 256}.{n % 256}", 1000.0 + n)
         oldest = "203.1.0.0"
         self.assertIn(oldest, self.net._geoip_cache)
-        self.net._cache_geoip("192.0.2.9", 99999.0, None, None, {})
+        self._put("192.0.2.9", 99999.0)
         self.assertNotIn(oldest, self.net._geoip_cache)
         self.assertIn("192.0.2.9", self.net._geoip_cache)
 

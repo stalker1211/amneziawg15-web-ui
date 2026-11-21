@@ -96,7 +96,7 @@ amnezia_manager = AmneziaManager(
     settings=settings,
 )
 logging.getLogger().setLevel(settings.values["log_level"])
-logger.info("settings: %s", ", ".join(f"{k}={v} ({settings.sources[k]})" for k, v in settings.values.items()))
+logger.info("settings: %s", ", ".join(f"{k}={v} ({settings.sources[k]})" for k, v in settings.loggable().items()))
 if access.is_default():
     logger.warning("The panel is on the default password (%s/changeme): change it in Settings", access.user())
 

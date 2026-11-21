@@ -918,11 +918,14 @@ class AmneziaApp {
         return (server?.clients || []).find((c) => c.id === clientId);
     }
 
-    // GET JSON; throws with the server's error message on a non-2xx answer.
+    // GET JSON; throws with the server's error message on a non-2xx answer, and on a
+    // 2xx that is not JSON (a proxy's sign-in page, a cut-off body): an answer that
+    // says nothing must not read as an empty one ("No servers yet").
     async getJson(url) {
         const response = await this.apiFetch(url);
-        const data = await response.json().catch(() => ({}));
+        const data = await response.json().catch(() => undefined);
         if (!response.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+        if (data === undefined) throw new Error(`The answer to ${url} was not JSON`);
         return data;
     }
 

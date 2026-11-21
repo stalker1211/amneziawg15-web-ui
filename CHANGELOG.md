@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Version 2.9 (unreleased)
+## Version 2.9 (2026-11-21)
 
 ### Privacy
 - **A GeoIP provider** (⚙ → Privacy, or `GEOIP_PROVIDER`): the country and city of
@@ -8,7 +8,10 @@
   ipapi.co, so the addresses stay on your network. Any `https://` base URL that answers
   `<url>/<ip>/json/` in ipapi.co's shape (`country_code`, `country_name`, `city`,
   `region`). When it fails (an error, not JSON, a timeout), ipapi.co answers, and a
-  lookup still waits at most 2 s in all. Changing it forgets the cached places.
+  lookup still waits at most 2 s in all. ipapi.co's answer stands in for 10 minutes,
+  not a day, so your service names the address once it is back. Changing it forgets
+  the cached places. The log and Activity name it by its host only, as a token can
+  sit in its path.
 
 ### Tooling
 - **The page's JavaScript is type-checked:** `run_tests.sh` runs `tsc` (TypeScript
@@ -16,6 +19,10 @@
   the same files. It found a QR code option the library never read.
 - **A dead-code sweep:** the shadowed `/static` route, an unused dialog, and the last
   `.then()` chains; a client's I1–I5 lines gained the test they lacked.
+- **`publish_dockerhub.sh --scan-remote [X.Y]`** scans the published `:latest` (or a
+  version tag) straight from the registry on every platform, with no build: the weekly
+  watch for CVEs fixed after a release. Its rebuild hint for a version tag sets
+  `BUILDX_GIT_INFO=0`, which tags up to 2.6 do not set themselves.
 
 ## Version 2.8 (2026-10-06)
 

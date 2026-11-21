@@ -195,13 +195,20 @@ class PublishRulesTests(unittest.TestCase):
         self.assertEqual(counter.read_text(encoding="utf-8").split()[1], "4")
 
     def stub_scan_remote(
-        self, grype_exit, flags=(), index: str | None = "linux/amd64 linux/arm64 unknown/unknown", env=None, missing=None
+        self,
+        grype_exit,
+        flags=(),
+        index: str | None = "linux/amd64 linux/arm64 unknown/unknown",
+        env=None,
+        missing=None,
+        warning="",
     ):
         # A stub grype that records each call's arguments and exits with grype_exit
         # (or, given a dict, that platform's code), plus a docker stub that answers only
-        # `buildx imagetools inspect` with `index` (None: the registry read fails) and
-        # reports any other use: --scan-remote must never build or touch the counter.
-        # `missing` leaves one of the two out, on a bare PATH like cron's.
+        # `buildx imagetools inspect` with `index` (None: the registry read fails),
+        # after `warning` on its stderr, and reports any other use: --scan-remote must
+        # never build or touch the counter. `missing` leaves one of the two out, on a
+        # bare PATH like cron's.
         stub = Path(tempfile.mkdtemp(prefix="awg-stub-"))
         self.addCleanup(shutil.rmtree, stub, ignore_errors=True)
         codes = grype_exit if isinstance(grype_exit, dict) else {"*": grype_exit}
@@ -211,6 +218,8 @@ class PublishRulesTests(unittest.TestCase):
             encoding="utf-8",
         )
         inspect = f'echo "{index}"; exit 0' if index is not None else 'echo "ERROR: not found" >&2; exit 1'
+        if warning:
+            inspect = f'echo "{warning}" >&2; {inspect}'
         (stub / "docker").write_text(
             f'#!/bin/sh\nif [ "$1 $2 $3" = "buildx imagetools inspect" ]; then {inspect}; fi\n'
             'echo "stub docker ran" >&2\nexit 99\n',
@@ -268,6 +277,14 @@ class PublishRulesTests(unittest.TestCase):
         self.assertIn("Published platforms: linux/amd64 linux/arm64 linux/arm/v7", output)
         self.assertEqual([call.split()[2] for call in calls], ["linux/amd64", "linux/arm64", "linux/arm/v7"])
 
+    def test_scan_remote_reads_no_platform_from_a_docker_warning(self):
+        warning = "WARNING: DOCKER_HOST environment variable overrides the active context."
+        code, output, calls = self.stub_scan_remote(0, warning=warning)
+        self.assertEqual(code, 0, output)
+        self.assertIn("Published platforms: linux/amd64 linux/arm64\n", output)
+        self.assertIn(warning, output)  # still shown, on stderr
+        self.assertEqual([call.split()[2] for call in calls], ["linux/amd64", "linux/arm64"])
+
     def test_scan_remote_is_inconclusive_without_the_index(self):
         for index in (None, "unknown/unknown", ""):  # unreadable, or no platform in it
             code, output, calls = self.stub_scan_remote(0, index=index)
@@ -305,7 +322,9 @@ class PublishRulesTests(unittest.TestCase):
     def test_scan_remote_tells_how_to_replace_a_stale_version_tag(self):
         code, output, _ = self.stub_scan_remote(2, flags=("v2.8.1",))
         self.assertEqual(code, 2, output)
-        self.assertIn("git checkout v2.8.1 && ./publish_dockerhub.sh --publish", output)
+        # The tag's own script builds, and up to 2.6 it would put the NAS remote in the
+        # provenance: the hint sets the variable for it.
+        self.assertIn("git checkout v2.8.1 && BUILDX_GIT_INFO=0 ./publish_dockerhub.sh --publish", output)
         self.assertNotIn("republish from master", output)  # that would only move :latest
 
     def test_scan_remote_says_when_the_tag_comes_from_the_environment(self):

@@ -271,6 +271,16 @@ class SettingsEventTests(unittest.TestCase):
         for secret in ("changeme", "n3w-Secret-pw", "root", "$6$"):
             self.assertNotIn(secret, text)
 
+    def test_the_geoip_provider_is_named_not_shown(self):
+        # Its path is where a token goes: the event says it changed, never to what.
+        self.post({"settings": {"geoip_provider": "https://geo.example/s3cret-token", "log_level": "WARNING"}})
+        self.assertEqual(
+            self.events()[-1]["detail"],
+            {"changes": [{"field": "geoip_provider"}, {"field": "log_level", "old": "INFO", "new": "WARNING"}]},
+        )
+        text = self.http.get("/api/activity").get_data(as_text=True)
+        self.assertNotIn("s3cret", text + Path(self.manager.activity._path).read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

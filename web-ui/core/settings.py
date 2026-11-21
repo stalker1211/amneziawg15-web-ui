@@ -83,8 +83,13 @@ def _geoip_provider(raw):
     text = str(raw).strip()
     if text.lower().rstrip("/") in ("", "ipapi.co", "https://ipapi.co"):
         return ""
-    if len(text) > 200 or any(c.isspace() or ord(c) < 32 for c in text):
-        raise ValueError("GeoIP provider: a URL of at most 200 characters, without spaces")
+    # Printable ASCII, as http.client sends a request line: it refuses spaces, control
+    # characters and DEL, and cannot encode anything else.
+    if len(text) > 200 or not all("!" <= c <= "~" for c in text):
+        raise ValueError(
+            "GeoIP provider: a URL of at most 200 characters, ASCII without spaces"
+            " (an international name in its xn-- form, the path percent-encoded)"
+        )
     try:
         parts = urlsplit(text)
         hostname, _port = parts.hostname, parts.port
@@ -108,6 +113,10 @@ FIELDS = {
     # Docker's default bridge: the panel's behaviour before this was a setting (2.7.2).
     "trusted_proxies": ("TRUSTED_PROXIES", _proxies, "172.17.0.0/16"),
 }
+
+# Never written out by value, in the log or the Activity: the path is where a provider
+# takes a token (a user, password or query is refused). The log names its host.
+NOT_LOGGED = frozenset({"geoip_provider"})
 
 # Variables that no longer do anything. A container that still sets one is told so at
 # boot (app.py) instead of being left to wonder why it has no effect.
@@ -135,6 +144,10 @@ class Settings:
         self.environ = os.environ if environ is None else environ
         self.values = {key: default for key, (_env, _parse, default) in FIELDS.items()}
         self.sources = dict.fromkeys(FIELDS, "default")
+
+    def loggable(self):
+        """The values for a log line: a URL in NOT_LOGGED by its host only."""
+        return {key: (urlsplit(value).hostname if key in NOT_LOGGED and value else value) for key, value in self.values.items()}
 
     def env_value(self, key):
         """The variable's value when it is set and non-empty (empty counts as unset)."""

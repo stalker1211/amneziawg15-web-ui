@@ -10,6 +10,7 @@ The rules live in core/settings.py; /api/validate checks the drawer as you type.
 import logging
 
 from core.logging_setup import get_logger
+from core.settings import FIELDS, NOT_LOGGED
 from flask import Blueprint, jsonify, request
 from services.activity import field_changes
 from werkzeug.exceptions import HTTPException
@@ -79,9 +80,9 @@ def register_settings_routes(app, amnezia_manager, access, *, build_label):
         old_values = dict(settings.values)
         changed = settings.update(amnezia_manager.config.setdefault("settings", {}), changes)
         if changed:
-            amnezia_manager.activity.change(
-                "settings.save", changes=field_changes(old_values, settings.values, fields=changed, values=None)
-            )
+            # Each setting's old and new value, but the provider URL only by name.
+            changes = field_changes(old_values, settings.values, fields=changed, values=frozenset(FIELDS) - NOT_LOGGED)
+            amnezia_manager.activity.change("settings.save", changes=changes)
             amnezia_manager.apply_settings()
             if "log_level" in changed:
                 logging.getLogger().setLevel(settings.values["log_level"])

@@ -43,7 +43,7 @@ one. Compose and variables: [Docker Deployment](#-docker-deployment).
 - Activity log, also in `docker logs`
 - Docker health check on drift
 - Split tunnelling, DNS endpoint, NAT, LAN blocking
-- Panel settings (sign-in, log levels, GeoIP) in **⚙**; any can be pinned by a variable
+- Panel settings (sign-in, log levels, GeoIP and its provider) in **⚙**; any can be pinned by a variable
 - No CDN, dark theme, phone width
 
 ## 🩺 Connection analyzer (experimental)

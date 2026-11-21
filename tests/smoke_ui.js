@@ -111,6 +111,11 @@ function check(label, condition, detail) {
     check('at least one server exists to test against', servers.length > 0, servers.length);
     if (!servers.length) { await browser.close(); process.exit(1); }
 
+    // A 200 that is not JSON (an SSO page in front of the panel) is a failure: the
+    // servers list shows its error, not "No servers yet".
+    check('getJson refuses a 200 that is not JSON', await page.evaluate(async () => {
+        try { await amneziaApp.getJson('/'); return false; } catch (e) { return /not JSON/.test(e.message); }
+    }));
     // Views live in modals.js, forms in forms.js; both install onto AmneziaApp.prototype.
     check('modals.js and forms.js loaded and installed', await page.evaluate(() =>
         typeof window.ModalUi === 'function' && typeof window.FormUi === 'function'

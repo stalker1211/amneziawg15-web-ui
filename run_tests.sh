@@ -52,8 +52,16 @@ else
 	PYTHON=(python3)
 fi
 
+# The JS type check. The version is pinned, so npm's cached copy is used without
+# asking the registry; offline with none cached, the check is skipped and said so,
+# while every Python test still runs.
 if command -v npx >/dev/null 2>&1; then
-	npx --yes --quiet -p "typescript@${TYPESCRIPT_VERSION}" tsc -p .
+	TSC=(npx --yes --quiet --prefer-offline -p "typescript@${TYPESCRIPT_VERSION}" tsc)
+	if "${TSC[@]}" --version >/dev/null 2>&1; then
+		"${TSC[@]}" -p .
+	else
+		echo "WARNING: typescript@${TYPESCRIPT_VERSION} cannot be fetched (offline?): the JS type check is SKIPPED" >&2
+	fi
 fi
 
 # One module/test given: run just that. Otherwise discover the whole suite.
