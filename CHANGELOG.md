@@ -26,8 +26,8 @@
   captured and replayed at a server held to one CPU — no key needed to send it. With
   cookies (the default) a new device got in after 5.2 s at every rate up to 200k replays/s,
   but the server answered each replay with a cookie reply. With `DisableCookies` on it
-  answered nothing; new devices waited 0.1–17 s up to 100k/s, and at 200k/s twice not
-  within 45 s. The switch stays as it is: off by default, on both ends.
+  answered nothing; new devices waited 0.1–17 s up to 100k/s (once not within 45 s),
+  and at 200k/s twice not within 45 s (`tests/cookie_flood.py`). The switch stays as it is: off by default, on both ends.
 - **What upstream knows, and what it still does not** (DEVELOPMENT.md §4, §9, §10). The
   header-protection error named the wrong padding — an `S4` violation printed "S3", an
   `S1` one printed "S0" — and asked for "more then 12" while accepting exactly 12; the new
