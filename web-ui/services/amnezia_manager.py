@@ -1257,7 +1257,7 @@ AllowedIPs = {client["client_ip"]}/32
         """The share of full-size data packets amneziawg-go drops as false handshakes, for
         validated AWG 3.1 params with RandomTrailers on and unequal S1-S4; None otherwise.
 
-        amneziawg-go#186 (open at v3.1.20260828, in the kernel module too): with trailers
+        amneziawg-go#186 (still open at v3.1.20261116, in the kernel module too): with trailers
         on, a data packet is tried as initiation, response and cookie before transport,
         each branch reading 4 bytes at offset S1, S2, S3. Where that S differs from S4 the
         bytes are junk or ciphertext, uniform, so the branch's H range claims width / 2^32

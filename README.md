@@ -7,7 +7,7 @@ for 1, 6 and 24 hours, configs as QR codes, a mark on every device whose config 
 out of date, an activity log, and the reason a device cannot connect. All in one
 Docker container.
 
-Current version: **2.8**
+Current version: **2.9.1**
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="screenshot-light.png">
@@ -125,7 +125,7 @@ each is also a JSON line in `docker logs` ([Logging](#-logging)).
 | `ContentPaddingAddition` | client | 3.0+ | Extra random bytes per data packet (`10-40`) |
 | `RekeyAfterTime`, `RekeyTimeout`, `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts` | client | 3.0+ | Override WireGuard's fixed timings; ranges allowed. Empty = protocol default. Keep RekeyAfterTime under 180: the server drops the session at 180 s (the form warns) |
 | `RandomTrailers` | server | **3.1** | Appends a random number of bytes to packets. Keep S1–S4 equal with it, or amneziawg-go drops some data packets as false handshakes ([#186](https://github.com/amnezia-vpn/amneziawg-go/issues/186)); Randomize draws them equal and the form warns. Without it, equal S1–S4 get a warning instead |
-| `DisableCookies` | server | **3.1** | Suppresses handshake cookie replies. Off by default because cookies mitigate handshake floods |
+| `DisableCookies` | server | **3.1** | No cookie replies and no handshake rate limit under load: a replay flood gets no answer, but new devices wait longer. Off by default |
 | `MTU` | — | all | Interface MTU (1280–1440) |
 | `AllowedIPs` | client | all | What the device sends through the tunnel: `0.0.0.0/0` (the default) is all IPv4, a narrower list is split tunnelling. `::/0` sends IPv6 in too, where the server drops it |
 | `Endpoint` | server | all | The detected public IP, or the server's **endpoint host** (a DNS name or IPv4). With a dynamic DNS name, a new public IP needs no re-import |

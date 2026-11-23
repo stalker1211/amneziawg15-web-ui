@@ -1,6 +1,6 @@
 # Pinned so rebuilding an old release cannot jump an Alpine major; bump deliberately.
 ARG ALPINE_VERSION=3.24
-ARG GO_VERSION=1.26.9
+ARG GO_VERSION=1.26.11
 
 ############################
 # Build: amneziawg-go
@@ -8,7 +8,7 @@ ARG GO_VERSION=1.26.9
 FROM golang:${GO_VERSION}-alpine AS awg_go_builder
 
 # Pin by default for reproducibility; override with --build-arg AWG_GO_REF=...
-ARG AWG_GO_REF=v3.1.20260828
+ARG AWG_GO_REF=v3.1.20261116
 
 RUN apk add --no-cache git make build-base
 
@@ -17,9 +17,9 @@ WORKDIR /src/amneziawg-go
 # selection takes the max of both, so pinning below upstream is a no-op.
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git . \
     && git checkout "${AWG_GO_REF}" \
-    && go get golang.org/x/crypto@v0.57.0 \
-    && go get golang.org/x/net@v0.60.0 \
-    && go get golang.org/x/sys@v0.48.0 \
+    && go get golang.org/x/crypto@v0.59.0 \
+    && go get golang.org/x/net@v0.63.0 \
+    && go get golang.org/x/sys@v0.50.0 \
     && go mod tidy \
     && make
 

@@ -4,7 +4,7 @@ blinker==1.9.0
     # via flask
 cffi==2.1.1
     # via cryptography
-click==8.5.0
+click==8.5.1
     # via flask
 cryptography==50.0.2
     # via -r web-ui/requirements.in

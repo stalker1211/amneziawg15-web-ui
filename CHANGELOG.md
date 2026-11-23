@@ -1,5 +1,45 @@
 # CHANGELOG
 
+## Version 2.9.1 (2026-11-22)
+
+### Image
+- **amneziawg-go `v3.1.20260828` → `v3.1.20261116`** (the daemon built into the container;
+  `awg`/`awg-tools` stay at `v3.1.20260812`, still their newest tag). Eleven upstream
+  commits, six of them `fix:`, five of those about values the panel writes into configs: a
+  negative byte count in `<r>`/`<rc>`/`<rd>`/`<dz>` is refused instead of panicking the
+  daemon; `Jmin > Jmax` is refused by the daemon too now, not only by the panel, instead of
+  underflowing into a ~4 GB allocation; `I1`–`I5` are safe to change while handshakes are
+  in flight; a changed `S4` is now noticed by the encryption queue; and the
+  header-protection error names the right field. One more clears a timer field under its
+  lock. The panel already refused each of those values, and it restarts a server to change
+  its transport, so its servers behave as before: this is hardening. No line the panel
+  writes into a `.conf` changed, so no client has to re-import anything.
+- **Go 1.26.9 → 1.26.11** for the daemon's build (security fixes in `crypto/x509`,
+  `net/http`, cgo and the toolchain), with `golang.org/x/crypto` 0.59.0, `x/net` 0.63.0
+  and `x/sys` 0.50.0. Alpine stays at 3.24, still the newest stable.
+- **Flask's `click` 8.5.0 → 8.5.1** (`requirements.txt` regenerated); every other Python
+  package was already at its newest release. The lint pin moves to ruff 0.17.6 (no new
+  findings, no reformatting).
+
+### Docs
+- **`DisableCookies`, measured** (DEVELOPMENT.md §4). One real handshake initiation,
+  captured and replayed at a server held to one CPU — no key needed to send it. With
+  cookies (the default) a new device got in after 5.2 s at every rate up to 200k replays/s,
+  but the server answered each replay with a cookie reply. With `DisableCookies` on it
+  answered nothing; new devices waited 0.1–17 s up to 100k/s, and at 200k/s twice not
+  within 45 s. The switch stays as it is: off by default, on both ends.
+- **What upstream knows, and what it still does not** (DEVELOPMENT.md §4, §9, §10). The
+  header-protection error named the wrong padding — an `S4` violation printed "S3", an
+  `S1` one printed "S0" — and asked for "more then 12" while accepting exactly 12; the new
+  daemon fixes it (closed 2026-11-16 as amneziawg-go#201, reported 2026-10-08; documented
+  here since 2.0). The kernel module has carried the AWG 3.1 fields since its `v3.1.20260812`
+  tag, so a host with `amneziawg-dkms` loaded runs a 3.1 server from this panel too, only
+  with no daemon log. Linux devices on the kernel module are not a target; their upstream
+  bugs are noted, not worked around. AWG 4.0's `DI`/`DR`/`DC`/`DT` sit on a year-old branch
+  forked from 2.0, so nothing new appeared in the forms; it and a proposed 3.2 relay are
+  watched. Random trailers still drop data packets when S1–S4 differ (amneziawg-go#186),
+  which Generate and the drawer already handle.
+
 ## Version 2.9 (2026-11-21)
 
 ### Privacy

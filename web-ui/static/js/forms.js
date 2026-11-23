@@ -119,7 +119,7 @@ class FormUi {
             </div>
             <div id="t-Awg31OptionsRow" class="flex flex-col">
                 ${this.formSwitch('t-RandomTrailers', 'Random trailers', 'Append a random number of bytes to each packet.', t.RandomTrailers)}
-                ${this.formSwitch('t-DisableCookies', 'Disable cookies', 'Do not send handshake cookie replies.', t.DisableCookies)}
+                ${this.formSwitch('t-DisableCookies', 'Disable cookies', 'No cookie replies or handshake rate limit under load.', t.DisableCookies)}
             </div>`;
     }
 

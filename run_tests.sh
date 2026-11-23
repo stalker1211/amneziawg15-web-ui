@@ -34,7 +34,7 @@ if [[ "${1:-}" == "--cov" ]]; then
 	shift
 fi
 
-RUFF_VERSION=0.16.8
+RUFF_VERSION=0.17.6
 TYPESCRIPT_VERSION=7.0.2
 
 if command -v uv >/dev/null 2>&1; then
